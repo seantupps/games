@@ -2,16 +2,14 @@ class LineGame extends BaseGame {
     constructor() {
         super();
         this.nodes = [];
-        this.endpoints = []; // Array of 2 node indices
-        this.path = []; // Sequence of node indices
-        this.lines = [];
-        this.path = [];
         this.endpoints = [];
+        this.path = [];
+        this.lines = [];
         this.draggingId = null;
         this.opponentPreview = null;
         this.lastSyncTime = 0;
 
-        this.initNodes();
+        this.initGrid();
         this.initNetwork();
         this.render();
     }
