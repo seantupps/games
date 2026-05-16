@@ -268,7 +268,7 @@
 
         function updateFrame() {
             const frame = document.getElementById('game-frame');
-            frame.src = `../games/${currentGame}/index.html`;
+            frame.src = `../games/${currentGame}/index.html?v=${Date.now()}`;
             localStorage.setItem('lastGame', currentGame);
         }
 
