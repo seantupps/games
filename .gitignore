@@ -1,0 +1,6 @@
+node_modules/
+.vscode/
+__pycache__/
+notes.txt
+.gemini/
+*.log

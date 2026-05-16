@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Game Hub - Project Five</title>
+    <link rel="stylesheet" href="css/core.css">
+    <style>
+        body {
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 0;
+            overflow: hidden;
+            background-color: var(--bg-color);
+        }
+
+        #game-frame {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+            background: transparent;
+        }
+
+        #game-hub-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            position: relative;
+        }
+
+        /* Sidebar Styles */
+        #settings-sidebar {
+            position: absolute;
+            left: -350px;
+            top: 0;
+            width: 300px;
+            height: 100%;
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 1000;
+            transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+            padding: 40px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            box-shadow: 20px 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        #settings-sidebar.open {
+            left: 0;
+        }
+
+        .sidebar-title {
+            font-size: 0.8rem;
+            letter-spacing: 0.4em;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 20px;
+        }
+
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .setting-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        input[type="text"] {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px 16px;
+            color: white;
+            border-radius: 8px;
+            font-size: 1rem;
+            outline: none;
+            transition: border 0.3s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--blue-color);
+        }
+
+        .toggle-group {
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .toggle-btn {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            transition: all 0.3s;
+        }
+
+        .toggle-btn.active {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        /* Player List Styles */
+        .player-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .player-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .player-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .player-status {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        .player-name {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+            flex: 1;
+        }
+
+        .player-badge {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--blue-color);
+            background: rgba(59, 130, 246, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .game-btn {
+            padding: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.02);
+            color: rgba(255, 255, 255, 0.7);
+            border-radius: 12px;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.3s;
+            font-size: 0.9rem;
+        }
+
+        .game-btn:hover,
+        .game-btn.active {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--blue-color);
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="settings-sidebar">
+        <div class="sidebar-title">SETTINGS</div>
+
+        <div class="setting-group">
+            <div class="setting-label">Username</div>
+            <input type="text" id="username-input" placeholder="Guest" spellcheck="false">
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-label">Online Players</div>
+            <div class="player-list" id="player-list">
+                <!-- Players will be rendered here -->
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-label" id="room-label">Networking</div>
+            <div id="room-controls">
+                <button class="game-btn" onclick="createRoom()" style="margin-bottom: 8px;">Create Room</button>
+                <button class="game-btn" onclick="joinRoom()">Join Room</button>
+            </div>
+            <div id="room-active" style="display: none;">
+                <div class="setting-label">Room Code</div>
+                <div id="room-code-display"
+                    style="font-size: 1.5rem; letter-spacing: 0.2em; color: var(--blue-color); margin-bottom: 10px;">
+                    -----</div>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-label">Switch Game</div>
+            <button class="game-btn" id="btn-piles" onclick="setGame('piles')">Piles</button>
+            <button class="game-btn" id="btn-line" onclick="setGame('line')">Line</button>
+        </div>
+    </div>
+
+    <div id="game-hub-container">
+        <iframe id="game-frame"></iframe>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+    <script src="js/network-engine.js"></script>
+
+    <script>
+        // Identity Management
+        let username = localStorage.getItem('username');
+        if (!username) {
+            const randomId = Math.floor(Math.random() * 9000 + 1000);
+            username = `Guest${randomId}`;
+            localStorage.setItem('username', username);
+        }
+
+        // Room Management
+        let roomId = new URLSearchParams(window.location.search).get('room');
+        if (roomId) NetworkEngine.joinRoom(roomId);
+
+        let currentGame = localStorage.getItem('lastGame') || 'piles';
+        const games = ['piles', 'line'];
+
+        function createRoom() {
+            const newRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+            window.location.search = `?room=${newRoomId}`;
+        }
+
+        function joinRoom() {
+            const inputId = prompt("Enter Room Code:");
+            if (inputId) {
+                window.location.search = `?room=${inputId.toUpperCase()}`;
+            }
+        }
+
+        // Mock Player Data
+        const mockPlayers = [
+            { id: 'p2', name: 'Guest7241', status: 'online' },
+            { id: 'p3', name: 'Guest1109', status: 'online' }
+        ];
+
+        function setGame(gameId) {
+            currentGame = gameId;
+            updateFrame();
+            updateUI();
+        }
+
+        function updateFrame() {
+            const frame = document.getElementById('game-frame');
+            frame.src = `../games/${currentGame}/index.html`;
+            localStorage.setItem('lastGame', currentGame);
+        }
+
+        function renderPlayers() {
+            const list = document.getElementById('player-list');
+            list.innerHTML = '';
+
+            // Add self
+            const selfItem = createPlayerElement(username, true);
+            list.appendChild(selfItem);
+
+            // Add mocks
+            mockPlayers.forEach(p => {
+                list.appendChild(createPlayerElement(p.name, false));
+            });
+        }
+
+        function createPlayerElement(name, isSelf) {
+            const div = document.createElement('div');
+            div.className = 'player-item';
+            div.innerHTML = `
+                <div class="player-status"></div>
+                <div class="player-name">${name}</div>
+                ${isSelf ? '<div class="player-badge">YOU</div>' : ''}
+            `;
+            div.onclick = () => console.log(`Interaction with ${name}`);
+            return div;
+        }
+
+        function updateUI() {
+            // Update game buttons
+            document.getElementById('btn-piles').classList.toggle('active', currentGame === 'piles');
+            document.getElementById('btn-line').classList.toggle('active', currentGame === 'line');
+
+            // Update username input
+            document.getElementById('username-input').value = username;
+
+            // Update Room UI
+            if (roomId) {
+                document.getElementById('room-controls').style.display = 'none';
+                document.getElementById('room-active').style.display = 'block';
+                document.getElementById('room-code-display').innerText = roomId;
+            }
+
+            renderPlayers();
+        }
+
+        function toggleSidebar() {
+            document.getElementById('settings-sidebar').classList.toggle('open');
+        }
+
+        function cycleGame() {
+            const index = games.indexOf(currentGame);
+            currentGame = games[(index + 1) % games.length];
+            setGame(currentGame);
+        }
+
+        // Initialize
+        updateFrame();
+        updateUI();
+
+        // Listen for username changes
+        document.getElementById('username-input').addEventListener('input', (e) => {
+            username = e.target.value.trim() || localStorage.getItem('username');
+            localStorage.setItem('username', username);
+            renderPlayers();
+        });
+
+        // Key listeners
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            const key = e.key.toLowerCase();
+            if (key === 's') {
+                toggleSidebar();
+            }
+            if (key === 'g') {
+                cycleGame();
+            }
+        });
+
+        // Iframe messaging
+        window.addEventListener('message', (e) => {
+            if (e.data === 'toggle-settings') {
+                toggleSidebar();
+            }
+            if (e.data === 'switch-game') {
+                cycleGame();
+            }
+            if (e.data.type === 'network-send') {
+                NetworkEngine.send(e.data.path, e.data.payload);
+            }
+        });
+
+        // Forward network updates to game
+        if (roomId) {
+            NetworkEngine.on('', (data) => {
+                const frame = document.getElementById('game-frame');
+                if (frame && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'network-update', payload: data }, '*');
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

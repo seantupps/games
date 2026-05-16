@@ -1,0 +1,63 @@
+:root {
+    --bg-color: #0a0a0a;
+    --blue-color: #3b82f6;
+    --red-color: #ef4444;
+    --green-color: #22c55e;
+    --yellow-color: #eab308;
+    --selection-glow: 0 0 15px rgba(255, 255, 255, 0.8);
+    --border-color: rgba(255, 255, 255, 0.1);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-color);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+    color: white;
+}
+
+/* Animations */
+@keyframes flash-red {
+
+    0%,
+    100% {
+        box-shadow: var(--selection-glow);
+        border-color: white;
+    }
+
+    50% {
+        box-shadow: 0 0 25px rgba(239, 68, 68, 0.9);
+        border-color: #ef4444;
+    }
+}
+
+.flash-invalid {
+    animation: flash-red 0.5s ease-in-out;
+}
+
+/* Overlays */
+.win-overlay {
+    position: absolute;
+    top: 80px;
+    left: 50%;
+    transform: translate(-50%, 0);
+    font-size: 3.5rem;
+    font-weight: 800;
+    letter-spacing: -0.05em;
+    pointer-events: none;
+    opacity: 0;
+    transition: all 1s cubic-bezier(0.4, 0, 0.2, 1);
+    text-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+    z-index: 1000;
+}
+
+.win-overlay.show {
+    opacity: 1;
+    transform: translate(-50%, 20px) scale(1.1);
+}
