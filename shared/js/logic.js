@@ -190,7 +190,11 @@ const Logic = {
                 state = { ...state, ...initialConfig.board };
             }
         }
-        const eventList = events || [];
+        const eventList = (events || []).slice().sort((a, b) => {
+            const ta = typeof a?.timestamp === 'number' ? a.timestamp : 0;
+            const tb = typeof b?.timestamp === 'number' ? b.timestamp : 0;
+            return ta - tb;
+        });
         for (const event of eventList) { if (event.type === 'move') { state = logic.applyMove(state, event.payload); } }
         return state;
     }

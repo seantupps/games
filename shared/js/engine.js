@@ -42,11 +42,12 @@ class BaseGame {
         // Rendering Boilerplate
         this.renderPending = false;
         this.mousePos = { x: 0, y: 0 };
-        this.uid = localStorage.getItem('game_uid'); // Fallback
+        this.uid = sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid'); // Fallback
         this.localSize = 1000; // Default world-to-local scale (0-1000 world)
 
         this.gameEvents = [];
         this._eventsLoaded = false;
+        this._lastTurnSyncedEventCount = -1;
         this.roomData = null;
 
         this.initKeybinds();
@@ -100,7 +101,7 @@ class BaseGame {
                     const world = this.toWorld(lx, ly);
                     this.piecePositions[draggedEl.id] = { nx: world.x, ny: world.y };
                     if (this.isMultiplayer) {
-                        const uid = this.uid || localStorage.getItem('game_uid');
+                        const uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
                         this.broadcast(`interactions/drag/${uid}`, null);
                         this.broadcast(`global/piecePositions/${draggedEl.id}`, { nx: world.x, ny: world.y, uid: uid });
                     }
@@ -120,7 +121,7 @@ class BaseGame {
             if (now - (this.lastDragSync || 0) < 30) return;
             this.lastDragSync = now;
             const world = this.toWorld(lx + 30, ly + 30);
-            const uid = this.uid || localStorage.getItem('game_uid');
+            const uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
             this.broadcast(`interactions/drag/${uid}/${el.id}`, { x: world.x - 500, y: world.y - 500, uid: uid });
         });
     }
@@ -179,12 +180,18 @@ class BaseGame {
                 this.roomId = e.data.roomId || 'lobby';
                 if (e.data.username) this.username = e.data.username;
                 this.isMultiplayer = !!this.roomId && this.roomId !== 'lobby';
-                if (!this.isMultiplayer) this.opponentName = "AI";
+                if (!this.isMultiplayer) {
+                    this.opponentName = "AI";
+                    this.loadScores();
+                }
 
                 if (e.data.game) {
                     this.roomData = e.data.game;
                     this.lastResetCount = this.roomData.global?.resetCount || 0;
                     this.firstPlayer = this.roomData.global?.firstPlayer || 'P1';
+                    if (this.roomData.global?.mode) {
+                        this.mode = this.roomData.global.mode;
+                    }
                 }
 
                 if (this.gameName === 'piles' && this.mode === 'freestyle' && this.applyServerPileColors) {
@@ -220,10 +227,17 @@ class BaseGame {
                     }
                 }
 
-                if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp && (!this.roomData || !this.roomData.global || !hasBoard || boardModeMismatch)) {
+                // Warm up when board missing or mode/board mismatch. Skip on refresh or mid-game (events already replayed).
+                const needsWarmup = !this.roomData || !this.roomData.global || !hasBoard || boardModeMismatch;
+                const gameInProgress = this._eventsLoaded && this.gameEvents.length > 0;
+                const skipWarmupOnRefresh = gameInProgress
+                    || (hasBoard && !boardModeMismatch && (this.roomData?.global?.resetCount || 0) >= 1);
+                if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp && needsWarmup && !skipWarmupOnRefresh) {
                     this._hasWarmedUp = true;
                     console.log(`[ENGINE] Host warming up uninitialized or mismatched room: ${this.roomId} (boardModeMismatch=${boardModeMismatch})`);
                     this.resetGame();
+                } else if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp) {
+                    this._hasWarmedUp = true;
                 }
 
                 // Start Host-led impossible/stuck state repair watchdog
@@ -310,7 +324,7 @@ class BaseGame {
                     });
                 }
 
-                const myUid = this.uid || localStorage.getItem('game_uid');
+                const myUid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
 
                 // Auto-handle Interaction Sync (Dragging, Selection) - Still real-time outside event stream
 
@@ -472,18 +486,23 @@ class BaseGame {
         try {
             const state = GameLogic.computeState(this.gameName, this.gameEvents, config);
             if (state) {
-                // Authority: In multiplayer, the server's global/turn metadata is authoritative.
-                // The client's turn is kept in sync with the server turn.
-                if (this.isMultiplayer && this.roomData?.global?.turn) {
+                // Multiplayer turn: replayed event log is source of truth (emulator has no cloud functions).
+                // Host writes global/turn only when a new event arrives to avoid repair races on refresh.
+                if (this.isMultiplayer && this._eventsLoaded && this.gameEvents.length > 0) {
+                    this.turn = state.turn;
+                    if (this.isHost()) {
+                        const eventCount = this.gameEvents.length;
+                        if (eventCount !== this._lastTurnSyncedEventCount) {
+                            this._lastTurnSyncedEventCount = eventCount;
+                            if (this.roomData?.global?.turn !== state.turn) {
+                                this.broadcastTurn(state.turn);
+                            }
+                        }
+                    }
+                } else if (this.isMultiplayer && this.roomData?.global?.turn) {
                     this.turn = this.roomData.global.turn;
                 } else {
                     this.turn = state.turn;
-                }
-
-                // Sync global/turn if it differs from the calculated state.turn (Host repairs server cache)
-                if (this.isHost() && this.isMultiplayer && this._eventsLoaded && this.roomData?.global?.turn !== state.turn) {
-                    console.log(`[ENGINE] Host repairing stale server turn: ${this.roomData?.global?.turn} -> ${state.turn}`);
-                    this.broadcastTurn(state.turn);
                 }
 
                 if (this.isMultiplayer && this.gameEvents.length === 0) {
@@ -638,6 +657,7 @@ class BaseGame {
         this.winner = null;
         this.clearWinOverlay();
         this.gameEvents = [];
+        this._lastTurnSyncedEventCount = -1;
 
         // 1. Reset local UI
         this.selection = { pk: null, ids: [] };
@@ -746,7 +766,8 @@ class BaseGame {
         this.roomId = urlParams.get('room');
         this.isMultiplayer = !!(this.roomId && this.roomId !== 'lobby');
         this.playerRole = urlParams.get('role') || 'P1';
-        this.username = localStorage.getItem('username') || 'Guest';
+        this.uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
+        this.username = sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest';
         this.opponentName = "Opponent";
 
         this.loadScores();
@@ -762,8 +783,11 @@ class BaseGame {
     }
 
     getScoreKey() {
-        const context = this.isMultiplayer ? `room_${this.roomId}` : 'solo';
-        return `scores_${this.gameName}_${this.mode}_${context}`;
+        if (this.isMultiplayer) {
+            return `scores_${this.gameName}_${this.mode}_room_${this.roomId}`;
+        }
+        const uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid') || 'local';
+        return `scores_${this.gameName}_${this.mode}_uid_${uid}`;
     }
 
     loadScores() {
@@ -851,14 +875,14 @@ class BaseGame {
 
     broadcastSelection() {
         if (!this.isMultiplayer) return;
-        const uid = this.uid || localStorage.getItem('game_uid');
+        const uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
         if (!uid) return; // Cannot broadcast without identity
         this.broadcast(`interactions/select/${uid}`, this.selection);
     }
 
     broadcastInvalidMove(ids) {
         if (!this.isMultiplayer) return;
-        const uid = this.uid || localStorage.getItem('game_uid');
+        const uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
         this.broadcast(`interactions/invalid`, { ids, uid });
     }
 
@@ -1038,14 +1062,16 @@ class BaseGame {
             overlay.classList.add('show');
         }
 
-        // Auto-Restart Timer (ONLY FOR HOST)
-        if (this.isHost()) {
+        // Auto-Restart Timer (host / P1 only — guest waits for resetCount from host)
+        if (this.isMultiplayer && !this.isHost()) {
+            console.log('[ENGINE] Guest waiting for host auto-reset');
+        } else if (this.isHost()) {
             const isTest = this.roomId && this.roomId.startsWith('MP_AUDIT');
             const delay = isTest ? 1000 : 2000;
-            console.log(`HOST: SETTING AUTO RESET TIMER FOR ${delay}ms (isTest=${isTest})`);
+            console.log(`[ENGINE] Host scheduling auto-reset in ${delay}ms`);
             this.clearAutoReset();
             this.autoResetTimer = setTimeout(() => {
-                console.log("HOST: AUTO RESET TRIGGERED");
+                console.log('[ENGINE] Host auto-reset triggered');
                 if (this.onResetRequest) this.onResetRequest();
                 else this.resetGame();
             }, delay);

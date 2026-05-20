@@ -5,7 +5,8 @@
  * - dev       : real Firebase project for two-device / staging testing.
  * - production: live public app (default when unset).
  *
- * Select via URL: ?firebase=emulator | ?firebase=dev
+ * Select via URL: ?firebase=emulator | ?firebase=dev | ?firebase=production
+ * localhost / 127.0.0.1 defaults to emulator unless ?firebase=production
  * Or before NetworkEngine.init(): window.FIVE_FIREBASE_TARGET = 'emulator'
  */
 (function (global) {
@@ -43,6 +44,8 @@
             const params = new URLSearchParams(global.location?.search || '');
             const fromUrl = params.get('firebase');
             if (fromUrl) return fromUrl;
+            const host = global.location?.hostname || '';
+            if (host === '127.0.0.1' || host === 'localhost') return 'emulator';
         } catch (_) { /* non-browser */ }
         return 'production';
     }

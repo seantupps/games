@@ -21,9 +21,8 @@ class ColorPileGame extends BaseGame {
             this.identitySynced = true;
             this.applyServerPileColors();
             if (this.isMultiplayer) return;
-            const digest = `${this.roomData?.global?.game || ''}|${this.roomData?.global?.mode || ''}|${this.roomId || ''}`;
-            if (this._pilesIdentityDigest === digest) return;
-            this._pilesIdentityDigest = digest;
+            const hasPieces = this.piles && Object.values(this.piles).some((arr) => arr && arr.length > 0);
+            if (hasPieces) return;
             this.initPiles();
         };
     }
@@ -46,7 +45,7 @@ class ColorPileGame extends BaseGame {
         return true;
     }
 
-    initPiles() {
+    initPiles(force = false) {
         if (this.mode === 'classic') {
             this.piles = {
                 'B': [0, 1, 2, 3, 4].map(idx => ({ id: `B-${idx}`, type: 'B', slot: idx })),
@@ -59,7 +58,8 @@ class ColorPileGame extends BaseGame {
                     this.piles = { 'B': [], 'G': [], 'R': [] };
                     return;
                 }
-                if (this.hasServerBoard()) return;
+                // During warmup, wait for server board; on rematch always roll a new layout.
+                if (!force && this.hasServerBoard()) return;
             }
             this.initFreestyle();
         }
@@ -72,7 +72,7 @@ class ColorPileGame extends BaseGame {
             return;
         }
 
-        // Host/Solo logic
+        // Host/Solo logic — fresh random layout each time (mode only is persisted in the hub, not the board)
         let b, g, r;
         let attempts = 0;
 
@@ -316,7 +316,7 @@ class ColorPileGame extends BaseGame {
 
     onGameReset() {
         this.resetPositions();
-        this.initPiles();
+        this.initPiles(true);
 
         if (this.mode === 'classic') {
             // Remove custom colors key from localStorage

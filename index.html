@@ -1,14 +1,1302 @@
-<!DOCTYPE html>
-<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Games</title>
-    <meta http-equiv="refresh" content="0; url=shared/index.html">
-    <link rel="canonical" href="shared/index.html">
-    <script>location.replace('shared/index.html');</script>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Game Hub - Project Five (Shared Root)</title>
+    <link rel="stylesheet" href="shared/css/core.css">
+    <style>
+        body {
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #game-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: transparent;
+        }
+
+        #game-hub-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        /* Sidebar Styles - Moved to RIGHT */
+        #settings-sidebar {
+            position: fixed;
+            right: -350px;
+            /* Hidden off-right */
+            top: 0;
+            width: 320px;
+            /* Reduced from 400px */
+
+            height: 100%;
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(25px);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 10000;
+            transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+            padding: 50px;
+            /* More padding */
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+            /* Larger gap */
+            box-shadow: -20px 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        #settings-sidebar.open {
+            right: 0;
+        }
+
+
+        .sidebar-title {
+            font-size: 0.8rem;
+            letter-spacing: 0.4em;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .setting-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.3);
+            display: none;
+        }
+
+        input[type="text"] {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px 16px;
+            color: white;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            outline: none;
+            transition: border 0.3s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--theme-color);
+        }
+
+        .toggle-group {
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .toggle-btn {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .toggle-btn.active {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        /* Player List Styles */
+        .player-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .player-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .player-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .player-status {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        .player-name {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+            flex: 1;
+        }
+
+        .player-badge {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--theme-color);
+            background: rgba(var(--theme-color-rgb), 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .player-item.active {
+            border-color: var(--theme-color);
+            background: rgba(var(--theme-color-rgb), 0.05);
+        }
+
+        .game-btn {
+            padding: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.02);
+            color: rgba(255, 255, 255, 0.7);
+            border-radius: 12px;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.3s;
+            font-size: 0.9rem;
+        }
+
+        .game-btn:hover,
+        .game-btn.active {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--theme-color);
+            color: white;
+        }
+
+        /* Settings Icon - Moved to BOTTOM RIGHT */
+        #settings-trigger {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            /* Move to right */
+            width: 44px;
+            height: 44px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 9000;
+            transition: all 0.3s;
+            color: rgba(255, 255, 255, 0.4);
+            background: transparent !important;
+            /* No background circle */
+        }
+
+
+        #settings-sidebar.open~#settings-trigger {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #settings-trigger:hover {
+            color: white;
+            transform: rotate(45deg);
+        }
+
+        .keybind-list {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.6);
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 8px;
+        }
+
+        .key-tag {
+            color: var(--theme-color);
+            font-family: monospace;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 4px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        #color-selector {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .color-opt {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .color-opt.active {
+            border-color: white;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        #global-turn-indicator {
+            position: fixed;
+            top: 80px;
+            left: 32px;
+            padding: 0;
+            background: transparent;
+            backdrop-filter: none;
+            border: none;
+            border-radius: 0;
+            z-index: 8000;
+            font-size: 0.8rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+            opacity: 0;
+            margin-top: -10px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        #global-turn-indicator.visible {
+            opacity: 1;
+            margin-top: 0;
+        }
+
+        #global-turn-indicator .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        #global-win-banner {
+            position: fixed;
+            top: 15%;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            z-index: 10000;
+            font-size: 3.5rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: white;
+            /*text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);*/
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1), transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+            font-family: 'Inter', sans-serif;
+            white-space: nowrap;
+        }
+
+        #global-win-banner.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
 </head>
+
+
 <body>
-    <p><a href="shared/index.html">Open games hub</a></p>
+    <div id="global-turn-indicator">
+        <div class="dot"></div>
+        <span id="turn-text">Your Turn</span>
+    </div>
+
+    <div id="global-win-banner"></div>
+
+    <div id="settings-sidebar">
+        <div class="setting-group">
+            <input type="text" id="username-input" placeholder="Guest" spellcheck="false" maxlength="16">
+        </div>
+
+        <div class="setting-group">
+            <input type="color" id="theme-color-input" value="#3b82f6" oninput="setUserColor(this.value)"
+                style="width: 100%; height: 40px; border: none; background: transparent; cursor: pointer; border-radius: 8px;">
+        </div>
+
+        <div class="setting-group">
+            <div class="player-list" id="player-list"></div>
+        </div>
+
+        <div class="setting-group">
+            <button class="game-btn" id="btn-piles" onclick="setGame('piles')">Piles</button>
+            <button class="game-btn" id="btn-line" onclick="setGame('line')">Line</button>
+        </div>
+
+        <div class="setting-group" id="mode-settings-group">
+            <div class="toggle-group">
+                <button class="toggle-btn" id="mode-classic" onclick="setGameMode('classic')">Classic</button>
+                <button class="toggle-btn" id="mode-freestyle" onclick="setGameMode('freestyle')">Freestyle</button>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div class="keybind-list">
+                <span class="key-tag">S</span> <span>Settings</span>
+                <span class="key-tag">T</span> <span>Chat</span>
+                <span class="key-tag" id="keybind-mode-tag">M</span> <span id="keybind-mode-desc">Next Mode</span>
+                <span class="key-tag">G</span> <span>Change Game</span>
+                <span class="key-tag">F6</span> <span>Dev Info</span>
+                <span class="key-tag">Scroll</span> <span>Zoom</span>
+            </div>
+        </div>
+    </div>
+
+
+    <div id="settings-trigger" onclick="toggleSidebar()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 10-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+            </path>
+        </svg>
+    </div>
+
+    <div id="game-hub-container">
+        <iframe id="game-frame" src="games/piles/index.html"></iframe>
+    </div>
+
+
+    <!-- Chat Box -->
+    <div id="chat-container">
+        <div id="chat-messages">
+        </div>
+        <div id="chat-input-wrapper">
+            <input type="text" id="chat-input" placeholder="Type /p <name> to party..." spellcheck="false"
+                autocomplete="off">
+        </div>
+    </div>
+
+
+
+    <div id="invite-toast">
+        <div class="toast-content">
+            <div class="toast-text">
+                <span id="toast-sender">Someone</span> invited you to <span id="toast-game-name">Games</span>
+            </div>
+        </div>
+        <div class="toast-actions">
+            <button id="btn-accept-invite">Accept</button>
+            <button onclick="hideInviteToast()">Dismiss</button>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+    <script src="shared/js/firebase-env.js"></script>
+    <script src="shared/js/network.js"></script>
+
+    <script>
+        let username = sessionStorage.getItem('username');
+        if (!username) {
+            const randomId = Math.floor(Math.random() * 9000 + 1000);
+            username = `Guest${randomId}`;
+            sessionStorage.setItem('username', username);
+        }
+
+        // EMERGENCY STORAGE CLEANUP (Fixes non-incognito weirdness)
+        try {
+            const piecePositions = JSON.parse(localStorage.getItem('piecePositions') || '{}');
+            const firstPiece = Object.values(piecePositions)[0];
+            if (firstPiece && (firstPiece.left !== undefined || firstPiece.top !== undefined)) {
+                console.log('Hub: Cleaning up legacy absolute positions...');
+                localStorage.removeItem('piecePositions');
+            }
+            if (localStorage.getItem('game_zoom')) {
+                localStorage.removeItem('game_zoom');
+            }
+        } catch (e) { }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let roomId = urlParams.get('room');
+        let initialRole = urlParams.get('role');
+        if (initialRole) NetworkEngine.playerRole = initialRole;
+
+        let currentGame = urlParams.get('game') || localStorage.getItem('lastGame') || 'piles';
+        const games = ['piles', 'line'];
+        // Vibrant Palette for new users
+        const VIBRANT_COLORS = ['#f43f5e', '#ec4899', '#d946ef', '#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#10b981', '#22c55e', '#84cc16', '#eab308', '#f59e0b', '#f97316', '#ef4444'];
+
+        let userColor = sessionStorage.getItem('userColor');
+        if (!userColor) {
+            userColor = VIBRANT_COLORS[Math.floor(Math.random() * VIBRANT_COLORS.length)];
+            sessionStorage.setItem('userColor', userColor);
+        }
+
+        let gameMode = urlParams.get('mode') || localStorage.getItem(`${currentGame}_mode`) || 'classic';
+
+
+        function setUserColor(color) {
+            userColor = color;
+            sessionStorage.setItem('userColor', color);
+            document.documentElement.style.setProperty('--theme-color', color);
+            document.documentElement.style.setProperty('--opponent-color', getOpponentColor(color));
+            const rgb = hexToRgbValues(color);
+            document.documentElement.style.setProperty('--theme-color-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+            document.getElementById('theme-color-input').value = color;
+
+            const frame = document.getElementById('game-frame');
+            if (frame && frame.contentWindow) {
+                frame.contentWindow.postMessage({
+                    type: 'update-theme',
+                    color: color,
+                    opponentColor: getOpponentColor(color),
+                    username: username,
+                    uid: NetworkEngine.uid
+                }, '*');
+            }
+
+            if (roomId && NetworkEngine.isInitialized) {
+                NetworkEngine.registerPlayerInRoom(username, color);
+            }
+        }
+
+        function hexToRgbValues(hex) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return { r, g, b };
+        }
+
+        function getOpponentColor(hex) {
+            const rgb = hexToRgbValues(hex);
+            const toHex = (c) => (255 - c).toString(16).padStart(2, '0');
+            return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`;
+        }
+
+        /** Prime iframe src before async Firebase join so refresh never loads classic-default first. */
+        function primeGameFrame() {
+            const frame = document.getElementById('game-frame');
+            if (!frame) return;
+            const params = new URLSearchParams();
+            params.set('theme', userColor);
+            params.set('opp', getOpponentColor(userColor));
+            params.set('mode', gameMode);
+            if (roomId && roomId !== 'lobby') {
+                params.set('room', roomId);
+                params.set('role', initialRole || NetworkEngine.playerRole || 'P1');
+            }
+            frame.src = `games/${currentGame}/index.html?${params.toString()}`;
+        }
+        primeGameFrame();
+
+        function syncRoomStateOnGameOrModeChange(gameId, mode) {
+            if (!roomId || roomId === 'lobby' || NetworkEngine.playerRole !== 'P1') return;
+
+            const prevResetCount = NetworkEngine.roomData?.global?.resetCount || 0;
+            const newResetCount = prevResetCount + 1;
+
+            const updates = {};
+            updates[`games/${roomId}/global/game`] = gameId;
+            updates[`games/${roomId}/global/mode`] = mode;
+            updates[`games/${roomId}/status`] = 'playing';
+            updates[`games/${roomId}/winner`] = null;
+            updates[`games/${roomId}/global/turn`] = 'P1';
+            updates[`games/${roomId}/global/firstPlayer`] = 'P1';
+            updates[`games/${roomId}/global/board`] = null;
+            updates[`games/${roomId}/global/resetCount`] = newResetCount;
+            updates[`games/${roomId}/global/piecePositions`] = null;
+            updates[`games/${roomId}/global/colors`] = null;
+            updates[`games/${roomId}/global/pileColors`] = null;
+            updates[`games/${roomId}/lastMove`] = null;
+            updates[`games/${roomId}/interactions`] = null;
+            updates[`games/${roomId}/previews`] = null;
+
+            // Clear events stream entirely
+            updates[`gameData/${roomId}`] = null;
+
+            console.log(`[HUB] Host changing game/mode atomically: game=${gameId}, mode=${mode}, resetCount=${newResetCount}`);
+            NetworkEngine.db.ref().update(updates);
+        }
+
+        function setGame(gameId, sync = true) {
+            currentGame = gameId;
+            if (currentGame === 'line') {
+                gameMode = 'classic';
+            } else {
+                gameMode = localStorage.getItem(`${currentGame}_mode`) || 'classic';
+            }
+            updateFrame();
+            updateUI();
+
+            if (sync && roomId && NetworkEngine.playerRole === 'P1') {
+                syncRoomStateOnGameOrModeChange(currentGame, gameMode);
+            }
+        }
+
+        function setGameMode(mode, sync = true) {
+            if (currentGame === 'line') {
+                gameMode = 'classic';
+            } else {
+                gameMode = mode;
+            }
+            localStorage.setItem(`${currentGame}_mode`, gameMode);
+            updateFrame();
+            updateUI();
+            if (sync && roomId && roomId !== 'lobby' && NetworkEngine.playerRole === 'P1') {
+                syncRoomStateOnGameOrModeChange(currentGame, gameMode);
+            }
+        }
+
+        function toggleFirstPlayer() {
+            if (NetworkEngine.playerRole !== 'P1') return;
+            NetworkEngine.db.ref(`games/${roomId}/global/firstPlayer`).once('value', (snap) => {
+                const current = snap.val() || 'P1';
+                const next = current === 'P1' ? 'P2' : 'P1';
+                NetworkEngine.send('global/firstPlayer', next);
+                console.log(`[Turn] Next game first player: ${next}`);
+            });
+        }
+
+        let lastFrameGame = null;
+
+        function updateFrame() {
+            const frame = document.getElementById('game-frame');
+            const params = new URLSearchParams();
+            params.set('theme', userColor);
+            params.set('opp', getOpponentColor(userColor));
+            params.set('mode', gameMode);
+            const gameChanged = lastFrameGame !== currentGame;
+            if (gameChanged) {
+                params.set('v', String(Date.now()));
+                lastFrameGame = currentGame;
+            }
+            if (roomId) {
+                params.set('room', roomId);
+                params.set('role', NetworkEngine.playerRole || 'P1');
+            }
+
+            frame.src = `games/${currentGame}/index.html?${params.toString()}`;
+            localStorage.setItem('lastGame', currentGame);
+            frame.onload = () => {
+                setUserColor(userColor);
+                setTimeout(() => frame.focus(), 100);
+            };
+        }
+
+
+        function renderPlayers(otherPlayers = []) {
+            const list = document.getElementById('player-list');
+            list.innerHTML = '';
+            if (otherPlayers.length === 0) {
+                list.innerHTML = '<div style="font-size: 0.7rem; color: rgba(255,255,255,0.2); text-align: center; padding: 10px;">No other players online</div>';
+                return;
+            }
+            otherPlayers.forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'player-item';
+                div.onclick = () => sendInvite(p.uid, p.name);
+                div.innerHTML = `
+                    <div class="player-status" style="background: ${p.color}; box-shadow: 0 0 8px ${p.color};"></div>
+                    <span class="player-name">${p.name}</span>
+                    ${p.active ? '<span class="player-badge">In Game</span>' : ''}
+                `;
+                list.appendChild(div);
+            });
+        }
+
+
+        function rejectRoomJoin(check) {
+            const msg = (check && check.reason) || 'This room is full (2 players max).';
+            console.warn('[HUB]', msg);
+            alert(msg);
+            roomId = 'lobby';
+            const url = new URL(window.location);
+            url.searchParams.set('room', 'lobby');
+            url.searchParams.delete('role');
+            window.history.replaceState({}, '', url);
+            NetworkEngine.joinRoom('lobby');
+            NetworkEngine.playerRole = 'P1';
+            updateFrame();
+            updateUI();
+            startRoomHeartbeat();
+        }
+
+        function leaveParty() {
+            if (!roomId || roomId === 'lobby') {
+                ChatEngine.append({ sender: 'System', content: 'You are already in the lobby.' });
+                return;
+            }
+            const leavingRoom = roomId;
+            const uid = NetworkEngine.uid;
+            if (NetworkEngine.isInitialized && uid) {
+                NetworkEngine.db.ref(`games/${leavingRoom}/playerData/${uid}`).remove();
+                NetworkEngine.db.ref(`games/${leavingRoom}/users/${uid}`).remove();
+            }
+            roomId = 'lobby';
+            const url = new URL(window.location);
+            url.searchParams.set('room', 'lobby');
+            url.searchParams.delete('role');
+            window.history.replaceState({}, '', url);
+            NetworkEngine.joinRoom('lobby');
+            NetworkEngine.playerRole = 'P1';
+            updateFrame();
+            updateUI();
+            startRoomHeartbeat();
+            ChatEngine.append({ sender: 'System', content: 'You left the party and returned to the lobby.' });
+        }
+
+        window.onRoomJoinRejected = rejectRoomJoin;
+
+        function sendInvite(uid, name) {
+            const launch = () => {
+                NetworkEngine.sendInvite(uid, { game: currentGame, mode: gameMode }, (newRoomId) => {
+                    const url = new URL(window.location);
+                    url.searchParams.set('room', newRoomId);
+                    url.searchParams.delete('role');
+                    window.history.pushState({}, '', url);
+
+                    roomId = newRoomId;
+                    updateFrame();
+                    updateUI();
+                    startRoomHeartbeat();
+                });
+            };
+
+            if (!roomId || roomId === 'lobby') {
+                launch();
+                return;
+            }
+
+            NetworkEngine.fetchRoomMemberCount(roomId).then((count) => {
+                if (count >= NetworkEngine.ROOM_MAX_PLAYERS) {
+                    alert('Your party is full (2 players max).');
+                    return;
+                }
+                launch();
+            });
+        }
+
+        function updateUI() {
+            const isLobby = !roomId || roomId === 'lobby';
+            const isHost = NetworkEngine.playerRole === 'P1' || isLobby;
+
+            document.querySelectorAll('.game-btn').forEach(btn => {
+                btn.style.display = isHost ? 'block' : 'none';
+            });
+            const modeGroup = document.getElementById('mode-settings-group');
+            if (modeGroup) {
+                modeGroup.style.display = (isHost && currentGame === 'piles') ? 'block' : 'none';
+            }
+
+            const keybindModeTag = document.getElementById('keybind-mode-tag');
+            const keybindModeDesc = document.getElementById('keybind-mode-desc');
+            if (keybindModeTag && keybindModeDesc) {
+                const showModeKeybind = (currentGame === 'piles');
+                keybindModeTag.style.display = showModeKeybind ? 'block' : 'none';
+                keybindModeDesc.style.display = showModeKeybind ? 'block' : 'none';
+            }
+
+            document.getElementById('btn-piles').classList.toggle('active', currentGame === 'piles');
+            document.getElementById('btn-line').classList.toggle('active', currentGame === 'line');
+            document.getElementById('mode-classic').classList.toggle('active', gameMode === 'classic');
+            document.getElementById('mode-freestyle').classList.toggle('active', gameMode === 'freestyle');
+            document.getElementById('username-input').value = username;
+        }
+
+        function toggleSidebar(force) {
+            const sidebar = document.getElementById('settings-sidebar');
+            if (force === true) sidebar.classList.add('open');
+            else if (force === false) sidebar.classList.remove('open');
+            else sidebar.classList.toggle('open');
+            localStorage.setItem('settingsOpen', sidebar.classList.contains('open'));
+        }
+
+        function cycleGame() {
+            setGame(currentGame === 'piles' ? 'line' : 'piles');
+        }
+
+        function cycleMode() {
+            if (currentGame !== 'piles') return;
+            setGameMode(gameMode === 'classic' ? 'freestyle' : 'classic');
+        }
+
+        function startRoomHeartbeat() {
+            // Always bind chat to the page's room id (guest invite flow used to listen on lobby/chat)
+            NetworkEngine.listenForChat(appendChatMessage, roomId || 'lobby');
+
+            if (!roomId || roomId === 'lobby') {
+                updateUI();
+                return;
+            }
+
+
+            // Listen for global state changes (syncing Guest to Host)
+            NetworkEngine.on('global', (data) => {
+                console.log(`[ENGINE] [HUB] Guest global listener: data=${JSON.stringify(data)}, currentGame=${currentGame}, gameMode=${gameMode}`);
+                if (!data || NetworkEngine.playerRole === 'P1') return;
+
+                let changed = false;
+                if (data.game && data.game !== currentGame) {
+                    console.log(`[ENGINE] [HUB] Guest switching game from ${currentGame} to ${data.game}`);
+                    currentGame = data.game;
+                    changed = true;
+                }
+                if (data.mode && data.mode !== gameMode) {
+                    console.log(`[ENGINE] [HUB] Guest switching mode from ${gameMode} to ${data.mode}`);
+                    gameMode = data.mode;
+                    changed = true;
+                }
+
+                if (changed) {
+                    localStorage.setItem(`${currentGame}_mode`, gameMode);
+                    updateFrame();
+                    updateUI();
+                }
+            });
+
+            // Targeted listeners for high-frequency "real-time" actions
+            NetworkEngine.on('interactions', (data) => {
+                const frame = document.getElementById('game-frame');
+                if (frame && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'network-update', payload: { interactions: data } }, '*');
+                }
+            });
+
+            NetworkEngine.on('previews', (data) => {
+                const frame = document.getElementById('game-frame');
+                if (frame && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'network-update', payload: { previews: data } }, '*');
+                }
+            });
+
+            NetworkEngine.on('', (data) => {
+                if (data) {
+                    NetworkEngine.roomData = data;
+                    console.log(`[TEST] NetworkEngine.on('') set roomData. host=${data.host}, playerKeys=${Object.keys(data.playerData || {})}`);
+                }
+                const frame = document.getElementById('game-frame');
+                // Basic world state sync (board, lastMove, etc)
+                if (frame && frame.contentWindow) {
+                    frame.contentWindow.postMessage({ type: 'network-update', payload: data }, '*');
+                }
+
+                // Sync Opponent Color (Accept CSS)
+                if (data && data.playerData) {
+                    const opponentUid = Object.keys(data.playerData).find(uid => uid !== NetworkEngine.uid);
+                    if (opponentUid) {
+                        const oppColor = data.playerData[opponentUid].color;
+                        const oppName = data.playerData[opponentUid].name;
+                        if (oppColor) {
+                            document.documentElement.style.setProperty('--opponent-color', oppColor);
+                            if (frame && frame.contentWindow) {
+                                frame.contentWindow.postMessage({
+                                    type: 'update-opponent-theme',
+                                    color: oppColor,
+                                    name: oppName
+                                }, '*');
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize Network and Listeners
+        NetworkEngine.init();
+        NetworkEngine.listenForPlayers(renderPlayers);
+        updateUI();
+
+        let currentInvite = null;
+        NetworkEngine.listenForInvites((invite) => {
+            currentInvite = invite;
+            document.getElementById('toast-sender').innerText = invite.fromName;
+            document.getElementById('toast-game-name').innerText = invite.game.toUpperCase();
+            document.getElementById('invite-toast').classList.add('show');
+
+            document.getElementById('btn-accept-invite').onclick = async () => {
+                const newRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+
+                roomId = newRoomId;
+                currentGame = invite.game;
+                gameMode = invite.mode;
+                NetworkEngine.playerRole = 'P2';
+
+                const result = await NetworkEngine.acceptInvite(invite.fromUid, roomId);
+                if (!result || !result.ok) {
+                    hideInviteToast();
+                    return;
+                }
+
+                const url = new URL(window.location);
+                url.searchParams.set('room', roomId);
+                url.searchParams.delete('role');
+                window.history.pushState({}, '', url);
+
+                updateFrame();
+                updateUI();
+                startRoomHeartbeat();
+                hideInviteToast();
+            };
+        });
+
+        function hideInviteToast() {
+            if (currentInvite) {
+                NetworkEngine.declineInvite(currentInvite.fromUid);
+            }
+            document.getElementById('invite-toast').classList.remove('show');
+            currentInvite = null;
+        }
+
+        document.getElementById('username-input').addEventListener('input', (e) => {
+            username = e.target.value.trim().substring(0, 16) || username;
+            sessionStorage.setItem('username', username);
+            NetworkEngine.updatePresence();
+        });
+
+        // Modular Chat Engine
+        const ChatEngine = {
+            input: document.getElementById('chat-input'),
+            container: document.getElementById('chat-container'),
+            messages: document.getElementById('chat-messages'),
+
+            init() {
+                this.container = document.getElementById('chat-container');
+                this.messages = document.getElementById('chat-messages');
+                this.input = document.getElementById('chat-input');
+
+                this.input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        const text = this.input.value.trim();
+                        if (text) {
+                            const isCommand = text.startsWith('/');
+                            if (!isCommand) {
+                                this.append({
+                                    sender: sessionStorage.getItem('username') || 'Me',
+                                    content: text,
+                                    color: userColor,
+                                    uid: NetworkEngine.uid
+                                });
+                            }
+                            const handled = this.handleCommand(text);
+                            if (!handled && !isCommand) {
+                                NetworkEngine.sendChatMessage(text, roomId);
+                            } else if (isCommand && !handled) {
+                                this.append({ sender: 'System', content: 'Unknown command. Type /help for a list.' });
+                            }
+                        }
+                        this.toggle(false);
+                    }
+                    if (e.key === 'Escape') this.toggle(false);
+                });
+            },
+
+
+            toggle(open, startChar = '') {
+                const isOpen = typeof open === 'boolean' ? open : !this.container.classList.contains('active');
+
+                if (!isOpen) {
+                    this.container.classList.add('no-transition');
+                }
+
+                this.container.classList.toggle('active', isOpen);
+
+                if (isOpen) {
+                    this.input.value = startChar;
+                    this.input.focus();
+                } else {
+                    this.input.blur();
+                    // Restore focus to game iframe for keybinds
+                    const frame = document.getElementById('game-frame');
+                    if (frame) frame.focus();
+
+                    // Snap-out complete, cleanup no-transition
+                    this.container.offsetHeight; // Force reflow
+                    this.container.classList.remove('no-transition');
+                }
+            },
+
+
+            append(data, isNetwork = false) {
+                if (!data) return;
+
+                // Deduplication: Check if we already appended this recently (optimistically)
+                if (isNetwork && data.uid === NetworkEngine.uid) {
+                    const existing = Array.from(this.messages.children).some(el =>
+                        el.dataset.content === data.content &&
+                        (Date.now() - parseInt(el.dataset.time) < 5000)
+                    );
+                    if (existing) return;
+                }
+
+                const div = document.createElement('div');
+                div.className = `chat-msg ${!data.sender || data.sender === 'System' ? 'system' : ''}`;
+                div.dataset.content = data.content || '';
+                div.dataset.time = Date.now();
+
+                const sender = data.sender || 'System';
+                const content = data.content || (typeof data === 'string' ? data : '');
+                const color = data.color || (data.sender === 'System' ? '#ffffff' : 'var(--theme-color)');
+
+                if (sender === 'System') {
+                    div.innerHTML = `<span class="content" style="color: #ffffff !important; font-weight: 500; font-style: italic; opacity: 0.8;">${content}</span>`;
+                } else {
+                    div.innerHTML = `<span class="sender" style="color: ${color} !important; font-weight: 800;">${sender}:</span> <span class="content" style="color: #ffffff !important;">${content}</span>`;
+                }
+
+                const isHistory = data.timestamp && (Date.now() - data.timestamp > 8000);
+                if (isHistory && !this.container.classList.contains('active')) {
+                    div.classList.add('faded');
+                }
+
+                this.messages.appendChild(div);
+
+                // Enforce 7-message limit
+                while (this.messages.children.length > 7) {
+                    this.messages.removeChild(this.messages.firstChild);
+                }
+
+                this.messages.scrollTop = this.messages.scrollHeight;
+
+                // Fading logic for non-history or active chat
+                if (!isHistory || this.container.classList.contains('active')) {
+                    setTimeout(() => {
+                        div.classList.add('faded');
+                    }, 8000);
+                }
+            },
+
+
+
+
+
+            handleCommand(text) {
+                if (text.toLowerCase() === '/p leave') {
+                    leaveParty();
+                    return true;
+                }
+                if (text.toLowerCase() === '/help' || text.toLowerCase().startsWith('/help ')) {
+                    [
+                        '/p <name> — invite a player to your party',
+                        '/p leave — leave the party and return to the lobby',
+                        '/clear — clear local data and reload',
+                        '/win <name> — show win banner (dev)',
+                        '/help — show this list'
+                    ].forEach((line) => this.append({ sender: 'System', content: line }));
+                    return true;
+                }
+                if (text.startsWith('/p ')) {
+                    const targetName = text.substring(3).trim();
+                    NetworkEngine.findUserByName(targetName, (user) => {
+                        if (user) {
+                            sendInvite(user.uid, user.name);
+                        } else {
+                            this.append({ sender: 'System', content: `User "${targetName}" not found.` });
+                        }
+                    });
+                    return true;
+                }
+                if (text.startsWith('/clear')) {
+                    if (confirm("Clear all game data, scores, and settings?")) {
+                        localStorage.clear();
+                        window.location.reload();
+                    }
+                    return true;
+                }
+                if (text.startsWith('/win ')) {
+                    const target = text.substring(5).trim();
+                    const myName = localStorage.getItem('username') || 'Guest';
+                    const winner = (target.toUpperCase() === myName.toUpperCase()) ? 'P1' : 'P2';
+                    showWinBanner({ winner, visible: true });
+                    return true;
+                }
+                return false;
+            }
+        };
+        ChatEngine.init();
+        function appendChatMessage(data) {
+            ChatEngine.append(data, true);
+        }
+        window.appendChatMessage = appendChatMessage;
+
+        // Click-away logic to close menus
+        document.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#settings-sidebar, #settings-trigger, #chat-container')) return;
+            toggleSidebar(false);
+            ChatEngine.toggle(false);
+        });
+
+        window.addEventListener('keydown', (e) => {
+            const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+            if (isInput && e.key !== 'Escape') return;
+
+            const key = e.key.toLowerCase();
+            if (key === 't') {
+                e.preventDefault();
+                ChatEngine.toggle();
+                return;
+            }
+            if (key === '/') {
+                e.preventDefault();
+                ChatEngine.toggle(true, '/');
+                return;
+            }
+
+            const isHost = NetworkEngine.playerRole === 'P1';
+            if (key === 's') toggleSidebar();
+            if (key === 'm' && isHost) cycleMode();
+            if (key === 'g' && isHost) cycleGame();
+
+            // Forward to game iframe with ALL modifiers
+            const frame = document.getElementById('game-frame');
+            if (frame && frame.contentWindow) {
+                frame.contentWindow.postMessage({
+                    type: 'keydown',
+                    key: e.key,
+                    code: e.code,
+                    ctrlKey: e.ctrlKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey
+                }, '*');
+            }
+        });
+
+
+        window.addEventListener('wheel', (e) => {
+            const frame = document.getElementById('game-frame');
+            if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: 'wheel', deltaY: e.deltaY }, '*');
+        }, { passive: false });
+
+        window.addEventListener('message', (e) => {
+            if (e.data === 'toggle-settings') toggleSidebar();
+            if (e.data === 'close-settings') {
+                toggleSidebar(false);
+                ChatEngine.toggle(false);
+            }
+            if (e.data === 'switch-game') cycleGame();
+            if (e.data === 'cycle-mode') cycleMode();
+            if (e.data === 'toggle-chat') ChatEngine.toggle();
+            if (e.data === 'toggle-command') ChatEngine.toggle(true, '/');
+            if (e.data.type === 'network-send') NetworkEngine.send(e.data.path, e.data.payload);
+            if (e.data.type === 'network-send-event') {
+                if (roomId && roomId !== 'lobby') {
+                    // Host increments stateVersion to reject stale visual events
+                    const path = `games/${roomId}/global/stateVersion`;
+                    NetworkEngine.db.ref(path).transaction((current) => (current || 0) + 1);
+                }
+                NetworkEngine.sendEvent(e.data.event);
+            }
+            if (e.data.type === 'network-update-room') {
+                const multiUpdates = {};
+                Object.entries(e.data.updates).forEach(([key, val]) => {
+                    multiUpdates[`games/${roomId}/${key}`] = val;
+                });
+                if (e.data.updates && e.data.updates['global/resetCount'] !== undefined) {
+                    multiUpdates[`gameData/${roomId}`] = null;
+                }
+                NetworkEngine.db.ref().update(multiUpdates);
+            }
+            if (e.data.type === 'iframe-ready') {
+                const frame = document.getElementById('game-frame');
+                if (frame && frame.contentWindow) {
+                    // Send current parent theme color to iframe
+                    frame.contentWindow.postMessage({
+                        type: 'update-theme',
+                        color: userColor
+                    }, '*');
+                    const oppColor = document.documentElement.style.getPropertyValue('--opponent-color') || getComputedStyle(document.documentElement).getPropertyValue('--opponent-color');
+                    if (oppColor) {
+                        frame.contentWindow.postMessage({
+                            type: 'update-opponent-theme',
+                            color: oppColor.trim()
+                        }, '*');
+                    }
+
+                    if (roomId && roomId !== 'lobby') {
+                        Promise.all([
+                            NetworkEngine.db.ref(`games/${roomId}`).once('value'),
+                            NetworkEngine.db.ref(`gameData/${roomId}/events`).once('value')
+                        ]).then(([gameSnap, eventsSnap]) => {
+                            const game = gameSnap.val();
+                            const eventsVal = eventsSnap.val();
+                            const events = eventsVal ? Object.values(eventsVal) : [];
+                            
+                            if (game && frame.contentWindow) {
+                                // Authoritatively calculate the player role from the game/room host metadata to prevent timing/race conditions on page refresh
+                                const calculatedRole = (game.host === NetworkEngine.uid || roomId === 'lobby') ? 'P1' : 'P2';
+                                NetworkEngine.playerRole = calculatedRole;
+
+                                // 1. Set game events first so that when init-identity builds the state, it has them!
+                                frame.contentWindow.postMessage({
+                                    type: 'network-events',
+                                    events: events
+                                }, '*');
+
+                                // 2. Send identity and metadata
+                                frame.contentWindow.postMessage({
+                                    type: 'init-identity',
+                                    role: calculatedRole,
+                                    uid: NetworkEngine.uid,
+                                    username: username,
+                                    roomId: roomId,
+                                    game: game
+                                }, '*');
+
+                                // 3. Send update
+                                frame.contentWindow.postMessage({
+                                    type: 'network-update',
+                                    payload: game
+                                }, '*');
+                            }
+                        });
+                    } else {
+                        // Solo/Lobby mode: still initialize iframe identity cleanly so it knows its role
+                        frame.contentWindow.postMessage({
+                            type: 'init-identity',
+                            role: 'P1',
+                            uid: NetworkEngine.uid,
+                            username: username,
+                            roomId: 'lobby',
+                            game: null
+                        }, '*');
+                    }
+                }
+            }
+            if (e.data.type === 'toggle-turn-alternation') toggleFirstPlayer();
+
+            if (e.data.type === 'update-turn') {
+                const indicator = document.getElementById('global-turn-indicator');
+                const text = document.getElementById('turn-text');
+                if (indicator && text) {
+                    text.innerText = e.data.text;
+                    indicator.style.color = e.data.color || 'white';
+                    indicator.classList.toggle('visible', !!e.data.text);
+                }
+            }
+
+            if (e.data.type === 'update-win-banner') {
+                showWinBanner(e.data);
+            }
+        });
+
+        function showWinBanner(data) {
+            const banner = document.getElementById('global-win-banner');
+            if (!banner) return;
+
+            if (data.visible) {
+                const winner = data.winner;
+                const isSolo = !roomId || roomId === 'lobby';
+                let winnerName = '';
+                let winnerColor = '#ffffff';
+
+                if (isSolo) {
+                    winnerName = (winner === 'P1') ? (localStorage.getItem('username') || 'PLAYER') : 'AI';
+                    winnerColor = (winner === 'P1' ? userColor : getOpponentColor(userColor)) || '#ffffff';
+                } else {
+                    const rd = NetworkEngine.roomData;
+                    console.log(`[TEST] showWinBanner details: winner=${winner}, has_rd=${!!rd}, rdKeys=${Object.keys(rd || {})}`);
+                    if (rd) console.log(`[TEST] showWinBanner playerData:`, JSON.stringify(rd.playerData));
+                    if (rd && rd.playerData) {
+                        const hostUid = rd.host;
+                        const guestUid = Object.keys(rd.playerData).find(uid => uid !== hostUid);
+                        const winnerUid = (winner === 'P1') ? hostUid : guestUid;
+                        if (winnerUid && rd.playerData[winnerUid]) {
+                            winnerName = rd.playerData[winnerUid].name;
+                            winnerColor = rd.playerData[winnerUid].color;
+                        }
+                    }
+                    if (!winnerName) {
+                        winnerName = (winner === 'P1') ? 'HOSTP1' : 'GUESTP2';
+                    }
+                    if (!winnerColor || winnerColor === '#ffffff') {
+                        const myRole = NetworkEngine.playerRole || 'P1';
+                        if (winner === myRole) {
+                            winnerColor = userColor;
+                        } else {
+                            winnerColor = getOpponentColor(userColor);
+                        }
+                    }
+                }
+
+                banner.innerText = `${winnerName} WINS!`.toUpperCase();
+                banner.style.color = winnerColor;
+                banner.style.textShadow = `0 0 20px ${winnerColor}`;
+                banner.classList.add('visible');
+                banner.onclick = () => { banner.classList.remove('visible'); };
+            } else {
+                banner.classList.remove('visible');
+            }
+        }
+
+
+        if (!roomId) {
+            roomId = 'lobby';
+            const url = new URL(window.location);
+            url.searchParams.set('room', roomId);
+            window.history.replaceState({}, '', url);
+        }
+
+        // Join room (lobby or multiplayer) — block third+ player from entering
+        (async () => {
+            if (roomId && roomId !== 'lobby') {
+                const result = await NetworkEngine.tryJoinRoom(roomId);
+                if (!result.ok) {
+                    rejectRoomJoin(result);
+                    return;
+                }
+                const globalSnap = await NetworkEngine.db.ref(`games/${roomId}/global`).once('value');
+                const global = globalSnap.val();
+                if (global?.game) currentGame = global.game;
+                if (global?.mode) {
+                    gameMode = global.mode;
+                    localStorage.setItem(`${currentGame}_mode`, gameMode);
+                }
+            } else {
+                NetworkEngine.joinRoom(roomId);
+            }
+
+            if (roomId === 'lobby') {
+                NetworkEngine.playerRole = 'P1';
+                const banner = document.getElementById('global-win-banner');
+                if (banner) banner.classList.remove('visible');
+            }
+
+            window.onNetworkUpdate = () => updateUI();
+            startRoomHeartbeat();
+            setUserColor(userColor);
+            updateFrame();
+            updateUI();
+
+            if (localStorage.getItem('settingsOpen') === 'true') {
+                toggleSidebar(true);
+            }
+        })();
+    </script>
+
 </body>
+
 </html>

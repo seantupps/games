@@ -1,6 +1,6 @@
 # Firebase environments
 
-Three targets — pick how you load the hub (`shared/index.html`):
+Three targets — pick how you load the hub (root `index.html` on Pages: `/games/`):
 
 | Target | When | How |
 |--------|------|-----|
@@ -37,7 +37,7 @@ $env:FIVE_AUTO_START_STACK=1; npm run test:mp
 
 Open the app manually:
 
-`http://127.0.0.1:8000/shared/index.html?firebase=emulator`
+`http://127.0.0.1:8000/?firebase=emulator`
 
 Emulator UI (optional): `http://127.0.0.1:4000/`
 
@@ -51,7 +51,7 @@ Emulator UI (optional): `http://127.0.0.1:4000/`
 
 Test on two devices with:
 
-`https://your-dev-host/shared/index.html?firebase=dev&room=...`
+`https://your-dev-host/games/?firebase=dev&room=...`
 
 ## Production
 

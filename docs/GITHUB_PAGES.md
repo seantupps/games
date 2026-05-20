@@ -2,7 +2,11 @@
 
 Live site (after deploy): **https://seantupps.github.io/games/**
 
-Hub entry: **https://seantupps.github.io/games/shared/index.html**
+Example lobby: **https://seantupps.github.io/games/?room=lobby**
+
+Old `/games/shared/index.html` URLs redirect to the root hub.
+
+**Hub UI source:** edit `index.html` at the repo root (not `shared/index.html`). Assets remain in `shared/css` and `shared/js`.
 
 ## One-time setup
 
@@ -36,8 +40,8 @@ npx firebase deploy --only database --config firebase.prod.json --project games-
 
 | Where | URL | Firebase |
 |-------|-----|----------|
-| Local dev | `http://127.0.0.1:8000/shared/index.html?firebase=emulator` | Emulator |
-| GitHub Pages | `https://seantupps.github.io/games/shared/index.html` | Production (default) |
+| Local dev | `http://127.0.0.1:8000/?firebase=emulator` | Emulator |
+| GitHub Pages | `https://seantupps.github.io/games/` | Production (default) |
 | Dev testing | Same + `?firebase=dev` | Dev project (when configured) |
 
 Playwright tests use the emulator only — see [FIREBASE_ENVIRONMENTS.md](./FIREBASE_ENVIRONMENTS.md).

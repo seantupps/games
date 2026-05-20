@@ -4,7 +4,9 @@
     "emulators:build": "npm run build --prefix functions",
     "emulators": "npm run emulators:build && npx firebase emulators:start --only database --project games-fad3a",
     "test:stack": "node scripts/start-test-stack.js",
-    "test:mp": "node ptests/multiplayer/run_multiplayer.js"
+    "test:mp": "node ptests/multiplayer/run_multiplayer.js",
+    "test:mp:party": "node ptests/multiplayer/mp_party_limit.js",
+    "test:mp:game-switching": "node ptests/multiplayer/mp_game_switching.js"
   },
   "dependencies": {
     "firebase": "^12.13.0",

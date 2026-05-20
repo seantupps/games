@@ -18,6 +18,15 @@
                 }
             }
         },
+        "lobby": {
+            "chat": {
+                ".read": true,
+                "$msgId": {
+                    ".write": "newData.hasChildren(['content', 'uid', 'timestamp'])",
+                    ".validate": "newData.child('content').isString() && newData.child('uid').isString()"
+                }
+            }
+        },
         "games": {
             "$gameId": {
                 ".read": true,
@@ -39,7 +48,12 @@
                 },
                 "playerData": {
                     "$uid": {
-                        ".write": true
+                        ".write": "(!data.exists() && (!root.child('games').child($gameId).child('playerData').exists() || root.child('games').child($gameId).child('playerData').numChildren() < 2)) || data.exists()"
+                    }
+                },
+                "users": {
+                    "$uid": {
+                        ".write": "(!data.exists() && (!root.child('games').child($gameId).child('users').exists() || root.child('games').child($gameId).child('users').numChildren() < 2)) || data.exists()"
                     }
                 }
             }

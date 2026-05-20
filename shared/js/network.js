@@ -6,6 +6,74 @@ window.NetworkEngine = {
     uid: null,
     playerRole: 'P1', // Default
     isInitialized: false,
+    ROOM_MAX_PLAYERS: 2,
+
+    /** Active party size — playerData is authoritative; users/host only during bootstrap. */
+    countRoomMembers(room) {
+        if (!room) return 0;
+        const pd = room.playerData || {};
+        const fromPlayerData = Object.keys(pd).filter(
+            (id) => pd[id] != null && typeof pd[id] === 'object'
+        );
+        if (fromPlayerData.length > 0) return fromPlayerData.length;
+
+        const ids = new Set();
+        if (room.host) ids.add(room.host);
+        Object.keys(room.users || {}).forEach((id) => ids.add(id));
+        return ids.size;
+    },
+
+    isRoomMember(room, uid) {
+        if (!room || !uid) return false;
+        if (room.playerData && room.playerData[uid]) return true;
+        if (room.host === uid) return true;
+        if (room.users && room.users[uid]) return true;
+        return false;
+    },
+
+    async fetchRoomMemberCount(roomId) {
+        if (!roomId || roomId === 'lobby' || !this.init()) return 0;
+        const snap = await this.db.ref(`games/${roomId}`).once('value');
+        return this.countRoomMembers(snap.val());
+    },
+
+    async assertCanJoinRoom(roomId) {
+        if (!this.init()) return { ok: false, reason: 'Network not initialized' };
+        if (!roomId || roomId === 'lobby') return { ok: true };
+
+        const snap = await this.db.ref(`games/${roomId}`).once('value');
+        const room = snap.val();
+        if (!room) return { ok: true }; // New room — first writers create it
+
+        if (this.isRoomMember(room, this.uid)) return { ok: true };
+
+        if (this.countRoomMembers(room) >= this.ROOM_MAX_PLAYERS) {
+            return { ok: false, reason: 'This room is full (2 players max).' };
+        }
+        return { ok: true };
+    },
+
+    async tryJoinRoom(id) {
+        if (id === 'lobby') {
+            this.joinRoom(id);
+            return { ok: true };
+        }
+        const check = await this.assertCanJoinRoom(id);
+        if (!check.ok) return check;
+        this.joinRoom(id);
+        return { ok: true };
+    },
+
+    registerPlayerInRoom(name, color) {
+        if (!this.isInitialized || !this.roomId || this.roomId === 'lobby') return Promise.resolve(true);
+        return this.assertCanJoinRoom(this.roomId).then((check) => {
+            if (!check.ok) {
+                console.warn('[Network] Player registration blocked:', check.reason);
+                return false;
+            }
+            return this.db.ref(`games/${this.roomId}/playerData/${this.uid}`).update({ name, color }).then(() => true);
+        });
+    },
 
     init() {
         if (this.isInitialized) return true;
@@ -30,16 +98,20 @@ window.NetworkEngine = {
             console.log(`[Network] Firebase RTDB: ${this.firebaseTarget} (${this.config.databaseURL})`);
         }
 
-        // Identity
-        this.uid = localStorage.getItem('game_uid');
+        // Per-tab uid so multiple tabs on one machine show up as separate players in the lobby
+        this.uid = sessionStorage.getItem('game_uid');
         if (!this.uid) {
             this.uid = 'u' + Math.random().toString(36).substring(2, 9);
-            localStorage.setItem('game_uid', this.uid);
+            sessionStorage.setItem('game_uid', this.uid);
         }
 
         this.isInitialized = true;
         this.initPresence();
         return true;
+    },
+
+    getUid() {
+        return this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
     },
 
     initPresence() {
@@ -56,11 +128,13 @@ window.NetworkEngine = {
 
     updatePresence() {
         if (!this.isInitialized) return;
-        const name = localStorage.getItem('username') || 'Guest';
-        const color = localStorage.getItem('userColor') || '#3b82f6';
+        const name = sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest';
+        const color = sessionStorage.getItem('userColor') || localStorage.getItem('userColor') || '#3b82f6';
         this.db.ref(`presence/${this.uid}`).set({
             name, color,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
+        }).catch((err) => {
+            console.warn('[Network] Presence update failed:', err.message);
         });
     },
 
@@ -92,9 +166,14 @@ window.NetworkEngine = {
         inviteRef.on('value', (snap) => {
             const data = snap.val();
             if (data && data.status === 'accepted') {
-                this.joinRoom(data.roomId);
-                if (onAccept) onAccept(data.roomId);
-                inviteRef.remove(); // Cleanup
+                this.tryJoinRoom(data.roomId).then((result) => {
+                    if (!result.ok) {
+                        if (window.onRoomJoinRejected) window.onRoomJoinRejected(result);
+                        return;
+                    }
+                    if (onAccept) onAccept(data.roomId);
+                    inviteRef.remove();
+                });
             }
         });
     },
@@ -112,18 +191,25 @@ window.NetworkEngine = {
     },
 
     acceptInvite(senderUid, roomId) {
-        if (!this.init()) return;
-        // Host is the sender, Guest is the receiver
-        // We now use update for atomic setup
-        const updates = {};
-        updates[`games/${roomId}/host`] = senderUid;
-        updates[`games/${roomId}/status`] = 'waiting';
-        updates[`games/${roomId}/users/${this.uid}`] = firebase.database.ServerValue.TIMESTAMP;
-        updates[`invites/${this.uid}/${senderUid}/status`] = 'accepted';
-        updates[`invites/${this.uid}/${senderUid}/roomId`] = roomId;
+        if (!this.init()) return Promise.resolve({ ok: false, reason: 'Network not initialized' });
+        return this.assertCanJoinRoom(roomId).then((check) => {
+            if (!check.ok) {
+                console.warn('[Network] Invite accept blocked:', check.reason);
+                if (window.onRoomJoinRejected) window.onRoomJoinRejected(check);
+                return check;
+            }
+            const updates = {};
+            updates[`games/${roomId}/host`] = senderUid;
+            updates[`games/${roomId}/status`] = 'waiting';
+            updates[`games/${roomId}/users/${this.uid}`] = firebase.database.ServerValue.TIMESTAMP;
+            updates[`invites/${this.uid}/${senderUid}/status`] = 'accepted';
+            updates[`invites/${this.uid}/${senderUid}/roomId`] = roomId;
 
-        this.db.ref().update(updates);
-        this.joinRoom(roomId);
+            return this.db.ref().update(updates).then(() => {
+                this.joinRoom(roomId);
+                return { ok: true };
+            });
+        });
     },
 
     declineInvite(senderUid) {
@@ -155,6 +241,7 @@ window.NetworkEngine = {
         
         // Clear all previous room-specific subscriptions cleanly
         this._clearRoomSubscriptions();
+        this._clearChatListener();
 
         if (this.roomId) {
             try {
@@ -167,6 +254,7 @@ window.NetworkEngine = {
         // Lobby/Solo Mode: 100% local, do not monitor Firebase room or events
         if (id === 'lobby') {
             this.playerRole = 'P1';
+            this.roomData = null;
             console.log(`Network: Solo/Lobby mode active (Local play only)`);
             return;
         }
@@ -261,25 +349,42 @@ window.NetworkEngine = {
         this._trackRoomSubscription(pRef, 'value', pCallback);
     },
 
-    sendChatMessage(msg) {
-        if (!this.isInitialized || !this.roomId) return;
-        const chatRef = this.db.ref(`games/${this.roomId}/chat`).push();
+    getChatPath(forRoomId) {
+        const id = forRoomId || this.roomId;
+        if (!id || id === 'lobby') return 'lobby/chat';
+        return `games/${id}/chat`;
+    },
+
+    _clearChatListener() {
+        if (this._chatSubscription) {
+            try {
+                this._chatSubscription.ref.off(this._chatSubscription.eventType, this._chatSubscription.callback);
+            } catch (e) {}
+            this._chatSubscription = null;
+        }
+    },
+
+    sendChatMessage(msg, forRoomId) {
+        if (!this.init()) return;
+        const chatRef = this.db.ref(this.getChatPath(forRoomId)).push();
         chatRef.set({
-            sender: localStorage.getItem('username'),
-            color: localStorage.getItem('userColor') || '#3b82f6',
+            sender: sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest',
+            color: sessionStorage.getItem('userColor') || localStorage.getItem('userColor') || '#3b82f6',
             uid: this.uid,
             content: msg,
             timestamp: firebase.database.ServerValue.TIMESTAMP
         });
     },
 
-    listenForChat(callback) {
-        if (!this.isInitialized || !this.roomId) return;
-        const chatRef = this.db.ref(`games/${this.roomId}/chat`).limitToLast(50);
+    listenForChat(callback, forRoomId) {
+        if (!this.init()) return;
+        this._clearChatListener();
+        const chatRef = this.db.ref(this.getChatPath(forRoomId)).limitToLast(50);
         const chatCallback = (snap) => {
             callback(snap.val());
         };
-        this._trackRoomSubscription(chatRef, 'child_added', chatCallback);
+        chatRef.on('child_added', chatCallback);
+        this._chatSubscription = { ref: chatRef, eventType: 'child_added', callback: chatCallback };
     },
 
     findUserByName(name, callback) {
