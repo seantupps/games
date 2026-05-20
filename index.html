@@ -761,6 +761,7 @@
 
         function startRoomHeartbeat() {
             // Always bind chat to the page's room id (guest invite flow used to listen on lobby/chat)
+            ChatEngine.clear();
             NetworkEngine.listenForChat(appendChatMessage, roomId || 'lobby');
 
             if (!roomId || roomId === 'lobby') {
@@ -902,10 +903,16 @@
             container: document.getElementById('chat-container'),
             messages: document.getElementById('chat-messages'),
 
+            clear() {
+                if (this.messages) this.messages.innerHTML = '';
+                this._fadeTimers = [];
+            },
+
             init() {
                 this.container = document.getElementById('chat-container');
                 this.messages = document.getElementById('chat-messages');
                 this.input = document.getElementById('chat-input');
+                this._fadeTimers = [];
 
                 this.input.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') {
@@ -962,53 +969,58 @@
             },
 
 
+            _escapeText(str) {
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+            },
+
             append(data, isNetwork = false) {
                 if (!data) return;
+                const content = (data.content || (typeof data === 'string' ? data : '')).trim();
+                if (!content && data.sender !== 'System') return;
 
                 // Deduplication: Check if we already appended this recently (optimistically)
                 if (isNetwork && data.uid === NetworkEngine.uid) {
                     const existing = Array.from(this.messages.children).some(el =>
-                        el.dataset.content === data.content &&
-                        (Date.now() - parseInt(el.dataset.time) < 5000)
+                        el.dataset.content === content &&
+                        (Date.now() - parseInt(el.dataset.time, 10) < 5000)
                     );
                     if (existing) return;
                 }
 
                 const div = document.createElement('div');
                 div.className = `chat-msg ${!data.sender || data.sender === 'System' ? 'system' : ''}`;
-                div.dataset.content = data.content || '';
-                div.dataset.time = Date.now();
+                div.dataset.content = content;
+                div.dataset.time = String(Date.now());
 
                 const sender = data.sender || 'System';
-                const content = data.content || (typeof data === 'string' ? data : '');
                 const color = data.color || (data.sender === 'System' ? '#ffffff' : 'var(--theme-color)');
+                const safeSender = this._escapeText(sender);
+                const safeContent = this._escapeText(content);
 
                 if (sender === 'System') {
-                    div.innerHTML = `<span class="content" style="color: #ffffff !important; font-weight: 500; font-style: italic; opacity: 0.8;">${content}</span>`;
+                    div.innerHTML = `<span class="content" style="color: #ffffff !important; font-weight: 500; font-style: italic; opacity: 0.9;">${safeContent}</span>`;
                 } else {
-                    div.innerHTML = `<span class="sender" style="color: ${color} !important; font-weight: 800;">${sender}:</span> <span class="content" style="color: #ffffff !important;">${content}</span>`;
-                }
-
-                const isHistory = isNetwork && data.timestamp && (Date.now() - data.timestamp > 8000);
-                if (isHistory && !this.container.classList.contains('active')) {
-                    div.classList.add('faded');
+                    div.innerHTML = `<span class="sender" style="color: ${color} !important; font-weight: 800;">${safeSender}:</span> <span class="content" style="color: #ffffff !important;">${safeContent}</span>`;
                 }
 
                 this.messages.appendChild(div);
 
-                // Enforce 7-message limit
                 while (this.messages.children.length > 7) {
-                    this.messages.removeChild(this.messages.firstChild);
+                    const removed = this.messages.firstChild;
+                    if (removed?._fadeTimer) clearTimeout(removed._fadeTimer);
+                    this.messages.removeChild(removed);
                 }
 
                 this.messages.scrollTop = this.messages.scrollHeight;
 
-                // Fading logic for non-history or active chat
-                if (!isHistory || this.container.classList.contains('active')) {
-                    setTimeout(() => {
+                div._fadeTimer = setTimeout(() => {
+                    if (!this.container.classList.contains('active')) {
                         div.classList.add('faded');
-                    }, 8000);
-                }
+                    }
+                }, 8000);
             },
 
 

@@ -453,12 +453,23 @@ window.NetworkEngine = {
         });
     },
 
+    _normalizeChatTimestamp(ts) {
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
+        return ts < 1e12 ? ts * 1000 : ts;
+    },
+
     listenForChat(callback, forRoomId) {
         if (!this.init()) return;
         this._clearChatListener();
         const chatRef = this.db.ref(this.getChatPath(forRoomId)).limitToLast(50);
+        const attachedAt = Date.now();
         const chatCallback = (snap) => {
-            callback(snap.val());
+            const data = snap.val();
+            if (!data) return;
+            const ts = this._normalizeChatTimestamp(data.timestamp);
+            // child_added replays the whole tail — skip stale rows (they were invisible "blank" slots)
+            if (ts != null && ts < attachedAt - 1500) return;
+            callback({ ...data, timestamp: ts != null ? ts : Date.now() });
         };
         chatRef.on('child_added', chatCallback);
         this._chatSubscription = { ref: chatRef, eventType: 'child_added', callback: chatCallback };
