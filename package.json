@@ -10,7 +10,8 @@
     "test:prod": "node ptests/production/run_prod.js",
     "test:prod:lobby": "node ptests/production/lobby.js",
     "test:prod:switch": "node ptests/production/game_switching.js",
-    "test:prod:piles": "node ptests/production/piles_sim.js"
+    "test:prod:piles": "node ptests/production/piles_sim.js",
+    "test:prod:chat": "node ptests/production/chat.js"
   },
   "dependencies": {
     "firebase": "^12.13.0",

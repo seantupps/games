@@ -673,14 +673,28 @@
         window.onRoomJoinRejected = rejectRoomJoin;
 
         function sendInvite(uid, name) {
-            const launch = () => {
-                NetworkEngine.sendInvite(uid, { game: currentGame, mode: gameMode }, (newRoomId) => {
+            const launch = async () => {
+                let partyRoomId = roomId;
+                if (!partyRoomId || partyRoomId === 'lobby') {
+                    partyRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+                    roomId = partyRoomId;
+                    const prepared = await NetworkEngine.prepareInviteRoom(partyRoomId, currentGame, gameMode);
+                    if (!prepared) return;
+                    const joinResult = await NetworkEngine.tryJoinRoom(partyRoomId);
+                    if (!joinResult.ok) {
+                        rejectRoomJoin(joinResult);
+                        return;
+                    }
                     const url = new URL(window.location);
-                    url.searchParams.set('room', newRoomId);
+                    url.searchParams.set('room', partyRoomId);
                     url.searchParams.delete('role');
                     window.history.pushState({}, '', url);
+                    updateFrame();
+                    startRoomHeartbeat();
+                }
 
-                    roomId = newRoomId;
+                NetworkEngine.sendInvite(uid, { game: currentGame, mode: gameMode, roomId: partyRoomId }, (acceptedRoomId) => {
+                    roomId = acceptedRoomId;
                     updateFrame();
                     updateUI();
                     startRoomHeartbeat();
@@ -839,7 +853,11 @@
             document.getElementById('invite-toast').classList.add('show');
 
             document.getElementById('btn-accept-invite').onclick = async () => {
-                const newRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+                const newRoomId = currentInvite?.roomId;
+                if (!newRoomId) {
+                    hideInviteToast();
+                    return;
+                }
 
                 roomId = newRoomId;
                 currentGame = invite.game;
@@ -904,10 +922,13 @@
                             }
                             const handled = this.handleCommand(text);
                             if (!handled && !isCommand) {
-                                NetworkEngine.sendChatMessage(text, roomId);
+                                NetworkEngine.sendChatMessage(text, roomId || NetworkEngine.roomId);
                             } else if (isCommand && !handled) {
                                 this.append({ sender: 'System', content: 'Unknown command. Type /help for a list.' });
                             }
+                            this.input.value = '';
+                            requestAnimationFrame(() => this.toggle(false));
+                            return;
                         }
                         this.toggle(false);
                     }
@@ -968,7 +989,7 @@
                     div.innerHTML = `<span class="sender" style="color: ${color} !important; font-weight: 800;">${sender}:</span> <span class="content" style="color: #ffffff !important;">${content}</span>`;
                 }
 
-                const isHistory = data.timestamp && (Date.now() - data.timestamp > 8000);
+                const isHistory = isNetwork && data.timestamp && (Date.now() - data.timestamp > 8000);
                 if (isHistory && !this.container.classList.contains('active')) {
                     div.classList.add('faded');
                 }

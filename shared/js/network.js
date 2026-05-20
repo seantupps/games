@@ -202,20 +202,42 @@ window.NetworkEngine = {
         });
     },
 
+    prepareInviteRoom(roomId, game, mode) {
+        if (!this.init()) return Promise.resolve(false);
+        const name = sessionStorage.getItem('username')
+            || localStorage.getItem('username')
+            || 'Guest';
+        const color = sessionStorage.getItem('userColor')
+            || localStorage.getItem('userColor')
+            || '#3b82f6';
+        return this.db.ref(`games/${roomId}`).update({
+            host: this.uid,
+            status: 'waiting',
+            global: { game, mode },
+            [`users/${this.uid}`]: firebase.database.ServerValue.TIMESTAMP,
+            [`playerData/${this.uid}`]: { name, color }
+        }).then(() => true).catch((err) => {
+            console.error('[Network] prepareInviteRoom failed', err);
+            return false;
+        });
+    },
+
     sendInvite(targetUid, gameData, onAccept) {
         if (!this.init()) return;
         const inviteRef = this.db.ref(`invites/${targetUid}/${this.uid}`);
         const fromName = sessionStorage.getItem('username')
             || localStorage.getItem('username')
             || 'Guest';
-        inviteRef.set({
+        const payload = {
             fromName,
             fromUid: this.uid,
             game: gameData.game,
             mode: gameData.mode,
             status: 'pending',
             timestamp: firebase.database.ServerValue.TIMESTAMP
-        });
+        };
+        if (gameData.roomId) payload.roomId = gameData.roomId;
+        inviteRef.set(payload);
 
         // Listen for internal acceptance
         inviteRef.on('value', (snap) => {
