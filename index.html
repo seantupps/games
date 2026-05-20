@@ -904,15 +904,40 @@
             messages: document.getElementById('chat-messages'),
 
             clear() {
-                if (this.messages) this.messages.innerHTML = '';
-                this._fadeTimers = [];
+                if (this.messages) {
+                    Array.from(this.messages.children).forEach((el) => {
+                        if (el._fadeTimer) clearTimeout(el._fadeTimer);
+                    });
+                    this.messages.innerHTML = '';
+                }
+            },
+
+            _scheduleFade(el) {
+                if (el._fadeTimer) clearTimeout(el._fadeTimer);
+                const age = Date.now() - parseInt(el.dataset.time, 10);
+                const delay = Math.max(0, 8000 - age);
+                el._fadeTimer = setTimeout(() => {
+                    if (!this.container.classList.contains('active')) {
+                        el.classList.add('faded');
+                    }
+                }, delay);
+            },
+
+            _refreshFadeState() {
+                Array.from(this.messages.children).forEach((el) => {
+                    if (this.container.classList.contains('active')) {
+                        el.classList.remove('faded');
+                        if (el._fadeTimer) clearTimeout(el._fadeTimer);
+                    } else {
+                        this._scheduleFade(el);
+                    }
+                });
             },
 
             init() {
                 this.container = document.getElementById('chat-container');
                 this.messages = document.getElementById('chat-messages');
                 this.input = document.getElementById('chat-input');
-                this._fadeTimers = [];
 
                 this.input.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') {
@@ -966,6 +991,8 @@
                     this.container.offsetHeight; // Force reflow
                     this.container.classList.remove('no-transition');
                 }
+
+                this._refreshFadeState();
             },
 
 
@@ -1016,11 +1043,7 @@
 
                 this.messages.scrollTop = this.messages.scrollHeight;
 
-                div._fadeTimer = setTimeout(() => {
-                    if (!this.container.classList.contains('active')) {
-                        div.classList.add('faded');
-                    }
-                }, 8000);
+                this._scheduleFade(div);
             },
 
 
