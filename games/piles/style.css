@@ -1,11 +1,54 @@
+:root {
+    --blue-color: #3b82f6;
+    --red-color: #ef4444;
+    --green-color: #22c55e;
+    --yellow-color: #eab308;
+    --theme-color: #3b82f6;
+    --opponent-color: #ef4444;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    /* Keep technically scrollable to preserve wheel events, but hide bars */
+    overflow: auto;
+    -ms-overflow-style: none;
+    /* IE/Edge */
+    scrollbar-width: none;
+    /* Firefox */
+    -webkit-font-smoothing: antialiased;
+}
+
+
+#center-dot {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    background-color: white;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10000;
+    pointer-events: none;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    display: none;
+    /* Controlled by devMode */
+}
+
+body::-webkit-scrollbar {
+    display: none;
+    /* Chrome/Safari */
+}
+
 #game-container {
-    display: flex;
-    gap: 100px;
-    align-items: center;
-    justify-content: center;
     width: 100%;
     height: 100%;
     position: relative;
+    background: transparent;
 }
 
 .pile {
@@ -19,13 +62,17 @@
 }
 
 .piece {
-    width: 60px;
-    height: 60px;
+    width: calc(60px * var(--board-scale, 1));
+    height: calc(60px * var(--board-scale, 1));
     border-radius: 50%;
     cursor: grab;
     transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     position: absolute;
+    transform: translate(-50%, -50%);
+    transform-origin: center center;
+    box-sizing: border-box;
+    /* Standardize box model */
 }
 
 .piece:active {
@@ -33,17 +80,26 @@
 }
 
 .piece:hover {
-    transform: scale(1.1);
+    transform: translate(-50%, -50%) scale(1.1);
 }
 
 .piece.selected {
-    transform: scale(1.15);
-    box-shadow: var(--selection-glow);
-    border: 3px solid white;
+    transform: translate(-50%, -50%) scale(1.15);
+    /* Standardized 3px edge shadow + glows for parity */
+    box-shadow: 0 0 0 3px var(--theme-color), 0 0 10px var(--theme-color), 0 0 30px var(--theme-color);
+    z-index: 100;
+}
+
+.piece.selected-opponent {
+    transform: translate(-50%, -50%) scale(1.15);
+    /* Standardized 3px edge shadow + glows for parity */
+    box-shadow: 0 0 0 3px var(--opponent-color), 0 0 10px var(--opponent-color), 0 0 30px var(--opponent-color);
+    z-index: 90;
 }
 
 .piece.B {
     background-color: var(--blue-color);
+    /* Static Blue Pile */
 }
 
 .piece.R {

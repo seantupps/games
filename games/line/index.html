@@ -2,6 +2,9 @@
 <html>
 
 <head>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Line - The Game</title>
     <link rel="stylesheet" href="../../shared/css/core.css">
     <link rel="stylesheet" href="style.css">
@@ -9,12 +12,13 @@
 
 <body>
     <div id="game-container">
-        <svg id="line-canvas"></svg>
+        <svg id="line-canvas" viewBox="0 0 800 800"></svg>
         <div id="nodes-container"></div>
     </div>
 
-    <script src="../../shared/js/ui-engine.js?v=2"></script>
-    <script src="game-line.js?v=2"></script>
+    <script src="../../shared/js/engine.js?v=14"></script>
+    <script src="../../shared/js/logic.js"></script>
+    <script src="line.js?v=5"></script>
 </body>
 
 </html>

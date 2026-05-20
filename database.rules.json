@@ -1,0 +1,60 @@
+{
+    "rules": {
+        "presence": {
+            "$uid": {
+                ".read": "true",
+                ".write": "$uid === auth.uid",
+                "lastSeen": {
+                    ".validate": "newData.isNumber()"
+                }
+            }
+        },
+        "invites": {
+            "$uid": {
+                ".read": "$uid === auth.uid",
+                "$senderUid": {
+                    ".write": "$senderUid === auth.uid || $uid === auth.uid",
+                    ".validate": "newData.hasChildren(['game', 'mode', 'status'])"
+                }
+            }
+        },
+        "games": {
+            "$gameId": {
+                ".read": "true",
+                ".write": "data.child('host').val() === auth.uid || (!data.exists() && newData.child('host').val() === auth.uid)",
+                "global": {
+                    ".write": "root.child('games/' + $gameId + '/host').val() === auth.uid",
+                    "pileColors": {
+                        ".write": "true"
+                    },
+                    "piecePositions": {
+                        ".write": "true"
+                    }
+                },
+                "chat": {
+                    ".read": "true",
+                    "$chatId": {
+                        ".write": "auth != null",
+                        ".validate": "newData.hasChildren(['content', 'uid'])"
+                    }
+                },
+                "playerData": {
+                    "$uid": {
+                        ".write": "$uid === auth.uid"
+                    }
+                }
+            }
+        },
+        "gameData": {
+            "$gameId": {
+                ".read": "true",
+                "events": {
+                    "$eventId": {
+                        ".write": "auth != null && !data.exists() && root.child('games/' + $gameId + '/status').val() != 'finished'",
+                        ".validate": "newData.hasChildren(['type', 'payload', 'uid', 'timestamp']) && (newData.child('type').val() != 'move' || root.child('games/' + $gameId + '/global/turn').val() == (newData.child('uid').val() == root.child('games/' + $gameId + '/host').val() ? 'P1' : 'P2'))"
+                    }
+                }
+            }
+        }
+    }
+}

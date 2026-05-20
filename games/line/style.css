@@ -1,3 +1,8 @@
+:root {
+    --theme-color: #3b82f6;
+    --opponent-color: #ef4444;
+}
+
 #game-container {
     width: 800px;
     height: 800px;
@@ -7,30 +12,54 @@
     align-items: center;
     background: transparent;
     border: none;
+    /* Glow Toggle: Change --glow-on to 1 to re-enable all effects */
+    --glow-on: 0;
 }
 
 #nodes-container {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    grid-template-rows: repeat(4, 1fr);
-    gap: 120px;
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
     z-index: 2;
+    pointer-events: none;
 }
 
 .node {
-    width: 24px;
-    height: 24px;
+    width: 16px;
+    height: 16px;
     background-color: white;
     border-radius: 50%;
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
+    position: absolute;
+    /* Changed to absolute for precision */
+    box-shadow: 0 0 calc(8px * var(--glow-on)) rgba(255, 255, 255, calc(0.1 * var(--glow-on)));
+    box-sizing: border-box;
+    border: none;
+    pointer-events: auto;
+    /* Enable events on node itself */
+    transform: translate(-50%, -50%);
+    /* Center on its position */
+}
+
+/* Expanded Hitbox */
+.node::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 32px;
+    height: 32px;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    border-radius: 50%;
 }
 
 .node:hover {
-    transform: scale(1.5);
-    box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+    transform: translate(-50%, -50%) scale(1.4);
+    box-shadow: 0 0 calc(12px * var(--glow-on)) rgba(255, 255, 255, calc(0.3 * var(--glow-on)));
 }
 
 body {
@@ -38,7 +67,12 @@ body {
     margin: 0;
     overflow: hidden;
     user-select: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
 }
+
 
 .node.used {
     background-color: rgba(255, 255, 255, 0);
@@ -47,16 +81,17 @@ body {
 }
 
 .node.selected {
-    background-color: var(--blue-color);
-    transform: scale(1.6);
-    box-shadow: 0 0 25px var(--blue-color);
+    background-color: var(--theme-color);
+    transform: translate(-50%, -50%) scale(1.5);
+    box-shadow: 0 0 calc(20px * var(--glow-on)) var(--theme-color);
     z-index: 10;
 }
 
 .node.endpoint {
     background-color: #ffffff;
-    box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
-    transform: scale(1.1);
+    box-shadow: 0 0 calc(12px * var(--glow-on)) var(--theme-color);
+    transform: translate(-50%, -50%) scale(1.2);
+    border: none;
 }
 
 #line-canvas {
@@ -65,22 +100,27 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    pointer-events: none;
     z-index: 1;
+    pointer-events: none;
 }
 
 #line-canvas line {
-    stroke-width: 4;
+    stroke-width: 5;
     stroke-linecap: round;
     opacity: 0.8;
 }
 
-#line-canvas line.p1 {
-    stroke: var(--blue-color);
+#line-canvas line.p1,
+#line-canvas line.mine {
+    stroke: var(--theme-color);
+    stroke-width: 5;
+    filter: drop-shadow(0 0 calc(5px * var(--glow-on)) var(--theme-color));
 }
 
-#line-canvas line.p2 {
-    stroke: var(--green-color);
+#line-canvas line.p2,
+#line-canvas line.opponent {
+    stroke: var(--opponent-color);
+    stroke-width: 5;
 }
 
 #line-canvas line.preview {
@@ -108,4 +148,5 @@ body {
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(255, 255, 255, 0.6);
+    pointer-events: none;
 }

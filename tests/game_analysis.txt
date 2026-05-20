@@ -1,1 +1,6 @@
-Total possible unique game sequences: 7853820
+classic
+7853820 games
+180 states
+
+freestyle
+4830183 states

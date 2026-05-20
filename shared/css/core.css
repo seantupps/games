@@ -1,26 +1,32 @@
 :root {
     --bg-color: #0a0a0a;
     --blue-color: #3b82f6;
-    --red-color: #ef4444;
-    --green-color: #22c55e;
-    --yellow-color: #eab308;
+    --red-color: #ff0033;
+    --green-color: #00ff66;
+    --yellow-color: #ffff00;
     --selection-glow: 0 0 15px rgba(255, 255, 255, 0.8);
     --border-color: rgba(255, 255, 255, 0.1);
+    --theme-color: #3b82f6;
+    --opponent-color: #ff3333;
+    /* Default AI red */
+    --theme-color-rgb: 59, 130, 246;
+    --game-zoom: 1;
 }
+
 
 body {
     margin: 0;
     padding: 0;
-    background-color: var(--bg-color);
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    background: transparent;
     height: 100vh;
     width: 100vw;
     overflow: hidden;
     font-family: 'Inter', sans-serif;
     color: white;
+    user-select: none;
+    -webkit-user-select: none;
 }
+
 
 /* Animations */
 @keyframes flash-red {
@@ -43,21 +49,256 @@ body {
 
 /* Overlays */
 .win-overlay {
-    position: absolute;
-    top: 80px;
+    position: fixed;
+    top: 8%;
+    /* Moved higher up from 15% */
     left: 50%;
-    transform: translate(-50%, 0);
-    font-size: 3.5rem;
-    font-weight: 800;
+    transform: translate(-50%, -20%) scale(0.8);
+
+    transform-origin: center center;
+    font-size: 5rem;
+    /* Larger win message */
+    font-weight: 900;
     letter-spacing: -0.05em;
     pointer-events: none;
     opacity: 0;
-    transition: all 1s cubic-bezier(0.4, 0, 0.2, 1);
-    text-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
-    z-index: 1000;
+    transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 20000;
+    text-align: center;
+    width: 100%;
 }
 
 .win-overlay.show {
     opacity: 1;
-    transform: translate(-50%, 20px) scale(1.1);
+    transform: translate(-50%, 0) scale(1);
+}
+
+
+/* Scoreboard - Back to TOP LEFT - SCALED DOWN SLIGHTLY */
+.scoreboard {
+    position: fixed;
+    top: 32px;
+    left: 32px;
+    padding: 12px 20px;
+    background: transparent;
+    backdrop-filter: none;
+    border: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.2rem;
+    /* Reduced from 2.8rem to prevent clipping */
+    font-weight: 900;
+    color: white;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9);
+    letter-spacing: -0.02em;
+    pointer-events: none;
+}
+
+
+
+
+.score-user {
+    color: var(--theme-color);
+}
+
+.score-divider {
+    margin: 0 8px;
+    opacity: 0.5;
+}
+
+.score-ai {
+    color: var(--opponent-color, #ef4444);
+}
+
+.sb-turn {
+    position: fixed;
+    top: 60px;
+    left: 28px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    pointer-events: none;
+    z-index: 10000;
+    opacity: 0.8;
+}
+
+/* Game Scaling Container */
+#game-container {
+    width: 100%;
+    height: 100%;
+    position: relative !important;
+}
+
+
+#chat-container {
+    position: fixed;
+    bottom: 32px;
+    left: 32px;
+    width: 600px;
+    /* Adjust this to change max width of chat */
+    display: flex;
+    flex-direction: column;
+    z-index: 10001;
+    pointer-events: none;
+}
+
+#chat-container.active {
+    pointer-events: auto;
+}
+
+#chat-messages {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 2px;
+    /* ADJUST THIS: Space between messages */
+    padding: 10px;
+}
+
+.chat-msg {
+    font-size: 1.8rem;
+    line-height: 1.2;
+    background: transparent !important;
+    padding: 4px 0;
+    width: fit-content;
+    max-width: 100%;
+    color: white;
+    text-shadow: 2px 2px 3px rgba(0, 0, 0, 1);
+}
+
+.chat-msg.faded {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 2s ease-in-out, visibility 2s;
+}
+
+#chat-container.active .chat-msg {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+}
+
+#chat-container.no-transition .chat-msg {
+    transition: none !important;
+}
+
+.chat-msg .sender {
+    font-weight: 800;
+    margin-right: 6px;
+    color: var(--theme-color);
+}
+
+.chat-msg .content {
+    color: white;
+}
+
+#chat-input-wrapper {
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.6);
+    display: none;
+    align-items: center;
+    border-radius: 4px;
+}
+
+#chat-container.active #chat-input-wrapper {
+    display: flex;
+}
+
+#chat-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: white;
+    outline: none;
+    font-family: inherit;
+}
+
+#invite-toast {
+    position: fixed;
+    top: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-100px);
+    background: rgba(15, 15, 15, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 16px 24px;
+    border-radius: 16px;
+    z-index: 20000;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    transition: transform 0.6s cubic-bezier(0.19, 1, 0.22, 1), opacity 0.4s;
+    opacity: 0;
+    pointer-events: none;
+    min-width: 320px;
+}
+
+#invite-toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.toast-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toast-icon {
+    font-size: 1.5rem;
+}
+
+.toast-text {
+    font-size: 0.9rem;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.4;
+}
+
+#toast-sender {
+    color: var(--theme-color);
+    font-weight: 700;
+}
+
+#toast-game-name {
+    color: white;
+    font-weight: 700;
+}
+
+.toast-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.toast-actions button {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+#btn-accept-invite {
+    background: var(--theme-color);
+    color: white;
+}
+
+#btn-accept-invite:hover {
+    filter: brightness(1.2);
+    transform: translateY(-1px);
+}
+
+.toast-actions button:not(#btn-accept-invite) {
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.toast-actions button:not(#btn-accept-invite):hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
 }

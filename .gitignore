@@ -1,6 +1,30 @@
+# Dependencies
 node_modules/
+functions/node_modules/
+
+# IDE / local
 .vscode/
-__pycache__/
+tmp/
 notes.txt
+instructions.md
 .gemini/
+
+# Python (legacy analysis scripts)
+__pycache__/
+tests/
+backups/
+
+# Local dev & Playwright (never publish)
+ptests/
+scripts/
+
+# Firebase emulator / CLI
+.firebase/
+.emulator-data/
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log
 *.log
+
+# Functions build output (rebuilt before deploy)
+functions/lib/

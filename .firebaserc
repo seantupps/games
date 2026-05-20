@@ -1,0 +1,7 @@
+{
+    "projects": {
+        "default": "games-fad3a",
+        "production": "games-fad3a",
+        "dev": "games-fad3a"
+    }
+}

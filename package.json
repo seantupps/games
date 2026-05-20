@@ -1,5 +1,16 @@
 {
+  "scripts": {
+    "serve": "npx http-server . -p 8000 -c-1",
+    "emulators:build": "npm run build --prefix functions",
+    "emulators": "npm run emulators:build && npx firebase emulators:start --only database --project games-fad3a",
+    "test:stack": "node scripts/start-test-stack.js",
+    "test:mp": "node ptests/multiplayer/run_multiplayer.js"
+  },
   "dependencies": {
-    "firebase": "^12.13.0"
+    "firebase": "^12.13.0",
+    "playwright": "^1.60.0"
+  },
+  "devDependencies": {
+    "firebase-tools": "^13.35.0"
   }
 }
