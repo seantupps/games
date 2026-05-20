@@ -205,8 +205,11 @@ window.NetworkEngine = {
     sendInvite(targetUid, gameData, onAccept) {
         if (!this.init()) return;
         const inviteRef = this.db.ref(`invites/${targetUid}/${this.uid}`);
+        const fromName = sessionStorage.getItem('username')
+            || localStorage.getItem('username')
+            || 'Guest';
         inviteRef.set({
-            fromName: localStorage.getItem('username'),
+            fromName,
             fromUid: this.uid,
             game: gameData.game,
             mode: gameData.mode,

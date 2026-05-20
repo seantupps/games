@@ -61,6 +61,7 @@
         "gameData": {
             "$gameId": {
                 ".read": true,
+                ".write": true,
                 "events": {
                     "$eventId": {
                         ".write": "!data.exists()",

@@ -6,7 +6,11 @@
     "test:stack": "node scripts/start-test-stack.js",
     "test:mp": "node ptests/multiplayer/run_multiplayer.js",
     "test:mp:party": "node ptests/multiplayer/mp_party_limit.js",
-    "test:mp:game-switching": "node ptests/multiplayer/mp_game_switching.js"
+    "test:mp:game-switching": "node ptests/multiplayer/mp_game_switching.js",
+    "test:prod": "node ptests/production/run_prod.js",
+    "test:prod:lobby": "node ptests/production/lobby.js",
+    "test:prod:switch": "node ptests/production/game_switching.js",
+    "test:prod:piles": "node ptests/production/piles_sim.js"
   },
   "dependencies": {
     "firebase": "^12.13.0",
