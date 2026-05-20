@@ -7,13 +7,13 @@ window.NetworkEngine = {
     playerRole: 'P1', // Default
     isInitialized: false,
     ROOM_MAX_PLAYERS: 2,
-    /** Drop lobby entries not refreshed within this window (ms). */
-    PRESENCE_STALE_MS: 90000,
     PRESENCE_HEARTBEAT_MS: 30000,
+    /** Only delete abandoned rows (never used to hide the lobby list). */
+    PRESENCE_PRUNE_MS: 600000,
 
-    isPresenceActive(entry, now = Date.now()) {
+    isPresenceStale(entry, now = Date.now()) {
         if (!entry || typeof entry.lastSeen !== 'number') return false;
-        return now - entry.lastSeen <= this.PRESENCE_STALE_MS;
+        return now - entry.lastSeen > this.PRESENCE_PRUNE_MS;
     },
 
     /** Active party size — playerData is authoritative; users/host only during bootstrap. */
@@ -127,9 +127,14 @@ window.NetworkEngine = {
         const userRef = this.db.ref(`presence/${this.uid}`);
 
         if (this._presenceHeartbeat) clearInterval(this._presenceHeartbeat);
-        if (this._presencePruneInterval) clearInterval(this._presencePruneInterval);
         this._presenceHeartbeat = setInterval(() => this.updatePresence(), this.PRESENCE_HEARTBEAT_MS);
-        this._presencePruneInterval = setInterval(() => this.pruneStalePresence(), 60000);
+
+        if (!this._presenceVisibilityBound && typeof document !== 'undefined') {
+            this._presenceVisibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') this.updatePresence();
+            });
+        }
 
         presenceRef.on('value', (snap) => {
             if (snap.val() === true) {
@@ -148,7 +153,7 @@ window.NetworkEngine = {
             const updates = {};
             Object.keys(players).forEach((id) => {
                 if (id === this.uid) return;
-                if (!this.isPresenceActive(players[id], now)) {
+                if (this.isPresenceStale(players[id], now)) {
                     updates[id] = null;
                 }
             });
@@ -177,9 +182,12 @@ window.NetworkEngine = {
         const myName = sessionStorage.getItem('username') || localStorage.getItem('username') || '';
         this.db.ref('presence').on('value', (snap) => {
             const players = snap.val() || {};
-            const now = Date.now();
             const otherPlayers = Object.keys(players)
-                .filter((id) => id !== this.uid && this.isPresenceActive(players[id], now))
+                .filter((id) => {
+                    if (id === this.uid) return false;
+                    const entry = players[id];
+                    return entry && typeof entry.name === 'string' && entry.name.length > 0;
+                })
                 .map((id) => {
                     const entry = players[id];
                     return {
