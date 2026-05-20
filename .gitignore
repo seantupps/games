@@ -28,3 +28,5 @@ ui-debug.log
 
 # Functions build output (rebuilt before deploy)
 functions/lib/
+
+/notes

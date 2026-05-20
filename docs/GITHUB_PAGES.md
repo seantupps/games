@@ -25,9 +25,10 @@ In [Firebase Console](https://console.firebase.google.com/) → project **games-
 
 ### 3. Production database rules
 
-Deploy strict rules (not emulator rules):
+Deploy strict rules (not emulator rules). Rules use localStorage UIDs (no Firebase Auth yet):
 
 ```powershell
+npx firebase login
 npx firebase deploy --only database --config firebase.prod.json --project games-fad3a
 ```
 

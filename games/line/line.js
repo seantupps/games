@@ -33,7 +33,7 @@ class LineGame extends BaseGame {
 
     async loadAITable() {
         if (this.isMultiplayer) return;
-        const tablePath = '../../tests/line/line_ai_table.bin.gz';
+        const tablePath = 'ai/line_ai_table.bin.gz';
         try {
             console.log(`[AI] Attempting to load table: ${tablePath}`);
             const response = await fetch(`${tablePath}?t=${Date.now()}`);

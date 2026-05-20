@@ -220,7 +220,7 @@ class BaseGame {
                     }
                 }
 
-                if (this.isHost() && !this._hasWarmedUp && (!this.roomData || !this.roomData.global || !hasBoard || boardModeMismatch)) {
+                if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp && (!this.roomData || !this.roomData.global || !hasBoard || boardModeMismatch)) {
                     this._hasWarmedUp = true;
                     console.log(`[ENGINE] Host warming up uninitialized or mismatched room: ${this.roomId} (boardModeMismatch=${boardModeMismatch})`);
                     this.resetGame();
