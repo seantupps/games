@@ -618,10 +618,11 @@
             otherPlayers.forEach(p => {
                 const div = document.createElement('div');
                 div.className = 'player-item';
+                const label = p.sameNameAsMe ? `${p.name} (other tab)` : p.name;
                 div.onclick = () => sendInvite(p.uid, p.name);
                 div.innerHTML = `
                     <div class="player-status" style="background: ${p.color}; box-shadow: 0 0 8px ${p.color};"></div>
-                    <span class="player-name">${p.name}</span>
+                    <span class="player-name">${label}</span>
                     ${p.active ? '<span class="player-badge">In Game</span>' : ''}
                 `;
                 list.appendChild(div);

@@ -7,6 +7,14 @@ window.NetworkEngine = {
     playerRole: 'P1', // Default
     isInitialized: false,
     ROOM_MAX_PLAYERS: 2,
+    /** Drop lobby entries not refreshed within this window (ms). */
+    PRESENCE_STALE_MS: 90000,
+    PRESENCE_HEARTBEAT_MS: 30000,
+
+    isPresenceActive(entry, now = Date.now()) {
+        if (!entry || typeof entry.lastSeen !== 'number') return false;
+        return now - entry.lastSeen <= this.PRESENCE_STALE_MS;
+    },
 
     /** Active party size — playerData is authoritative; users/host only during bootstrap. */
     countRoomMembers(room) {
@@ -118,11 +126,37 @@ window.NetworkEngine = {
         const presenceRef = this.db.ref(`.info/connected`);
         const userRef = this.db.ref(`presence/${this.uid}`);
 
+        if (this._presenceHeartbeat) clearInterval(this._presenceHeartbeat);
+        if (this._presencePruneInterval) clearInterval(this._presencePruneInterval);
+        this._presenceHeartbeat = setInterval(() => this.updatePresence(), this.PRESENCE_HEARTBEAT_MS);
+        this._presencePruneInterval = setInterval(() => this.pruneStalePresence(), 60000);
+
         presenceRef.on('value', (snap) => {
             if (snap.val() === true) {
                 userRef.onDisconnect().remove();
                 this.updatePresence();
+                this.pruneStalePresence();
             }
+        });
+    },
+
+    pruneStalePresence() {
+        if (!this.isInitialized) return;
+        const now = Date.now();
+        this.db.ref('presence').once('value').then((snap) => {
+            const players = snap.val() || {};
+            const updates = {};
+            Object.keys(players).forEach((id) => {
+                if (id === this.uid) return;
+                if (!this.isPresenceActive(players[id], now)) {
+                    updates[id] = null;
+                }
+            });
+            if (Object.keys(updates).length > 0) {
+                return this.db.ref('presence').update(updates);
+            }
+        }).catch((err) => {
+            console.warn('[Network] Stale presence cleanup failed:', err?.message || err);
         });
     },
 
@@ -140,13 +174,23 @@ window.NetworkEngine = {
 
     listenForPlayers(callback) {
         if (!this.init()) return;
+        const myName = sessionStorage.getItem('username') || localStorage.getItem('username') || '';
         this.db.ref('presence').on('value', (snap) => {
             const players = snap.val() || {};
-            // Filter out self
+            const now = Date.now();
             const otherPlayers = Object.keys(players)
-                .filter(id => id !== this.uid)
-                .map(id => ({ uid: id, ...players[id] }));
+                .filter((id) => id !== this.uid && this.isPresenceActive(players[id], now))
+                .map((id) => {
+                    const entry = players[id];
+                    return {
+                        uid: id,
+                        ...entry,
+                        sameNameAsMe: !!(myName && entry.name === myName)
+                    };
+                });
             callback(otherPlayers);
+        }, (err) => {
+            console.warn('[Network] Presence listen failed (check database rules):', err?.message || err);
         });
     },
 

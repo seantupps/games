@@ -1,9 +1,9 @@
 {
     "rules": {
         "presence": {
+            ".read": true,
             "$uid": {
-                ".read": true,
-                ".write": "newData.hasChildren(['name', 'color', 'lastSeen'])",
+                ".write": "!newData.exists() || newData.hasChildren(['name', 'color', 'lastSeen'])",
                 "lastSeen": {
                     ".validate": "newData.isNumber()"
                 }
@@ -48,12 +48,12 @@
                 },
                 "playerData": {
                     "$uid": {
-                        ".write": "(!data.exists() && (!root.child('games').child($gameId).child('playerData').exists() || root.child('games').child($gameId).child('playerData').numChildren() < 2)) || data.exists()"
+                        ".write": "!data.exists() || data.exists()"
                     }
                 },
                 "users": {
                     "$uid": {
-                        ".write": "(!data.exists() && (!root.child('games').child($gameId).child('users').exists() || root.child('games').child($gameId).child('users').numChildren() < 2)) || data.exists()"
+                        ".write": "!data.exists() || data.exists()"
                     }
                 }
             }
