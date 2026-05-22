@@ -45,43 +45,67 @@ export const createGame = onCall(async (request) => {
     return { gameId };
 });
 
-export const onEventCreated = onValueCreated("/gameData/{gameId}/events/{eventId}", async (event) => {
-    const gameId = event.params.gameId;
-    const eventData = event.data.val();
+async function processMoveEvent(gameId: string, eventData: { type?: string }) {
+    if (eventData.type !== "move") return;
 
-    if (eventData.type === "move") {
-        const gameRef = admin.database().ref(`games/${gameId}`);
-        const dataRef = admin.database().ref(`gameData/${gameId}`);
+    const gameRef = admin.database().ref(`games/${gameId}`);
+    const dataRef = admin.database().ref(`gameData/${gameId}`);
+    const targetEventsRef = admin.database().ref(`games/${gameId}/events`);
 
-        const [metaSnap, dataSnap] = await Promise.all([
-            gameRef.get(),
-            dataRef.get()
-        ]);
+    const [metaSnap, dataSnap, targetEventsSnap] = await Promise.all([
+        gameRef.get(),
+        dataRef.get(),
+        targetEventsRef.get()
+    ]);
 
-        const meta = metaSnap.val();
-        const data = dataSnap.val();
+    const meta = metaSnap.val();
+    const data = dataSnap.val();
+    if (!meta) return;
 
-        if (!meta || !data) return;
+    const roomMeta = meta.meta || {};
+    const globalMeta = meta.global || {};
+    const gameType = roomMeta.game || globalMeta.game || meta.game;
+    const mode = roomMeta.mode || globalMeta.mode || meta.mode;
+    const board =
+        meta.state?.board || globalMeta.board || data?.initialState;
+    const firstPlayer =
+        roomMeta.firstPlayer || globalMeta.firstPlayer || "P1";
 
-        const globalMeta = meta.global || {};
-        const gameType = globalMeta.game || meta.game;
-        const mode = globalMeta.mode || meta.mode;
-        const events = Object.values(data.events || {});
-        const state = Logic.computeState(gameType, events, {
-            mode,
-            board: globalMeta.board || data.initialState,
-            firstPlayer: globalMeta.firstPlayer || "P1"
-        });
+    const legacyEvents = data?.events || {};
+    const targetEvents = targetEventsSnap.val() || {};
+    const events = Object.values(
+        Object.keys(targetEvents).length ? targetEvents : legacyEvents
+    );
 
-        const updates: any = {};
-        if (state) {
-            updates['global/turn'] = state.turn;
-            if (state.isOver) {
-                updates['status'] = "finished";
-                updates['winner'] = state.winner;
-                updates['finishedAt'] = admin.database.ServerValue.TIMESTAMP;
-            }
+    const state = Logic.computeState(gameType, events, {
+        mode,
+        board,
+        firstPlayer
+    });
+
+    const updates: Record<string, unknown> = {};
+    if (state) {
+        updates["meta/turn"] = state.turn;
+        updates["global/turn"] = state.turn;
+        if (state.isOver) {
+            updates["status"] = "finished";
+            updates["winner"] = state.winner;
+            updates["finishedAt"] = admin.database.ServerValue.TIMESTAMP;
         }
-        await gameRef.update(updates);
     }
-});
+    await gameRef.update(updates);
+}
+
+export const onEventCreated = onValueCreated(
+    "/gameData/{gameId}/events/{eventId}",
+    async (event) => {
+        await processMoveEvent(event.params.gameId, event.data.val());
+    }
+);
+
+export const onRoomEventCreated = onValueCreated(
+    "/games/{gameId}/events/{eventId}",
+    async (event) => {
+        await processMoveEvent(event.params.gameId, event.data.val());
+    }
+);

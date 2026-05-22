@@ -2,11 +2,14 @@
 <html>
 
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Color Pile</title>
     <link rel="stylesheet" href="../../shared/css/core.css">
+    <link rel="stylesheet" href="../../shared/css/mobile.css">
     <link rel="stylesheet" href="style.css">
     <style>
         #debug-info {
@@ -30,12 +33,17 @@
     <div id="debug-info" style="display: none;">Click board to focus | Zoom: 1.0</div>
     <div id="center-dot"></div>
     <input type="color" id="pile-color-picker"
-        style="position: fixed; opacity: 0; pointer-events: none; width: 0; height: 0; left: 0; top: 0;">
+        style="position: fixed; opacity: 0; pointer-events: none; width: 0; height: 0; left: 0; top: 0;"
+        autocomplete="off">
     <div id="game-container">
         <div class="sb-turn"></div>
     </div>
-    <script src="../../shared/js/engine.js?v=12"></script>
-    <script src="../../shared/js/logic.js"></script>
+    <script src="../../shared/mobile/viewport-mode.js"></script>
+    <script src="../../shared/games/registry.js"></script>
+    <script src="../../shared/js/hub/protocol.js"></script>
+    <script src="../../shared/platform/game-adapter.js"></script>
+    <script src="../../shared/platform/engine.js?v=16"></script>
+    <script src="../../shared/platform/logic.js"></script>
     <script src="piles.js?v=1.3.6"></script>
 </body>
 

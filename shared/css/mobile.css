@@ -1,0 +1,387 @@
+/**
+ * Mobile layout — only when html.five-mobile (set by viewport-mode.js on hub + iframe).
+ * Does not apply on desktop PC (fine pointer, wide window).
+ */
+html.five-mobile {
+    -webkit-text-size-adjust: 100%;
+    touch-action: none;
+    --hub-score-top: max(12px, env(safe-area-inset-top, 12px));
+    --hub-score-left: 12px;
+    --hub-score-font: 1.4rem;
+    --hub-score-pad-block: 8px;
+    --hub-score-pad-inline: 12px;
+    --hub-score-line: 1;
+    --hub-turn-font: 0.7rem;
+}
+
+/* Original mobile fixed turn position (same spacing as calc: ~1px gap, 4px indent) */
+html.five-mobile #global-turn-indicator {
+    top: max(56px, env(safe-area-inset-top, 56px));
+    left: 16px;
+}
+
+html.five-mobile body {
+    touch-action: none;
+}
+
+html.five-mobile #mobile-bar,
+html.five-mobile #settings-sidebar,
+html.five-mobile #chat-container,
+html.five-mobile #settings-sidebar input,
+html.five-mobile #settings-sidebar textarea,
+html.five-mobile #settings-sidebar button,
+html.five-mobile #settings-sidebar select {
+    touch-action: manipulation;
+}
+
+html.five-mobile #game-hub-container {
+    touch-action: none;
+}
+
+/* Left strip above iframe — edge swipe opens settings (iframe swallows touches otherwise) */
+#mobile-settings-edge {
+    display: none;
+}
+
+html.five-mobile #mobile-settings-edge {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: max(40px, calc(28px + env(safe-area-inset-left, 0px)));
+    z-index: 9400;
+    touch-action: none;
+    pointer-events: auto;
+    background: transparent;
+}
+
+html.five-mobile .node::after {
+    width: 56px;
+    height: 56px;
+}
+
+/* iOS Safari: iframe + 100vh often collapses to 0 — force full screen game area */
+html.five-mobile,
+html.five-mobile body {
+    height: 100%;
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
+}
+
+html.five-mobile #game-hub-container {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    height: -webkit-fill-available;
+    z-index: 1;
+}
+
+html.five-mobile #game-frame {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
+    background: #0a0a0a;
+}
+
+html.five-mobile #hub-loading {
+    height: 100%;
+    height: 100dvh;
+    height: -webkit-fill-available;
+}
+
+html.five-mobile #game-container,
+html.five-mobile #game-container svg,
+html.five-mobile #nodes-container .node,
+html.five-mobile .piece {
+    touch-action: none;
+}
+
+/* Mobile settings width — change min(240px, 78vw) here */
+html.five-mobile #settings-sidebar {
+    z-index: 11000;
+    width: min(240px, 78vw);
+    left: -105%;
+    right: auto;
+    border-left: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 20px 0 50px rgba(0, 0, 0, 0.5);
+    padding: 24px 16px;
+    padding-top: max(24px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    gap: 28px;
+}
+
+html.five-mobile #settings-sidebar.open {
+    left: 0 !important;
+    right: auto !important;
+}
+
+html.five-mobile #settings-trigger {
+    display: none !important;
+}
+
+html.five-mobile body:has(#line-canvas) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+html.five-mobile #game-container:has(#line-canvas) {
+    flex-shrink: 0;
+    box-sizing: border-box;
+}
+
+html.five-mobile #theme-color-input {
+    width: 100% !important;
+    height: 48px !important;
+    min-height: 44px;
+    padding: 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+html.five-mobile #mobile-bar {
+    display: flex;
+    z-index: 10200;
+}
+
+html.five-mobile #chat-container {
+    width: calc(100vw - 32px);
+    max-width: 100%;
+    left: 16px;
+    bottom: max(72px, calc(56px + env(safe-area-inset-bottom, 0px)));
+}
+
+html.five-mobile #chat-container.active {
+    display: flex;
+    flex-direction: column;
+    pointer-events: auto;
+    z-index: 10002;
+}
+
+html.five-mobile #chat-container.active #chat-messages {
+    display: flex !important;
+    flex: 1 1 auto;
+    min-height: 40px;
+    max-height: min(220px, calc(var(--vv-height, 50vh) - 100px));
+    overflow-y: auto;
+    opacity: 1;
+    visibility: visible;
+    -webkit-overflow-scrolling: touch;
+}
+
+html.five-mobile #chat-container.active .chat-msg {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+html.five-mobile #chat-container.active #chat-input-wrapper {
+    display: flex !important;
+    flex-shrink: 0;
+    opacity: 1;
+    visibility: visible;
+    min-height: 44px;
+}
+
+/* Shrink game area to visible viewport when chat + keyboard open */
+html.five-mobile.hub-keyboard-open #game-hub-container {
+    top: var(--vv-top, 0);
+    height: var(--vv-height, 100dvh);
+    bottom: auto;
+}
+
+html.five-mobile.hub-keyboard-open #game-frame {
+    height: 100% !important;
+    min-height: 0 !important;
+}
+
+html.five-mobile.hub-keyboard-open #mobile-bar,
+html.five-mobile.hub-keyboard-open.mobile-hub-immersive #mobile-bar,
+#game-hub-container:fullscreen html.five-mobile.hub-keyboard-open #mobile-bar,
+html.five-mobile.hub-keyboard-open #game-hub-container:fullscreen #mobile-bar {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+
+html.five-mobile .chat-msg {
+    font-size: 1.1rem;
+}
+
+html.five-mobile #global-win-banner {
+    font-size: clamp(1.5rem, 8vw, 2.5rem) !important;
+    padding: 0 16px;
+    top: 12%;
+    z-index: 10030;
+}
+
+html.five-mobile #invite-toast {
+    width: calc(100vw - 32px);
+    min-width: 0;
+    max-width: 400px;
+    top: max(16px, env(safe-area-inset-top, 16px));
+    z-index: 10040;
+}
+
+html.five-mobile .game-btn {
+    min-height: 44px;
+    padding: 16px;
+}
+
+html.five-mobile .keybind-list {
+    display: none;
+}
+
+html.five-mobile #pile-color-picker {
+    position: fixed !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    width: 56px !important;
+    height: 56px !important;
+    min-width: 48px;
+    min-height: 48px;
+    z-index: 100000;
+    left: 50% !important;
+    bottom: 18% !important;
+    top: auto !important;
+    transform: translateX(-50%);
+}
+
+html.five-mobile .win-overlay {
+    font-size: clamp(2rem, 10vw, 3.5rem);
+    top: 10%;
+}
+
+html.five-mobile .sb-turn {
+    top: 48px;
+    left: 12px;
+    font-size: 0.65rem;
+}
+
+#mobile-bar {
+    display: none;
+    position: fixed;
+    bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    left: max(16px, env(safe-area-inset-left, 16px));
+    right: max(16px, env(safe-area-inset-right, 16px));
+    z-index: 9500;
+    gap: 10px;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    pointer-events: none;
+}
+
+#mobile-bar .mobile-bar-btn {
+    pointer-events: auto;
+}
+
+.mobile-bar-btn {
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    backdrop-filter: none;
+    color: rgba(255, 255, 255, 0.32);
+    font-size: 1.2rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0;
+}
+
+.mobile-bar-btn svg {
+    width: 22px;
+    height: 22px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.mobile-bar-btn:active,
+.mobile-bar-btn.is-active {
+    color: rgba(255, 255, 255, 0.55);
+    background: transparent;
+}
+
+/* CSS immersive fullscreen (no Fullscreen API — avoids browser “drag from top” hint) */
+html.five-mobile.mobile-hub-immersive,
+html.five-mobile.mobile-hub-immersive body {
+    overflow: hidden;
+    height: 100dvh;
+    height: -webkit-fill-available;
+}
+
+html.five-mobile.mobile-hub-immersive #game-hub-container,
+#game-hub-container:fullscreen {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    height: -webkit-fill-available;
+    z-index: 8000;
+}
+
+html.five-mobile.mobile-hub-immersive #game-frame,
+#game-hub-container:fullscreen #game-frame {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 100dvh !important;
+    min-height: -webkit-fill-available !important;
+}
+
+html.five-mobile.mobile-hub-immersive #mobile-bar,
+#game-hub-container:fullscreen #mobile-bar {
+    display: flex !important;
+    z-index: 10200;
+    pointer-events: none;
+}
+
+html.five-mobile.mobile-hub-immersive #mobile-bar .mobile-bar-btn,
+#game-hub-container:fullscreen #mobile-bar .mobile-bar-btn {
+    pointer-events: auto;
+}
+
+html.five-mobile.mobile-hub-immersive #chat-container,
+#game-hub-container:fullscreen #chat-container {
+    z-index: 10050;
+}
+
+html.five-mobile.mobile-hub-immersive #settings-sidebar,
+#game-hub-container:fullscreen #settings-sidebar {
+    z-index: 11000;
+}
+
+html.five-mobile.mobile-hub-immersive #global-turn-indicator,
+#game-hub-container:fullscreen #global-turn-indicator {
+    display: flex;
+    z-index: 10020;
+}
+
+html.five-mobile.mobile-hub-immersive #global-win-banner,
+#game-hub-container:fullscreen #global-win-banner {
+    z-index: 10030;
+}
+
+html.five-mobile.mobile-hub-immersive #invite-toast,
+#game-hub-container:fullscreen #invite-toast {
+    z-index: 10040;
+}

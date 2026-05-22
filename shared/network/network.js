@@ -8,12 +8,74 @@ window.NetworkEngine = {
     isInitialized: false,
     ROOM_MAX_PLAYERS: 2,
     PRESENCE_HEARTBEAT_MS: 30000,
-    /** Only delete abandoned rows (never used to hide the lobby list). */
-    PRESENCE_PRUNE_MS: 600000,
+
+    _schema() {
+        return typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
+    },
+
+    _roomPath(roomId) {
+        const S = this._schema();
+        return S ? S.paths.room(roomId) : `games/${roomId}`;
+    },
+
+    _normalizeRoom(raw) {
+        const S = this._schema();
+        return S ? S.normalizeRoomSnapshot(raw) : raw;
+    },
+
+    _presenceTiming() {
+        const url = this.config?.databaseURL || '';
+        const emulator = this.firebaseTarget === 'emulator'
+            || url.includes('127.0.0.1') || url.includes('localhost');
+        return emulator
+            ? { activeMs: 45000, pruneMs: 90000 }
+            : { activeMs: 90000, pruneMs: 600000 };
+    },
+
+    resolveLastSeen(entry) {
+        const ls = entry?.lastSeen;
+        return typeof ls === 'number' && Number.isFinite(ls) ? ls : null;
+    },
+
+    /** Lobby list: only tabs that heartbeated recently (not dead Playwright/emulator rows). */
+    isPresenceActive(entry, now = Date.now()) {
+        const ls = this.resolveLastSeen(entry);
+        if (ls == null) return false;
+        return now - ls <= this._presenceTiming().activeMs;
+    },
 
     isPresenceStale(entry, now = Date.now()) {
-        if (!entry || typeof entry.lastSeen !== 'number') return false;
-        return now - entry.lastSeen > this.PRESENCE_PRUNE_MS;
+        const ls = this.resolveLastSeen(entry);
+        if (ls == null) return true;
+        return now - ls > this._presenceTiming().pruneMs;
+    },
+
+    /**
+     * True when the party room row should be deleted entirely (no members left).
+     * One player remaining after a partner leaves is NOT a dissolve — they can re-invite.
+     */
+    shouldDissolveSoloParty(room) {
+        if (!room) return false;
+        return this.countRoomMembers(room) === 0;
+    },
+
+    terminatePartyRoom(roomId) {
+        if (!this.init() || !roomId || roomId === 'lobby') return Promise.resolve();
+        return this.db.ref().update({
+            [`games/${roomId}`]: null,
+            [`gameData/${roomId}`]: null
+        }).catch((err) => {
+            console.warn('[Network] terminatePartyRoom failed', err);
+        });
+    },
+
+    async evaluateRoomLifecycleAfterLeave(roomId) {
+        if (!this.init() || !roomId || roomId === 'lobby') return;
+        const snap = await this.db.ref(this._roomPath(roomId)).once('value');
+        const room = snap.val();
+        if (!room || this.countRoomMembers(room) === 0 || this.shouldDissolveSoloParty(room)) {
+            await this.terminatePartyRoom(roomId);
+        }
     },
 
     /** Active party size — playerData is authoritative; users/host only during bootstrap. */
@@ -41,7 +103,7 @@ window.NetworkEngine = {
 
     async fetchRoomMemberCount(roomId) {
         if (!roomId || roomId === 'lobby' || !this.init()) return 0;
-        const snap = await this.db.ref(`games/${roomId}`).once('value');
+        const snap = await this.db.ref(this._roomPath(roomId)).once('value');
         return this.countRoomMembers(snap.val());
     },
 
@@ -49,7 +111,7 @@ window.NetworkEngine = {
         if (!this.init()) return { ok: false, reason: 'Network not initialized' };
         if (!roomId || roomId === 'lobby') return { ok: true };
 
-        const snap = await this.db.ref(`games/${roomId}`).once('value');
+        const snap = await this.db.ref(this._roomPath(roomId)).once('value');
         const room = snap.val();
         if (!room) return { ok: true }; // New room — first writers create it
 
@@ -79,7 +141,9 @@ window.NetworkEngine = {
                 console.warn('[Network] Player registration blocked:', check.reason);
                 return false;
             }
-            return this.db.ref(`games/${this.roomId}/playerData/${this.uid}`).update({ name, color }).then(() => true);
+            const S = this._schema();
+            const pd = S ? S.paths.playerData(this.roomId, this.uid) : `games/${this.roomId}/playerData/${this.uid}`;
+            return this.db.ref(pd).update({ name, color }).then(() => true);
         });
     },
 
@@ -87,7 +151,7 @@ window.NetworkEngine = {
         if (this.isInitialized) return true;
         if (!window.firebase) { console.error("Firebase missing"); return false; }
         if (!window.FiveFirebaseEnv) {
-            console.error("FiveFirebaseEnv missing — load shared/js/firebase-env.js before network.js");
+            console.error("FiveFirebaseEnv missing — load shared/network/firebase-env.js before network.js");
             return false;
         }
 
@@ -122,6 +186,99 @@ window.NetworkEngine = {
         return this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
     },
 
+    _usesRtdbTunnel() {
+        return !!(window.FiveFirebaseEnv?.getFirebaseRuntime?.().rtdbTunnelUrl);
+    },
+
+    _restParts() {
+        const base = this.config?.databaseURL || '';
+        const q = base.includes('?') ? base.slice(base.indexOf('?')) : '';
+        const root = base.split('?')[0].replace(/\/$/, '');
+        return { root, q };
+    },
+
+    async _restGet(path) {
+        const { root, q } = this._restParts();
+        const r = await fetch(`${root}/${path}.json${q}`);
+        if (!r.ok) throw new Error(`GET ${path} ${r.status}`);
+        const text = await r.text();
+        if (!text || text === 'null') return null;
+        return JSON.parse(text);
+    },
+
+    async _restSet(path, data) {
+        const { root, q } = this._restParts();
+        const r = await fetch(`${root}/${path}.json${q}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (!r.ok) throw new Error(`PUT ${path} ${r.status}`);
+    },
+
+    async _restRemove(path) {
+        const { root, q } = this._restParts();
+        const r = await fetch(`${root}/${path}.json${q}`, { method: 'DELETE' });
+        if (!r.ok && r.status !== 404) throw new Error(`DELETE ${path} ${r.status}`);
+    },
+
+    clearPresence() {
+        return this._removePresenceRow();
+    },
+
+    _removePresenceRow() {
+        if (!this.isInitialized || !this.uid) return Promise.resolve();
+        if (this._presenceHeartbeat) {
+            clearInterval(this._presenceHeartbeat);
+            this._presenceHeartbeat = null;
+        }
+        if (this._usesRtdbTunnel()) {
+            return this._restRemove(`presence/${this.uid}`).catch((err) => {
+                console.warn('[Network] Presence remove failed (tunnel):', err?.message || err);
+            });
+        }
+        return this.db.ref(`presence/${this.uid}`).remove().catch((err) => {
+            console.warn('[Network] Presence remove failed:', err?.message || err);
+        });
+    },
+
+    async _restPost(path, data) {
+        const { root, q } = this._restParts();
+        const r = await fetch(`${root}/${path}.json${q}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (!r.ok) throw new Error(`POST ${path} ${r.status}`);
+    },
+
+    _clearPresencePoll() {
+        if (this._presencePoll) {
+            clearInterval(this._presencePoll);
+            this._presencePoll = null;
+        }
+    },
+
+    _otherPlayersFromMap(players) {
+        const myName = sessionStorage.getItem('username') || localStorage.getItem('username') || '';
+        const now = Date.now();
+        return Object.keys(players || {})
+            .filter((id) => {
+                if (id === this.uid) return false;
+                const entry = players[id];
+                if (!entry || typeof entry.name !== 'string' || entry.name.length === 0) return false;
+                return this.isPresenceActive(entry, now);
+            })
+            .map((id) => {
+                const entry = players[id];
+                return {
+                    uid: id,
+                    ...entry,
+                    sameNameAsMe: !!(myName && entry.name === myName)
+                };
+            });
+    },
+
     initPresence() {
         const presenceRef = this.db.ref(`.info/connected`);
         const userRef = this.db.ref(`presence/${this.uid}`);
@@ -132,13 +289,28 @@ window.NetworkEngine = {
         if (!this._presenceVisibilityBound && typeof document !== 'undefined') {
             this._presenceVisibilityBound = true;
             document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') this.updatePresence();
+                if (document.visibilityState === 'visible') {
+                    this.updatePresence();
+                    this.pruneStalePresence();
+                }
             });
         }
 
+        if (!this._presenceUnloadBound && typeof window !== 'undefined') {
+            this._presenceUnloadBound = true;
+            const leave = () => { this._removePresenceRow(); };
+            window.addEventListener('pagehide', leave);
+            window.addEventListener('beforeunload', leave);
+        }
+
+        if (this._presencePruneTimer) clearInterval(this._presencePruneTimer);
+        this._presencePruneTimer = setInterval(() => this.pruneStalePresence(), 30000);
+
         presenceRef.on('value', (snap) => {
             if (snap.val() === true) {
-                userRef.onDisconnect().remove();
+                if (!this._usesRtdbTunnel()) {
+                    userRef.onDisconnect().remove();
+                }
                 this.updatePresence();
                 this.pruneStalePresence();
             }
@@ -169,6 +341,13 @@ window.NetworkEngine = {
         if (!this.isInitialized) return;
         const name = sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest';
         const color = sessionStorage.getItem('userColor') || localStorage.getItem('userColor') || '#3b82f6';
+        const payload = { name, color, lastSeen: Date.now() };
+        if (this._usesRtdbTunnel()) {
+            this._restSet(`presence/${this.uid}`, payload).catch((err) => {
+                console.warn('[Network] Presence update failed (tunnel):', err.message);
+            });
+            return;
+        }
         this.db.ref(`presence/${this.uid}`).set({
             name, color,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
@@ -179,24 +358,21 @@ window.NetworkEngine = {
 
     listenForPlayers(callback) {
         if (!this.init()) return;
-        const myName = sessionStorage.getItem('username') || localStorage.getItem('username') || '';
+        this._clearPresencePoll();
+        if (this._usesRtdbTunnel()) {
+            const poll = () => {
+                this._restGet('presence')
+                    .then((players) => callback(this._otherPlayersFromMap(players)))
+                    .catch((err) => {
+                        console.warn('[Network] Presence poll failed (tunnel):', err?.message || err);
+                    });
+            };
+            poll();
+            this._presencePoll = setInterval(poll, 1200);
+            return;
+        }
         this.db.ref('presence').on('value', (snap) => {
-            const players = snap.val() || {};
-            const otherPlayers = Object.keys(players)
-                .filter((id) => {
-                    if (id === this.uid) return false;
-                    const entry = players[id];
-                    return entry && typeof entry.name === 'string' && entry.name.length > 0;
-                })
-                .map((id) => {
-                    const entry = players[id];
-                    return {
-                        uid: id,
-                        ...entry,
-                        sameNameAsMe: !!(myName && entry.name === myName)
-                    };
-                });
-            callback(otherPlayers);
+            callback(this._otherPlayersFromMap(snap.val()));
         }, (err) => {
             console.warn('[Network] Presence listen failed (check database rules):', err?.message || err);
         });
@@ -210,13 +386,37 @@ window.NetworkEngine = {
         const color = sessionStorage.getItem('userColor')
             || localStorage.getItem('userColor')
             || '#3b82f6';
-        return this.db.ref(`games/${roomId}`).update({
-            host: this.uid,
-            status: 'waiting',
-            global: { game, mode },
-            [`users/${this.uid}`]: firebase.database.ServerValue.TIMESTAMP,
-            [`playerData/${this.uid}`]: { name, color }
-        }).then(() => true).catch((err) => {
+        const S = this._schema();
+        const base = this._roomPath(roomId);
+        const updates = {
+            [`${base}/host`]: this.uid,
+            [`${base}/status`]: 'waiting',
+            [`${base}/winner`]: null,
+            [`${base}/users/${this.uid}`]: firebase.database.ServerValue.TIMESTAMP,
+            [`${base}/playerData/${this.uid}`]: { name, color },
+            [`${base}/lastMove`]: null,
+            [`${base}/interactions`]: null,
+            [`${base}/previews`]: null
+        };
+        if (S) {
+            updates[S.paths.metaKey(roomId, 'game')] = game;
+            updates[S.paths.metaKey(roomId, 'mode')] = mode;
+            updates[S.paths.metaKey(roomId, 'resetCount')] = 1;
+            updates[S.paths.metaKey(roomId, 'turn')] = 'P1';
+            updates[S.paths.metaKey(roomId, 'firstPlayer')] = 'P1';
+            updates[S.paths.legacyGlobalKey(roomId, 'game')] = game;
+            updates[S.paths.legacyGlobalKey(roomId, 'mode')] = mode;
+            updates[S.paths.legacyGlobalKey(roomId, 'resetCount')] = 1;
+            updates[S.paths.legacyGlobalKey(roomId, 'turn')] = 'P1';
+            updates[S.paths.legacyGlobalKey(roomId, 'firstPlayer')] = 'P1';
+            updates[S.paths.legacyGlobalKey(roomId, 'board')] = null;
+            updates[S.paths.state(roomId)] = null;
+            updates[S.paths.events(roomId)] = null;
+            updates[S.paths.legacyGameData(roomId)] = null;
+        } else {
+            updates[`${base}/global`] = { game, mode, resetCount: 1, turn: 'P1', firstPlayer: 'P1', board: null };
+        }
+        return this.db.ref().update(updates).then(() => true).catch((err) => {
             console.error('[Network] prepareInviteRoom failed', err);
             return false;
         });
@@ -275,10 +475,18 @@ window.NetworkEngine = {
                 if (window.onRoomJoinRejected) window.onRoomJoinRejected(check);
                 return check;
             }
+            const name = sessionStorage.getItem('username')
+                || localStorage.getItem('username')
+                || 'Guest';
+            const color = sessionStorage.getItem('userColor')
+                || localStorage.getItem('userColor')
+                || '#ef4444';
             const updates = {};
             updates[`games/${roomId}/host`] = senderUid;
             updates[`games/${roomId}/status`] = 'waiting';
+            updates[`games/${roomId}/winner`] = null;
             updates[`games/${roomId}/users/${this.uid}`] = firebase.database.ServerValue.TIMESTAMP;
+            updates[`games/${roomId}/playerData/${this.uid}`] = { name, color };
             updates[`invites/${this.uid}/${senderUid}/status`] = 'accepted';
             updates[`invites/${this.uid}/${senderUid}/roomId`] = roomId;
 
@@ -319,16 +527,22 @@ window.NetworkEngine = {
         // Clear all previous room-specific subscriptions cleanly
         this._clearRoomSubscriptions();
         this._clearChatListener();
+        this._clearPresencePoll();
 
+        const S = this._schema();
         if (this.roomId) {
             try {
-                this.db.ref(`games/${this.roomId}`).off();
-                this.db.ref(`gameData/${this.roomId}/events`).off();
+                this.db.ref(this._roomPath(this.roomId)).off();
+                if (S) {
+                    this.db.ref(S.paths.events(this.roomId)).off();
+                    this.db.ref(S.paths.legacyEvents(this.roomId)).off();
+                } else {
+                    this.db.ref(`gameData/${this.roomId}/events`).off();
+                }
             } catch (e) {}
         }
         this.roomId = id;
 
-        // Lobby/Solo Mode: 100% local, do not monitor Firebase room or events
         if (id === 'lobby') {
             this.playerRole = 'P1';
             this.roomData = null;
@@ -336,17 +550,14 @@ window.NetworkEngine = {
             return;
         }
 
-        // 1. Meta Data (Host, Status, Players)
-        const roomMetaRef = this.db.ref(`games/${id}`);
-        // Only re-send init-identity when room *identity* changes (host / game / mode).
-        // Sending it on every Firebase tick (e.g. each global/pileColors write) caused piles
-        // freestyle to re-run initPiles -> initFreestyle -> randomizeColors in a feedback loop.
+        const roomMetaRef = this.db.ref(this._roomPath(id));
         let lastInitIdentityDigest = null;
         const metaCallback = (snap) => {
-            const game = snap.val();
+            const raw = snap.val();
+            const game = this._normalizeRoom(raw);
             if (game) {
                 this.playerRole = (game.host === this.uid || id === 'lobby') ? 'P1' : 'P2';
-                window.NetworkEngine.roomData = game; // Cache the latest room metadata
+                window.NetworkEngine.roomData = game;
 
                 const g = game.global || {};
                 const digest = `${game.host || ''}|${g.game || ''}|${g.mode || ''}`;
@@ -368,19 +579,23 @@ window.NetworkEngine = {
         };
         this._trackRoomSubscription(roomMetaRef, 'value', metaCallback);
 
-        // 2. Event Stream (Authoritative Play)
-        const eventsRef = this.db.ref(`gameData/${id}/events`);
-        const eventsCallback = (snap) => {
-            const events = snap.val() ? Object.values(snap.val()) : [];
+        const pushEventsToFrame = (val) => {
+            const events = val ? Object.values(val) : [];
             const frame = document.getElementById('game-frame');
             if (frame && frame.contentWindow) {
-                frame.contentWindow.postMessage({
-                    type: 'network-events',
-                    events: events
-                }, '*');
+                frame.contentWindow.postMessage({ type: 'network-events', events }, '*');
             }
         };
-        this._trackRoomSubscription(eventsRef, 'value', eventsCallback);
+
+        if (S) {
+            const primaryEventsRef = this.db.ref(S.paths.events(id));
+            this._trackRoomSubscription(primaryEventsRef, 'value', (snap) => pushEventsToFrame(snap.val()));
+            const legacyEventsRef = this.db.ref(S.paths.legacyEvents(id));
+            this._trackRoomSubscription(legacyEventsRef, 'value', (snap) => pushEventsToFrame(snap.val()));
+        } else {
+            const eventsRef = this.db.ref(`gameData/${id}/events`);
+            this._trackRoomSubscription(eventsRef, 'value', (snap) => pushEventsToFrame(snap.val()));
+        }
 
         // Re-register saved listeners under the new room ID
         if (this.listeners) {
@@ -401,18 +616,34 @@ window.NetworkEngine = {
             console.warn(`[NETWORK] sendEvent aborted! Not initialized or no room.`);
             return;
         }
-        this.db.ref(`gameData/${this.roomId}/events`).push({
+        const round =
+            event?.resetCount
+            ?? this.roomData?.global?.resetCount
+            ?? 1;
+        const payload = {
             ...event,
             uid: this.uid,
+            resetCount: round,
             timestamp: firebase.database.ServerValue.TIMESTAMP
-        }).catch(err => {
+        };
+        const S = this._schema();
+        const primary = S ? S.paths.eventPush(this.roomId) : `gameData/${this.roomId}/events`;
+        this.db.ref(primary).push(payload).catch((err) => {
             console.error(`[NETWORK] sendEvent push FAILED:`, err);
         });
+        if (S) {
+            this.db.ref(S.paths.legacyEvents(this.roomId)).push(payload).catch(() => {});
+        }
     },
 
     send(path, data) {
         if (!this.isInitialized || !this.roomId) return;
-        this.db.ref(`games/${this.roomId}/${path}`).set(data);
+        const S = this._schema();
+        if (S && (path.startsWith('global/') || path.startsWith('meta/') || path.startsWith('state/'))) {
+            this.db.ref().update(S.expandRelativeWrites(this.roomId, path, data));
+            return;
+        }
+        this.db.ref(`${this._roomPath(this.roomId)}/${path}`).set(data);
     },
 
     on(path, callback) {
@@ -433,7 +664,12 @@ window.NetworkEngine = {
     },
 
     _clearChatListener() {
-        if (this._chatSubscription) {
+        if (this._chatPoll) {
+            clearInterval(this._chatPoll);
+            this._chatPoll = null;
+        }
+        this._chatSeen = null;
+        if (this._chatSubscription?.ref) {
             try {
                 this._chatSubscription.ref.off(this._chatSubscription.eventType, this._chatSubscription.callback);
             } catch (e) {}
@@ -443,12 +679,22 @@ window.NetworkEngine = {
 
     sendChatMessage(msg, forRoomId) {
         if (!this.init()) return;
-        const chatRef = this.db.ref(this.getChatPath(forRoomId)).push();
-        chatRef.set({
+        const payload = {
             sender: sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest',
             color: sessionStorage.getItem('userColor') || localStorage.getItem('userColor') || '#3b82f6',
             uid: this.uid,
             content: msg,
+            timestamp: Date.now()
+        };
+        if (this._usesRtdbTunnel()) {
+            this._restPost(this.getChatPath(forRoomId), payload).catch((err) => {
+                console.warn('[Network] Chat send failed (tunnel):', err.message);
+            });
+            return;
+        }
+        const chatRef = this.db.ref(this.getChatPath(forRoomId)).push();
+        chatRef.set({
+            ...payload,
             timestamp: firebase.database.ServerValue.TIMESTAMP
         });
     },
@@ -461,13 +707,36 @@ window.NetworkEngine = {
     listenForChat(callback, forRoomId) {
         if (!this.init()) return;
         this._clearChatListener();
-        const chatRef = this.db.ref(this.getChatPath(forRoomId)).limitToLast(50);
+        const chatPath = this.getChatPath(forRoomId);
         const attachedAt = Date.now();
+        if (this._usesRtdbTunnel()) {
+            this._chatSeen = new Set();
+            const poll = () => {
+                this._restGet(chatPath)
+                    .then((msgs) => {
+                        if (!msgs || typeof msgs !== 'object') return;
+                        Object.entries(msgs).forEach(([key, data]) => {
+                            if (!data || this._chatSeen.has(key)) return;
+                            this._chatSeen.add(key);
+                            const ts = this._normalizeChatTimestamp(data.timestamp);
+                            if (ts != null && ts < attachedAt - 1500) return;
+                            callback({ ...data, timestamp: ts != null ? ts : Date.now() });
+                        });
+                    })
+                    .catch((err) => {
+                        console.warn('[Network] Chat poll failed (tunnel):', err?.message || err);
+                    });
+            };
+            poll();
+            this._chatPoll = setInterval(poll, 1200);
+            this._chatSubscription = { tunnel: true };
+            return;
+        }
+        const chatRef = this.db.ref(chatPath).limitToLast(50);
         const chatCallback = (snap) => {
             const data = snap.val();
             if (!data) return;
             const ts = this._normalizeChatTimestamp(data.timestamp);
-            // child_added replays the whole tail — skip stale rows (they were invisible "blank" slots)
             if (ts != null && ts < attachedAt - 1500) return;
             callback({ ...data, timestamp: ts != null ? ts : Date.now() });
         };
@@ -477,11 +746,20 @@ window.NetworkEngine = {
 
     findUserByName(name, callback) {
         if (!this.isInitialized) return;
-        this.db.ref('presence').once('value', (snap) => {
-            const players = snap.val() || {};
-            const found = Object.keys(players).find(id => players[id].name.toLowerCase() === name.toLowerCase());
+        const pick = (players) => {
+            const now = Date.now();
+            const found = Object.keys(players || {}).find((id) => {
+                const p = players[id];
+                return p && this.isPresenceActive(p, now)
+                    && p.name.toLowerCase() === name.toLowerCase();
+            });
             callback(found ? { uid: found, ...players[found] } : null);
-        });
+        };
+        if (this._usesRtdbTunnel()) {
+            this._restGet('presence').then(pick).catch(() => callback(null));
+            return;
+        }
+        this.db.ref('presence').once('value', (snap) => pick(snap.val()));
     },
 
     // --- High-Level GameSync Helpers ---
@@ -496,7 +774,12 @@ window.NetworkEngine = {
 
     broadcast(path, payload) {
         if (!this.isInitialized || !this.roomId) return;
-        this.db.ref(`games/${this.roomId}/${path}`).set(payload);
+        const S = this._schema();
+        if (S && (path.startsWith('global/') || path.startsWith('meta/') || path.startsWith('state/'))) {
+            this.db.ref().update(S.expandRelativeWrites(this.roomId, path, payload));
+            return;
+        }
+        this.db.ref(`${this._roomPath(this.roomId)}/${path}`).set(payload);
     },
 
     // --- Cloud Functions API ---

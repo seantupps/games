@@ -54,6 +54,12 @@ const PilesLogic = {
         const hasY = state.piles['R'].some(p => p.type === 'Y');
         console.log(`[LOGIC] checkWin check: hasY=${hasY}, red_pile_size=${state.piles['R'].length}, returning=${!hasY}`);
         return !hasY;
+    },
+
+    applyInitialBoard(state, board) {
+        const next = { ...state };
+        next.piles = board.piles != null ? board.piles : board;
+        return next;
     }
 };
 
@@ -170,6 +176,10 @@ const LineLogic = {
             newState.turn = state.turn === 'P1' ? 'P2' : 'P1';
         }
         return newState;
+    },
+
+    applyInitialBoard(state, board) {
+        return { ...state, ...board };
     }
 };
 
@@ -184,11 +194,9 @@ const Logic = {
             state.turn = initialConfig.firstPlayer;
         }
         if (initialConfig.board) {
-            if (gameType === 'piles') {
-                state.piles = initialConfig.board.piles || initialConfig.board;
-            } else {
-                state = { ...state, ...initialConfig.board };
-            }
+            state = typeof logic.applyInitialBoard === 'function'
+                ? logic.applyInitialBoard(state, initialConfig.board)
+                : { ...state, ...initialConfig.board };
         }
         const eventList = (events || []).slice().sort((a, b) => {
             const ta = typeof a?.timestamp === 'number' ? a.timestamp : 0;
@@ -199,6 +207,11 @@ const Logic = {
         return state;
     }
 };
+
+/*
+ * NEW GAME: add Logic.<yourId> = { initialState, isValidMove, applyMove }
+ * then npm run sync:logic. Register logicKey in shared/games/registry.js.
+ */
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = Logic;

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phone check</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #fff; margin: 0; padding: 16px; }
+        h1 { font-size: 1.25rem; margin: 0 0 8px; }
+        .sub { opacity: 0.7; font-size: 0.9rem; margin-bottom: 16px; }
+        .row { margin: 8px 0; padding: 12px; border-radius: 8px; background: #1a1a1a; border: 1px solid #333; }
+        .pending { color: #fbbf24; }
+        .ok { color: #4ade80; }
+        .fail { color: #f87171; }
+        a.btn { display: block; margin-top: 16px; padding: 14px; text-align: center;
+            background: #2563eb; color: #fff; text-decoration: none; border-radius: 10px; font-weight: 700; }
+        a.btn.disabled { background: #444; pointer-events: none; }
+        #boot { padding: 12px; background: #422006; border: 1px solid #f59e0b; border-radius: 8px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    <h1>Phone → PC check</h1>
+    <p class="sub">Host: <strong id="host"></strong></p>
+    <div id="boot">Starting… (if this never changes, phone cannot reach your PC)</div>
+    <div id="log"></div>
+    <a id="play-link" class="btn disabled" href="#">Open game (waiting for checks)</a>
+    <script>
+        const host = location.hostname;
+        const logEl = document.getElementById('log');
+        const bootEl = document.getElementById('boot');
+        document.getElementById('host').textContent = location.host;
+
+        const play = new URL('/', location.href);
+        play.searchParams.set('room', 'lobby');
+        play.searchParams.set('firebase', 'emulator');
+        const playLink = document.getElementById('play-link');
+        playLink.href = play.href;
+
+        function row(label, state, detail) {
+            const d = document.createElement('div');
+            d.className = 'row';
+            const cls = state === 'ok' ? 'ok' : state === 'fail' ? 'fail' : 'pending';
+            d.innerHTML = '<strong class="' + cls + '">' + state.toUpperCase() + '</strong> ' + label +
+                (detail ? '<br><small style="opacity:.8">' + detail + '</small>' : '');
+            logEl.appendChild(d);
+        }
+
+        function sendDebug(reason, extra) {
+            const payload = JSON.stringify({
+                deviceId: sessionStorage.getItem('five_phone_debug_id') || ('d_' + Math.random().toString(36).slice(2, 8)),
+                reason: reason,
+                ua: navigator.userAgent,
+                ts: new Date().toISOString(),
+                logs: [{ t: Date.now(), level: 'info', msg: 'phone-check: ' + reason }],
+                errors: [],
+                state: { url: location.href, online: navigator.onLine, extra: extra || null }
+            });
+            sessionStorage.setItem('five_phone_debug_id', JSON.parse(payload).deviceId);
+            fetch('http://' + host + ':8002/report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload
+            }).catch(function () {});
+        }
+
+        async function probe(url, ms) {
+            const c = new AbortController();
+            const t = setTimeout(function () { c.abort(); }, ms);
+            try {
+                const r = await fetch(url, { signal: c.signal, cache: 'no-store' });
+                clearTimeout(t);
+                return r.ok;
+            } catch (e) {
+                clearTimeout(t);
+                return false;
+            }
+        }
+
+        (async function () {
+            sendDebug('phone-check-start', { host: host });
+            bootEl.textContent = 'Running checks…';
+
+            row('This page loaded', 'ok', 'If you see this, port 8000 works from phone');
+            await new Promise(function (r) { setTimeout(r, 200); });
+
+            row('Debug relay :8002', 'pending', 'Sending test report to PC…');
+            let debugOk = await probe('http://' + host + ':8002/ping', 4000);
+            sendDebug('phone-check-ping', { debugOk: debugOk });
+            row('Debug relay :8002', debugOk ? 'ok' : 'fail',
+                debugOk ? 'PC dashboard should show this device' : 'Run npm run phone:stack on PC; allow firewall port 8002');
+
+            row('Firebase vendor', 'pending', '');
+            const vendorOk = await probe(location.origin + '/vendor/firebase/firebase-app-compat.js', 8000);
+            row('Firebase vendor', vendorOk ? 'ok' : 'fail', vendorOk ? '' : 'On PC: npm run vendor:firebase');
+
+            row('RTDB emulator :9000', 'pending', '');
+            const emuOk = await probe('http://' + host + ':9000/', 5000);
+            row('RTDB emulator :9000', emuOk ? 'ok' : 'fail', emuOk ? '' : 'On PC: npm run phone:stack');
+
+            row('Game hub HTML', 'pending', '');
+            const hubOk = await probe(play.href, 15000);
+            row('Game hub HTML', hubOk ? 'ok' : 'fail', play.href);
+
+            const allOk = debugOk && vendorOk && emuOk && hubOk;
+            if (allOk) {
+                bootEl.textContent = 'All checks passed — safe to open the game.';
+                bootEl.style.background = '#052e16';
+                bootEl.style.borderColor = '#22c55e';
+                playLink.textContent = 'Open game hub';
+                playLink.classList.remove('disabled');
+            } else {
+                bootEl.innerHTML = 'Some checks failed.<br>On PC: <code>npm run phone:stack</code><br>Or use ngrok: <code>npm run phone:ngrok</code> + <code>npm run phone:urls</code>';
+                bootEl.style.background = '#450a0a';
+                bootEl.style.borderColor = '#ef4444';
+                playLink.textContent = 'Fix failures first';
+            }
+            sendDebug('phone-check-done', { debugOk: debugOk, vendorOk: vendorOk, emuOk: emuOk, hubOk: hubOk });
+        })();
+    </script>
+</body>
+</html>

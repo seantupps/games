@@ -1,31 +1,23 @@
 <!DOCTYPE html>
 <html>
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-    <title>Line - The Game</title>
+    <title>Template Game</title>
     <link rel="stylesheet" href="../../shared/css/core.css">
     <link rel="stylesheet" href="../../shared/css/mobile.css">
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
     <div id="game-container">
-        <svg id="line-canvas" viewBox="0 0 800 800"></svg>
-        <div id="nodes-container"></div>
+        <div class="sb-turn"></div>
     </div>
-
     <script src="../../shared/mobile/viewport-mode.js"></script>
     <script src="../../shared/games/registry.js"></script>
     <script src="../../shared/js/hub/protocol.js"></script>
     <script src="../../shared/platform/game-adapter.js"></script>
-    <script src="../../shared/platform/engine.js?v=16"></script>
+    <script src="../../shared/platform/engine.js"></script>
     <script src="../../shared/platform/logic.js"></script>
-    <script src="line.js?v=5"></script>
+    <script src="game.js"></script>
 </body>
-
 </html>

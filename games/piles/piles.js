@@ -13,6 +13,11 @@ class ColorPileGame extends BaseGame {
             this.piles = { 'B': [], 'G': [], 'R': [] };
         }
         window.game = this;
+        const reflowClassic = () => {
+            if (this.mode === 'classic') this.requestRender();
+        };
+        window.addEventListener('resize', reflowClassic);
+        window.addEventListener('orientationchange', reflowClassic);
         this.onIdentitySynced = () => {
             const key = `piecePositions_${this.gameName}_${this.mode}`;
             this.piecePositions = JSON.parse(localStorage.getItem(key) || '{}');
@@ -208,8 +213,30 @@ class ColorPileGame extends BaseGame {
     }
 
     applyState(state) {
-        this.piles = state.piles;
+        this.piles = state.piles || state;
         this.requestRender();
+    }
+
+    serializeBoard() {
+        return this.piles ? JSON.parse(JSON.stringify(this.piles)) : null;
+    }
+
+    applyBoard(board) {
+        if (!board) return;
+        this.applyState(typeof board.piles !== 'undefined' ? board : { piles: board });
+    }
+
+    getExtraGlobalReset() {
+        const extra = {};
+        if (this.mode === 'freestyle' && this.currentColors) {
+            extra['global/pileColors'] = { ...this.currentColors };
+        } else if (this.mode === 'classic') {
+            extra['global/pileColors'] = null;
+        }
+        if (this.isHost && this.isHost()) {
+            extra['global/colors'] = this.currentColors || null;
+        }
+        return extra;
     }
 
     getValidMoves() {
@@ -359,22 +386,60 @@ function savePositions() {
     localStorage.setItem(key, JSON.stringify(game.piecePositions));
 }
 
+function isMobileClassicPiles() {
+    return game.mode === 'classic'
+        && typeof window.FiveViewport !== 'undefined'
+        && window.FiveViewport.isMobile();
+}
+
+/** Mobile portrait only: stack B/R/G piles in a column; each pile keeps the same 3+2 horizontal layout. */
+function usePortraitPileColumn() {
+    return isMobileClassicPiles() && window.innerHeight > window.innerWidth;
+}
+
+/**
+ * Classic piles layout tuning — mobile portrait column only uses portrait.* .
+ * @see gap/vgap: spacing within each pile (3+2 row shape)
+ * @see pileSpacing: distance between B / R / G pile centers (portrait: vertical, landscape: horizontal)
+ */
+const CLASSIC_PILE_LAYOUT = {
+    gap: 70,
+    vgap: 70,
+    pileSpacing: 250,
+    portrait: {
+        pileSpacing: 200,
+        gap: 70,
+        vgap: 70
+    }
+};
+
 function getInitialPosition(id, pk, idx) {
-    const centers = { 'B': -250, 'R': 0, 'G': 250 }; // Fixed pixel spacing from center
-    const centerXOffset = centers[pk];
+    const layout = CLASSIC_PILE_LAYOUT;
+    const gap = usePortraitPileColumn() ? layout.portrait.gap : layout.gap;
+    const vgap = usePortraitPileColumn() ? layout.portrait.vgap : layout.vgap;
+    const spacing = usePortraitPileColumn() ? layout.portrait.pileSpacing : layout.pileSpacing;
+    const centers = { 'B': -spacing, 'R': 0, 'G': spacing };
+    let offsetX;
+    let offsetY;
 
-    const gap = 70;
-    const vgap = 70;
-
-    let offsetX, offsetY;
-    if (idx < 3) {
-        // Bottom Row (3 pieces)
-        offsetX = centerXOffset + (idx - 1) * gap;
-        offsetY = 0; // Below center
+    if (usePortraitPileColumn()) {
+        const centerYOffset = centers[pk];
+        if (idx < 3) {
+            offsetX = (idx - 1) * gap;
+            offsetY = centerYOffset;
+        } else {
+            offsetX = idx === 3 ? -gap / 2 : gap / 2;
+            offsetY = centerYOffset - vgap;
+        }
     } else {
-        // Top Row (2 pieces)
-        offsetX = centerXOffset + (idx === 3 ? -gap / 2 : gap / 2);
-        offsetY = -vgap;
+        const centerXOffset = centers[pk];
+        if (idx < 3) {
+            offsetX = centerXOffset + (idx - 1) * gap;
+            offsetY = 0;
+        } else {
+            offsetX = centerXOffset + (idx === 3 ? -gap / 2 : gap / 2);
+            offsetY = -vgap;
+        }
     }
 
     return { offsetX, offsetY };
@@ -410,8 +475,9 @@ game._render = function () {
     if (!container) return;
 
     const validIds = new Set();
-    const centerX = window.innerWidth / 2;
-    const centerY = window.innerHeight / 2;
+    const vis = game.getVisibleViewportSize?.() || { width: window.innerWidth, height: window.innerHeight };
+    const centerX = vis.width / 2;
+    const centerY = vis.height / 2;
 
     Object.keys(game.piles).forEach(pk => {
         game.piles[pk].forEach((piece, idx) => {

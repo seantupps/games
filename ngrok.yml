@@ -1,0 +1,12 @@
+# Two tunnels: game (8000) + RTDB emulator (9000).
+# Terminal 1: npm run phone:stack
+# Terminal 2: ngrok start --all --config ngrok.yml
+# Terminal 3 (or after ngrok is up): npm run phone:urls
+version: "2"
+tunnels:
+  five-web:
+    addr: 8000
+    proto: http
+  five-rtdb:
+    addr: 9000
+    proto: http

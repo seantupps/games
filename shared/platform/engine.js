@@ -49,6 +49,11 @@ class BaseGame {
         this._eventsLoaded = false;
         this._lastTurnSyncedEventCount = -1;
         this.roomData = null;
+        this._pinchActive = false;
+        this._mobileBaseFit = 1;
+        this._fitZoomInitialized = false;
+        /** Freestyle piles: anchor cx/cy locked after first mobile layout (removals must not recenter). */
+        this._mobileLayoutAnchorLocked = false;
 
         this.initKeybinds();
         this.setupEngineListeners();
@@ -56,6 +61,7 @@ class BaseGame {
         this.initColorPicker();
         this.initGlobalEvents();
         this.initZoom();
+        if (typeof GameAdapter !== 'undefined') GameAdapter.attachGameAdapter(this);
         setTimeout(() => this.updateTurnIndicator(), 0); // Init UI
         setTimeout(() => {
             window.parent.postMessage({ type: 'iframe-ready' }, '*');
@@ -73,10 +79,24 @@ class BaseGame {
     }
 
     initGlobalEvents() {
-        window.addEventListener('resize', () => this.requestRender());
-        window.addEventListener('mousemove', (e) => {
-            this.mousePos = { x: e.clientX, y: e.clientY };
+        window.addEventListener('resize', () => {
+            if (this.isMobileViewport?.() && !this._usesFitSquareMobileLayout()) {
+                if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
+                else this.refreshMobileLayout();
+            }
+            this.requestRender();
         });
+        window.addEventListener('orientationchange', () => {
+            if (this.isMobileViewport?.()) {
+                if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
+                else this.refreshMobileLayout();
+            }
+        });
+        const trackPointer = (e) => {
+            this.mousePos = { x: e.clientX, y: e.clientY };
+        };
+        window.addEventListener('mousemove', trackPointer);
+        window.addEventListener('pointermove', trackPointer);
         window.addEventListener('message', (e) => {
             if (e.data.type === 'mousemove') {
                 this.mousePos = { x: e.data.clientX, y: e.data.clientY };
@@ -89,6 +109,137 @@ class BaseGame {
             if (Date.now() - lastDrag < 100) return;
             if (this.onEnter) this.onEnter();
         });
+
+        this.initLongPressEndTurn();
+        this.initMobileSettingsEdgeSwipe();
+    }
+
+    /**
+     * Same-origin iframe: touches on the right strip post to hub (overlay misses if gesture starts in frame).
+     */
+    initMobileSettingsEdgeSwipe() {
+        if (!this.isMobileViewport() || window.parent === window) return;
+
+        const EDGE_INSET_PX = 44;
+        const MIN_SWIPE_PX = 52;
+        const MAX_VERTICAL_DRIFT_PX = 90;
+        const MAX_SWIPE_MS = 700;
+        let start = null;
+
+        const cancel = () => {
+            start = null;
+        };
+
+        const onStart = (clientX, clientY) => {
+            if (clientX > EDGE_INSET_PX) return;
+            start = { x0: clientX, y0: clientY, t0: Date.now() };
+        };
+
+        const onMove = (clientX) => {
+            if (!start) return;
+            if (clientX < start.x0 - 28) cancel();
+        };
+
+        const onEnd = (clientX, clientY) => {
+            if (!start) return;
+            const dx = clientX - start.x0;
+            const dy = Math.abs(clientY - start.y0);
+            const dt = Date.now() - start.t0;
+            cancel();
+            if (dx < MIN_SWIPE_PX || dy > MAX_VERTICAL_DRIFT_PX || dt > MAX_SWIPE_MS) return;
+            window.parent.postMessage({ type: 'open-settings-edge-swipe' }, '*');
+        };
+
+        const target = document.body;
+        target.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            const t = e.touches[0];
+            onStart(t.clientX, t.clientY);
+        }, { passive: true });
+
+        target.addEventListener('touchmove', (e) => {
+            if (!start || e.touches.length !== 1) return;
+            onMove(e.touches[0].clientX);
+        }, { passive: true });
+
+        target.addEventListener('touchend', (e) => {
+            if (!start) return;
+            const t = e.changedTouches[0];
+            onEnd(t.clientX, t.clientY);
+        }, { passive: true });
+
+        target.addEventListener('touchcancel', cancel, { passive: true });
+
+        target.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            onStart(e.clientX, e.clientY);
+        });
+
+        target.addEventListener('pointermove', (e) => {
+            if (!start) return;
+            onMove(e.clientX);
+        });
+
+        target.addEventListener('pointerup', (e) => {
+            if (!start) return;
+            onEnd(e.clientX, e.clientY);
+        });
+
+        target.addEventListener('pointercancel', cancel);
+    }
+
+    /** Mobile / touch: long-press ends turn (piles); replaces right-click on coarse pointers. */
+    initLongPressEndTurn() {
+        if (!this.onEnter) return;
+        const container = document.getElementById('game-container') || document.body;
+
+        const LONG_MS = 550;
+        const MOVE_CANCEL_PX = 14;
+        let timer = null;
+        let start = null;
+
+        const clear = () => {
+            if (timer) clearTimeout(timer);
+            timer = null;
+            start = null;
+        };
+
+        const onDown = (e) => {
+            if (!this.isMobileViewport()) return;
+            if (this._pinchActive) return;
+            if (e.touches && e.touches.length >= 2) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            if (!this.isMyTurn()) return;
+            const pt = e.touches?.[0] || e;
+            start = { x: pt.clientX, y: pt.clientY };
+            timer = setTimeout(() => {
+                timer = null;
+                if (this._pinchActive) return;
+                const lastDrag = this.lastDragEnd || 0;
+                if (Date.now() - lastDrag < 150) return;
+                if (this.onEnter) this.onEnter();
+            }, LONG_MS);
+        };
+
+        const onMove = (e) => {
+            if (!this.isMobileViewport()) return;
+            if (this._pinchActive || (e.touches && e.touches.length >= 2)) {
+                clear();
+                return;
+            }
+            if (!start || !timer) return;
+            const pt = e.touches?.[0] || e;
+            if (Math.hypot(pt.clientX - start.x, pt.clientY - start.y) > MOVE_CANCEL_PX) clear();
+        };
+
+        container.addEventListener('pointerdown', onDown);
+        container.addEventListener('pointermove', onMove);
+        container.addEventListener('pointerup', clear);
+        container.addEventListener('pointercancel', clear);
+        container.addEventListener('touchstart', (e) => {
+            if (e.touches.length >= 2) clear();
+        }, { passive: true });
+        container.addEventListener('touchmove', onMove, { passive: true });
     }
 
     enableDragging(el, onDragStart, onDragEnd) {
@@ -137,14 +288,20 @@ class BaseGame {
         }
 
         const container = document.getElementById('game-container');
-        const width = container ? (container.offsetWidth || window.innerWidth) : 1000;
-        const height = container ? (container.offsetHeight || window.innerHeight) : 1000;
+        const vis = this.isMobileViewport() ? this.getVisibleViewportSize() : null;
+        const width = vis?.width || (container ? (container.offsetWidth || window.innerWidth) : 1000);
+        const height = vis?.height || (container ? (container.offsetHeight || window.innerHeight) : 1000);
 
-        // Resolution Independent Centering Math via CSS Variable
-        const scale = parseFloat(container?.style.getPropertyValue('--board-scale')) || 1.0;
+        const scale = this.isMobileViewport()
+            ? 1.0
+            : (parseFloat(container?.style.getPropertyValue('--board-scale')) || 1.0);
 
-        const lx = (width / 2) + (nx - 500) * scale;
-        const ly = (height / 2) + (ny - 500) * scale;
+        const lx = this.isMobileViewport()
+            ? nx
+            : (width / 2) + (nx - 500) * scale;
+        const ly = this.isMobileViewport()
+            ? ny
+            : (height / 2) + (ny - 500) * scale;
 
         let classes = [];
         if (this.selection.pk === pk && this.selection.ids.includes(id)) classes.push('selected');
@@ -167,6 +324,71 @@ class BaseGame {
     isHost() {
         if (!this.isMultiplayer || this.roomId === 'lobby') return true;
         return this.playerRole === 'P1';
+    }
+
+    _mobileLayoutPolicy() {
+        return this.capabilities?.mobileLayoutPolicy || 'none';
+    }
+
+    _usesFitSquareMobileLayout() {
+        return this._mobileLayoutPolicy() === 'fit-square';
+    }
+
+    _usesFixedSpiralMobileAnchor() {
+        return this._mobileLayoutPolicy() === 'fixed-spiral-anchor';
+    }
+
+    _isPilesBoard() {
+        return (this.capabilities?.boardKind || 'generic') === 'piles';
+    }
+
+    /** Current rematch generation (defaults legacy events without field to round 1). */
+    _currentResetRound() {
+        return this.roomData?.global?.resetCount ?? this.lastResetCount ?? 1;
+    }
+
+    _eventTimestamp(ev) {
+        const ts = ev?.timestamp;
+        if (typeof ts === 'number' && Number.isFinite(ts)) {
+            return ts < 1e12 ? ts * 1000 : ts;
+        }
+        return 0;
+    }
+
+    _dropStaleFinishedBatch(events, round) {
+        if (events.length === 0) return [];
+
+        const newestTs = events.reduce((max, ev) => Math.max(max, this._eventTimestamp(ev)), 0);
+        const preReset =
+            (newestTs > 0 && newestTs < this._resetAcknowledgedAt)
+            || (
+                newestTs === 0
+                && this._resetAcknowledgedCount != null
+                && round <= this._resetAcknowledgedCount
+            );
+        if (preReset) return [];
+
+        const cfg = {
+            mode: this.mode,
+            createdAt: this.roomData?.createdAt || Date.now(),
+            board: this.roomData?.global?.board || null,
+            firstPlayer: this.roomData?.global?.firstPlayer || 'P1'
+        };
+        const probe = GameLogic.computeState(this.gameName, events, cfg);
+        return probe?.isOver ? [] : events;
+    }
+
+    /** Only replay moves from the active game after host auto-reset. */
+    _eventsForReplay(events) {
+        if (!this.isMultiplayer || !Array.isArray(events)) return events || [];
+        const round = Number(this._currentResetRound());
+        const tagged = events.filter((ev) => Number(ev.resetCount ?? 1) === round);
+        if (tagged.length > 0) return tagged;
+
+        // Mid-game (no rematch yet): legacy events without resetCount stay in the log.
+        if (!this._resetAcknowledgedAt) return events;
+
+        return this._dropStaleFinishedBatch(events, round);
     }
 
     initNetworkListeners() {
@@ -194,7 +416,7 @@ class BaseGame {
                     }
                 }
 
-                if (this.gameName === 'piles' && this.mode === 'freestyle' && this.applyServerPileColors) {
+                if (this.hasCap('supportsPileColors') && this.mode === 'freestyle' && this.applyServerPileColors) {
                     this.applyServerPileColors();
                 }
                 this.rebuildState();
@@ -205,7 +427,7 @@ class BaseGame {
 
                 // Warmup check directly in message handler - guarantees it is ALWAYS executed and never overridden!
                 const hasBoard = this.roomData?.global?.board && (
-                    this.gameName !== 'piles'
+                    !this._isPilesBoard()
                         ? true
                         : Object.values(this.roomData.global.board).flat().filter(Boolean).length > 0
                 );
@@ -213,7 +435,7 @@ class BaseGame {
                 // Inspect board to detect classic vs freestyle mismatches
                 let boardModeMismatch = false;
                 if (this.roomData?.global?.board) {
-                    if (this.gameName === 'piles') {
+                    if (this._isPilesBoard()) {
                         const board = this.roomData.global.board;
                         const allPieces = Object.values(board).flat().filter(Boolean);
                         if (allPieces.length > 0) {
@@ -273,7 +495,20 @@ class BaseGame {
             if (e.data.type === 'network-events') {
                 if (this.roomId === 'lobby' || !this.isMultiplayer) return;
                 this._eventsLoaded = true;
-                this.gameEvents = e.data.events;
+                const events = Array.isArray(e.data.events) ? e.data.events : [];
+                const roomRc = this._currentResetRound();
+                const replay = this._eventsForReplay(events);
+
+                if (events.length > 0 && replay.length === 0 && this._resetAcknowledgedAt) {
+                    console.warn('[ENGINE] Dropping pre-reset / wrong-round event batch');
+                    this.gameEvents = [];
+                    this._eventsSyncedAtResetCount = roomRc;
+                    this.rebuildState();
+                    return;
+                }
+
+                this.gameEvents = events;
+                this._eventsSyncedAtResetCount = roomRc;
                 this.rebuildState();
             }
 
@@ -288,26 +523,31 @@ class BaseGame {
                 // Detect Reset Signal (resetCount increased)
                 const currentResetCount = data.global?.resetCount || 0;
                 if (currentResetCount > this.lastResetCount) {
-                    if (!this.isHost()) {
-                        console.log(`[ENGINE] Guest received reset signal (resetCount: ${currentResetCount})`);
-                        this.lastResetCount = currentResetCount;
-                        
-                        // Run reset procedures locally for guest
-                        this.clearAutoReset();
-                        this._victoryRegistered = false;
-                        this._winBannerSent = false;
-                        this.isOver = false;
-                        this.winner = null;
-                        this.clearWinOverlay();
-                        this.selection = { pk: null, ids: [] };
-                        this.opponentSelection = null;
-                        this.gameEvents = [];
-                        window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
-                        
-                        if (this.onGameReset) this.onGameReset();
-                    } else {
-                        this.lastResetCount = currentResetCount;
+                    const who = this.isHost() ? 'Host' : 'Guest';
+                    console.log(`[ENGINE] ${who} received reset signal (resetCount: ${currentResetCount})`);
+                    this.lastResetCount = currentResetCount;
+                    this._resetAcknowledgedCount = currentResetCount;
+                    this._resetAcknowledgedAt = Date.now();
+
+                    this.clearAutoReset();
+                    this._victoryRegistered = false;
+                    this._winBannerSent = false;
+                    this.isOver = false;
+                    this.winner = null;
+                    this.clearWinOverlay();
+                    this.selection = { pk: null, ids: [] };
+                    this.opponentSelection = null;
+                    this.gameEvents = [];
+                    this._eventsSyncedAtResetCount = currentResetCount;
+                    this._lastTurnSyncedEventCount = -1;
+                    window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+
+                    if (data.global?.firstPlayer) this.firstPlayer = data.global.firstPlayer;
+                    if (data.global?.turn) this.turn = data.global.turn;
+                    if (data.global?.mode) {
+                        this.mode = data.global.mode;
                     }
+                    if (this.onGameReset) this.onGameReset();
                 }
 
                 this.rebuildState();
@@ -432,7 +672,7 @@ class BaseGame {
                             if (varName) document.documentElement.style.setProperty(varName, color);
                         });
                         this.safeRender();
-                    } else if (this.gameName === 'piles' && this.mode === 'classic') {
+                    } else if (this._isPilesBoard() && this.mode === 'classic') {
                         // Restore classic defaults if pileColors is null/missing
                         const defaults = { '--blue-color': '#3b82f6', '--red-color': '#ef4444', '--green-color': '#22c55e', '--yellow-color': '#eab308' };
                         Object.entries(defaults).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
@@ -483,15 +723,16 @@ class BaseGame {
             board: this.roomData?.global?.board || null,
             firstPlayer: this.roomData?.global?.firstPlayer || 'P1'
         };
+        const replayEvents = this._eventsForReplay(this.gameEvents);
         try {
-            const state = GameLogic.computeState(this.gameName, this.gameEvents, config);
+            const state = GameLogic.computeState(this.gameName, replayEvents, config);
             if (state) {
                 // Multiplayer turn: replayed event log is source of truth (emulator has no cloud functions).
                 // Host writes global/turn only when a new event arrives to avoid repair races on refresh.
-                if (this.isMultiplayer && this._eventsLoaded && this.gameEvents.length > 0) {
+                if (this.isMultiplayer && this._eventsLoaded && replayEvents.length > 0) {
                     this.turn = state.turn;
                     if (this.isHost()) {
-                        const eventCount = this.gameEvents.length;
+                        const eventCount = replayEvents.length;
                         if (eventCount !== this._lastTurnSyncedEventCount) {
                             this._lastTurnSyncedEventCount = eventCount;
                             if (this.roomData?.global?.turn !== state.turn) {
@@ -499,34 +740,53 @@ class BaseGame {
                             }
                         }
                     }
-                } else if (this.isMultiplayer && this.roomData?.global?.turn) {
-                    this.turn = this.roomData.global.turn;
+                } else if (this.isMultiplayer) {
+                    const g = this.roomData.global;
+                    this.turn = g.turn || g.firstPlayer || state.turn;
                 } else {
                     this.turn = state.turn;
                 }
 
-                if (this.isMultiplayer && this.gameEvents.length === 0) {
+                if (this.isMultiplayer && replayEvents.length === 0) {
                     this.isOver = false;
                     this.winner = null;
                 } else {
                     this.isOver = state.isOver;
                     this.winner = state.winner;
                 }
-                if (this.applyState) this.applyState(state);
+
+                // After host reset, RTDB may still replay the previous game's finished log.
+                const staleVictory =
+                    this.isMultiplayer
+                    && state.isOver
+                    && (
+                        replayEvents.length < this.gameEvents.length
+                        || (this.roomData?.global?.resetCount || 0) > (this._eventsSyncedAtResetCount ?? 0)
+                    );
+
+                if (staleVictory) {
+                    console.warn('[ENGINE] Ignoring stale game-over from event log after host reset');
+                    this.isOver = false;
+                    this.winner = null;
+                    this._victoryRegistered = false;
+                    this.clearWinOverlay();
+                    window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+                    this._applyFreshBoardFromRoom();
+                } else {
+                    if (this.applyState) this.applyState(state);
+                    if (this.isOver) {
+                        this.setGameOver(this.winner);
+                    } else if (!this._victoryRegistered) {
+                        // Do not hide the victory banner on a later rebuild after setGameOver already ran.
+                        this._victoryRegistered = false;
+                        this.clearWinOverlay();
+                        window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+                    }
+                }
+
                 this.updateTurnIndicator();
                 this.renderScoreboard();
                 this.safeRender();
-
-                if (this.isOver) {
-                    this.setGameOver(this.winner);
-                } else {
-                    this._victoryRegistered = false;
-                    this.clearWinOverlay();
-                    window.parent.postMessage({
-                        type: 'update-win-banner',
-                        visible: false
-                    }, '*');
-                }
             } else if (!this.isMultiplayer && this.gameName !== 'unknown') {
                 // Rebuild local state for solo mode if GameLogic exists but events stream is empty
                 const logic = GameLogic[this.gameName];
@@ -546,29 +806,85 @@ class BaseGame {
         // Overridden by subclass (e.g. piles.js sets this.piles = state.piles)
     }
 
+    _partyMemberCount() {
+        const pd = this.roomData?.playerData || {};
+        return Object.keys(pd).filter((id) => pd[id] != null && typeof pd[id] === 'object').length;
+    }
+
+    /** Rebuild visible board from host reset payload (not from stale event log). */
+    _applyFreshBoardFromRoom() {
+        if (this.onGameReset) this.onGameReset();
+        if (!window.GameLogic || !this.roomData?.global) return;
+        const g = this.roomData.global;
+        const fresh = GameLogic.computeState(this.gameName, [], {
+            mode: this.mode,
+            createdAt: this.roomData.createdAt || Date.now(),
+            board: g.board || null,
+            firstPlayer: g.firstPlayer || 'P1'
+        });
+        if (fresh && this.applyState) this.applyState(fresh);
+        if (g.turn) this.turn = g.turn;
+    }
+
+    notifyGameRendered() {
+        if (this._gameRenderedNotified || window.parent === window) return;
+        let visible = 0;
+        if (this._isPilesBoard() && this.piles) {
+            visible = Object.values(this.piles).reduce((n, arr) => n + (arr?.length || 0), 0);
+        } else if (this.nodes) {
+            visible = this.nodes.length;
+        }
+        const container = document.getElementById('game-container');
+        const cw = container?.offsetWidth || 0;
+        const ch = container?.offsetHeight || 0;
+        if (visible === 0 && (cw === 0 || ch === 0)) return;
+        this._gameRenderedNotified = true;
+        window.parent.postMessage({
+            type: 'game-rendered',
+            game: this.gameName,
+            visible,
+            containerW: cw,
+            containerH: ch
+        }, '*');
+    }
+
     safeRender() {
         const container = document.getElementById('game-container');
         if (container) {
-            const width = container.offsetWidth || window.innerWidth;
-            const height = container.offsetHeight || window.innerHeight;
+            const vis = this.getVisibleViewportSize?.() || null;
+            const width = container.offsetWidth || vis?.width || window.innerWidth;
+            const height = container.offsetHeight || vis?.height || window.innerHeight;
+            const maxRetries = /iPhone|iPad|Android/i.test(navigator.userAgent || '') ? 60 : 10;
             if (width === 0 || height === 0) {
-                if (!this._renderRetryCount || this._renderRetryCount < 10) {
+                if (!this._renderRetryCount || this._renderRetryCount < maxRetries) {
                     this._renderRetryCount = (this._renderRetryCount || 0) + 1;
                     requestAnimationFrame(() => this.safeRender());
                     return;
                 }
+                window.parent.postMessage({
+                    type: 'game-render-failed',
+                    reason: 'zero-size-container',
+                    w: width,
+                    h: height
+                }, '*');
             }
             // Centralized Scale Factor (Unscaled layout values)
             const scaleX = width / 1000;
             const scaleY = height / 1000;
-            const boardScale = Math.min(scaleX, scaleY);
-            container.style.setProperty('--board-scale', boardScale);
+            if (!this.isMobileViewport()) {
+                const boardScale = Math.min(scaleX, scaleY);
+                container.style.setProperty('--board-scale', boardScale);
+            } else {
+                container.style.setProperty('--board-scale', '1');
+            }
         }
 
         if (this.requestRender) this.requestRender();
         else if (this._render) this._render();
         else if (this.render) this.render();
         else if (typeof _render !== 'undefined') _render();
+
+        this.notifyGameRendered();
     }
 
     broadcast(path, payload) {
@@ -598,7 +914,8 @@ class BaseGame {
                 type: 'network-send-event',
                 event: {
                     type: 'move',
-                    payload: movePayload
+                    payload: movePayload,
+                    resetCount: this._currentResetRound()
                 }
             }, '*');
 
@@ -668,8 +985,7 @@ class BaseGame {
         // 2. Trigger local game logic reset (Host re-gens board locally)
         if (this.onGameReset) this.onGameReset();
 
-        // Sync colors if available (Host to Guest)
-        if (this.isHost() && this.gameName === 'piles') {
+        if (this.isHost() && this.hasCap('supportsPileColors')) {
             const varMap = { 'B': '--blue-color', 'R': '--red-color', 'G': '--green-color', 'Y': '--yellow-color' };
             this.currentColors = {};
             ['B', 'R', 'G', 'Y'].forEach(type => {
@@ -677,9 +993,7 @@ class BaseGame {
             });
         }
 
-        // 3. Coordinate room-wide reset if Host
         if (this.isMultiplayer && this.playerRole === 'P1') {
-            // Only alternate firstPlayer if the previous game actually ended (was over)
             if (wasOver) {
                 const prevFirstPlayer = this.firstPlayer || 'P1';
                 this.firstPlayer = prevFirstPlayer === 'P1' ? 'P2' : 'P1';
@@ -689,27 +1003,29 @@ class BaseGame {
             }
 
             const startTurn = this.firstPlayer;
-            // Single Atomic Room Reset
-            let updates = {};
+            this.turn = startTurn;
+            const updates = {};
             updates['status'] = 'playing';
+            updates['winner'] = null;
             updates['global/firstPlayer'] = this.firstPlayer;
             updates['global/turn'] = startTurn;
             updates['global/resetCount'] = (this.roomData?.global?.resetCount || 0) + 1;
-            this.lastResetCount = updates['global/resetCount']; // Prevent double local reset
+            this.lastResetCount = updates['global/resetCount'];
+            this._resetAcknowledgedCount = updates['global/resetCount'];
+            this._resetAcknowledgedAt = Date.now();
 
-            // Collect authoritative state from the game (Piles uses .piles, Line uses lines/path)
-            if (this.gameName === 'piles') updates['global/board'] = this.piles;
-            else if (this.gameName === 'line') {
-                updates['global/board'] = { lines: this.lines, path: this.path, endpoints: this.endpoints, initialized: true };
-            } else updates['global/board'] = null;
+            const board = typeof this.serializeBoard === 'function' ? this.serializeBoard() : null;
+            updates['global/board'] = this.capabilities?.hasBoardState !== false ? board : null;
 
-            updates['global/piecePositions'] = null;
-            updates['global/colors'] = this.currentColors || null;
-            if (this.gameName === 'piles' && this.mode === 'freestyle' && this.currentColors) {
-                updates['global/pileColors'] = { ...this.currentColors };
-            } else if (this.gameName === 'piles' && this.mode === 'classic') {
-                updates['global/pileColors'] = null;
-            }
+            const reg = typeof GameRegistry !== 'undefined' ? GameRegistry.get(this.gameName) : null;
+            (reg?.globalResetKeys || ['piecePositions', 'colors', 'pileColors']).forEach((key) => {
+                if (key === 'board') return;
+                updates[`global/${key}`] = null;
+            });
+
+            const extra = typeof this.getExtraGlobalReset === 'function' ? this.getExtraGlobalReset() : {};
+            Object.assign(updates, extra);
+
             updates['lastMove'] = null;
             updates['interactions'] = null;
             this.updateMetadata(updates);
@@ -729,14 +1045,416 @@ class BaseGame {
         const container = document.getElementById('game-container');
         if (!container) return { x: clientX, y: clientY };
         const rect = container.getBoundingClientRect();
-        // Fallback to localSize if not set
         const baseSize = this.localSize || 1000;
-        const scaleX = rect.width / baseSize;
-        const scaleY = rect.height / baseSize;
+        let lx = clientX - rect.left;
+        let ly = clientY - rect.top;
+        const tr = getComputedStyle(container).transform;
+        if (tr && tr !== 'none') {
+            try {
+                const inv = new DOMMatrix(tr).inverse();
+                const p = inv.transformPoint(new DOMPoint(lx, ly));
+                lx = p.x;
+                ly = p.y;
+            } catch (_) { /* use untransformed */ }
+        }
+        const layoutW = container.offsetWidth || rect.width;
+        const layoutH = container.offsetHeight || rect.height;
         return {
-            x: Math.round((clientX - rect.left) / scaleX),
-            y: Math.round((clientY - rect.top) / scaleY)
+            x: Math.round((lx / layoutW) * baseSize),
+            y: Math.round((ly / layoutH) * baseSize)
         };
+    }
+
+    isMobileViewport() {
+        return typeof window.FiveViewport !== 'undefined' && window.FiveViewport.isMobile();
+    }
+
+    /** Visible iframe size (shrinks when parent hub reports keyboard / visual viewport). */
+    getVisibleViewportSize() {
+        const vv = window.visualViewport;
+        if (this._hubVisibleViewport?.height) {
+            return {
+                width: this._hubVisibleViewport.width || window.innerWidth,
+                height: this._hubVisibleViewport.height
+            };
+        }
+        return {
+            width: vv?.width || window.innerWidth,
+            height: vv?.height || window.innerHeight
+        };
+    }
+
+    getZoomStorageKey() {
+        return `game_zoom_${this.gameName}_${this.mode}`;
+    }
+
+    /** Stable piles layout bounds in world units (nx/ny around 500) — does not move when pieces are picked. */
+    _spiralCoords(n) {
+        if (n === 0) return { x: 0, y: 0 };
+        let x = 0;
+        let y = 0;
+        let step = 1;
+        let count = 0;
+        while (count < n) {
+            for (let i = 0; i < step && count < n; i++) { x++; count++; }
+            if (count === n) break;
+            for (let i = 0; i < step && count < n; i++) { y--; count++; }
+            if (count === n) break;
+            step++;
+            for (let i = 0; i < step && count < n; i++) { x--; count++; }
+            if (count === n) break;
+            for (let i = 0; i < step && count < n; i++) { y++; count++; }
+            if (count === n) break;
+            step++;
+        }
+        return { x, y };
+    }
+
+    _classicPileWorldBounds(portrait) {
+        const piece = 44;
+        const pad = piece / 2;
+        const gap = 70;
+        const vgap = 70;
+        const spacing = portrait ? 200 : 250;
+        const centers = { B: -spacing, R: 0, G: spacing };
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+
+        for (const pk of ['B', 'R', 'G']) {
+            for (let idx = 0; idx < 5; idx++) {
+                let offsetX;
+                let offsetY;
+                if (portrait) {
+                    const centerYOffset = centers[pk];
+                    if (idx < 3) {
+                        offsetX = (idx - 1) * gap;
+                        offsetY = centerYOffset;
+                    } else {
+                        offsetX = idx === 3 ? -gap / 2 : gap / 2;
+                        offsetY = centerYOffset - vgap;
+                    }
+                } else {
+                    const centerXOffset = centers[pk];
+                    if (idx < 3) {
+                        offsetX = centerXOffset + (idx - 1) * gap;
+                        offsetY = 0;
+                    } else {
+                        offsetX = centerXOffset + (idx === 3 ? -gap / 2 : gap / 2);
+                        offsetY = -vgap;
+                    }
+                }
+                const nx = 500 + offsetX;
+                const ny = 500 + offsetY;
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            }
+        }
+
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
+    }
+
+    _shouldLockFreestyleMobileLayout() {
+        return this.isMobileViewport() && this._usesFixedSpiralMobileAnchor();
+    }
+
+    /** Full freestyle spiral bbox — stable; does not shrink when pieces are removed. */
+    getFreestyleInitialVisualBounds() {
+        const piece = 44;
+        const pad = piece / 2;
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+        for (let i = 0; i < 12; i++) {
+            const spiral = this._spiralCoords(i);
+            const nx = 500 + spiral.x * 75;
+            const ny = 500 + spiral.y * 75;
+            minNx = Math.min(minNx, nx - pad);
+            maxNx = Math.max(maxNx, nx + pad);
+            minNy = Math.min(minNy, ny - pad);
+            maxNy = Math.max(maxNy, ny + pad);
+        }
+        if (!Number.isFinite(minNx)) {
+            return { w: 400, h: 400, cx: 500, cy: 500 };
+        }
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
+    }
+
+    getPilesStableVisualBounds() {
+        const piece = 44;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        const portrait = vh > vw;
+
+        if (this.mode === 'classic') {
+            return this._classicPileWorldBounds(portrait);
+        }
+
+        if (this._mobileLayoutAnchorLocked && this._mobileContentBounds) {
+            return this._mobileContentBounds;
+        }
+
+        const pad = piece / 2;
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+        const items = this.piles
+            ? Object.values(this.piles).flat().filter(Boolean)
+            : [];
+        const walk = (idx) => {
+            const spiral = this._spiralCoords(idx);
+            let nx = 500 + spiral.x * 75;
+            let ny = 500 + spiral.y * 75;
+            return { nx, ny };
+        };
+        if (items.length) {
+            items.forEach((piece) => {
+                let { nx, ny } = walk(piece.gridIdx ?? 0);
+                const saved = this.piecePositions?.[piece.id];
+                if (saved) {
+                    if (saved.nx !== undefined) nx = saved.nx;
+                    if (saved.ny !== undefined) ny = saved.ny;
+                }
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            });
+        } else {
+            for (let i = 0; i < 12; i++) {
+                const { nx, ny } = walk(i);
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            }
+        }
+        if (!Number.isFinite(minNx)) {
+            return { w: 400, h: 400, cx: 500, cy: 500 };
+        }
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
+    }
+
+    lockMobileLayoutAnchor() {
+        if (this._mobileLayoutAnchorLocked) return;
+        this._mobileContentBounds = this.getFreestyleInitialVisualBounds();
+        this._mobileLayoutAnchorLocked = true;
+    }
+
+    _applyMobilePilesContainerGeometry(bounds) {
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        if (!vw || !vh || !bounds) return;
+        const board = this.localSize || 1000;
+        const docEl = document.documentElement;
+        docEl.style.height = '100%';
+        docEl.style.width = '100%';
+        docEl.style.maxHeight = '';
+        docEl.style.overflow = 'hidden';
+        document.body.style.display = 'block';
+        document.body.style.position = 'relative';
+        document.body.style.width = `${vw}px`;
+        document.body.style.height = `${vh}px`;
+        document.body.style.maxHeight = `${vh}px`;
+        document.body.style.minHeight = '0';
+        document.body.style.overflow = 'hidden';
+        document.body.style.margin = '0';
+        document.body.style.transform = '';
+        document.body.style.transformOrigin = '';
+        const container = document.getElementById('game-container');
+        if (container) {
+            container.style.position = 'absolute';
+            container.style.left = `${vw / 2 - bounds.cx}px`;
+            container.style.top = `${vh / 2 - bounds.cy}px`;
+            container.style.width = `${board}px`;
+            container.style.height = `${board}px`;
+            container.style.margin = '0';
+            container.style.transformOrigin = `${bounds.cx}px ${bounds.cy}px`;
+        }
+    }
+
+    /** Union of actual play pieces/nodes in local coordinates (not full board size). */
+    getMobileVisualBounds() {
+        const pad = this.isMobileViewport() ? 32 : 12;
+        const ls = this.localSize || 800;
+        const fallback = { w: ls, h: ls, cx: ls / 2, cy: ls / 2 };
+
+        if (this._isPilesBoard() || this._usesFixedSpiralMobileAnchor() || this._mobileLayoutPolicy() === 'piles-dynamic') {
+            return this.getPilesStableVisualBounds();
+        }
+
+        if (this.nodes?.length && this._usesFitSquareMobileLayout()) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (const n of this.nodes) {
+                const x = parseFloat(n.el?.style?.left) || 0;
+                const y = parseFloat(n.el?.style?.top) || 0;
+                minX = Math.min(minX, x - pad);
+                maxX = Math.max(maxX, x + pad);
+                minY = Math.min(minY, y - pad);
+                maxY = Math.max(maxY, y + pad);
+            }
+            if (!Number.isFinite(minX)) return fallback;
+            return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+        }
+
+        const container = document.getElementById('game-container');
+        const pieces = container?.querySelectorAll('.piece') || [];
+        if (pieces.length) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            pieces.forEach((p) => {
+                const x = parseFloat(p.style.left) || 0;
+                const y = parseFloat(p.style.top) || 0;
+                const w = p.offsetWidth || 36;
+                const h = p.offsetHeight || 36;
+                minX = Math.min(minX, x - pad);
+                maxX = Math.max(maxX, x + w + pad);
+                minY = Math.min(minY, y - pad);
+                maxY = Math.max(maxY, y + h + pad);
+            });
+            if (!Number.isFinite(minX)) return fallback;
+            return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+        }
+
+        return fallback;
+    }
+
+    /** Recompute mobile zoom anchor once (not per render) — line fits board; piles use stable center. */
+    refreshMobileLayout() {
+        if (!this.isMobileViewport()) return;
+        if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
+            this.fitBoardToViewport();
+            return;
+        }
+        if (this._shouldLockFreestyleMobileLayout()) {
+            this.lockMobileLayoutAnchor();
+            this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+            this.applyZoom();
+            return;
+        }
+        this._mobileContentBounds = this.getPilesStableVisualBounds();
+        this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+        this.applyZoom();
+    }
+
+    /** Resize viewport shell without recomputing freestyle anchor (cx/cy stay fixed). */
+    refreshMobileLayoutViewportOnly() {
+        if (!this.isMobileViewport()) return;
+        if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
+            this.fitBoardToViewport();
+            return;
+        }
+        if (!this._mobileLayoutAnchorLocked || !this._mobileContentBounds) {
+            this.refreshMobileLayout();
+            return;
+        }
+        this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+        this.applyZoom();
+    }
+
+    getDefaultZoomForViewport() {
+        if (this.isMobileViewport()) {
+            const { width: vw, height: vh } = this.getVisibleViewportSize();
+            const margin = 20;
+            const bounds = this._shouldLockFreestyleMobileLayout()
+                ? (this._mobileContentBounds || this.getFreestyleInitialVisualBounds())
+                : this.getMobileVisualBounds();
+            const scaleX = (vw - margin * 2) / Math.max(bounds.w, 1);
+            const scaleY = (vh - margin * 2) / Math.max(bounds.h, 1);
+            const base = Math.min(Math.max(Math.min(scaleX, scaleY), 0.25), 5);
+            this._mobileBaseFit = base;
+            this._mobileContentBounds = bounds;
+            return base;
+        }
+        return 1;
+    }
+
+    restorePersistedZoom() {
+        if (!this.gameName || this.gameName === 'unknown') return;
+        const raw = localStorage.getItem(this.getZoomStorageKey());
+        const saved = raw != null ? parseFloat(raw) : NaN;
+        if (Number.isFinite(saved)) {
+            this.targetZoom = Math.min(Math.max(saved, 0.2), 5);
+            this.zoom = this.targetZoom;
+            this._fitZoomInitialized = true;
+            return;
+        }
+        const def = this.getDefaultZoomForViewport();
+        this.targetZoom = def;
+        this.zoom = def;
+        this._fitZoomInitialized = true;
+    }
+
+    savePersistedZoom() {
+        if (!this.gameName || this.gameName === 'unknown') return;
+        localStorage.setItem(this.getZoomStorageKey(), String(this.targetZoom));
+    }
+
+    scheduleSavePersistedZoom() {
+        clearTimeout(this._saveZoomTimer);
+        this._saveZoomTimer = setTimeout(() => this.savePersistedZoom(), 150);
+    }
+
+    /** Fit square boards (line only) inside the visible iframe — mobile viewport only. */
+    fitBoardToViewport() {
+        if (!this.isMobileViewport()) return;
+        if (!this.localSize || !this._usesFitSquareMobileLayout()) return;
+        const container = document.getElementById('game-container');
+        if (!container) return;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        if (!vw || !vh) return;
+        this._mobileContentBounds = this.getMobileVisualBounds();
+
+        container.style.width = `${this.localSize}px`;
+        container.style.height = `${this.localSize}px`;
+        container.style.margin = '0';
+        container.style.flexShrink = '0';
+
+        const docEl = document.documentElement;
+        docEl.style.height = `${vh}px`;
+        docEl.style.width = `${vw}px`;
+        docEl.style.maxHeight = `${vh}px`;
+        docEl.style.overflow = 'hidden';
+        document.body.style.display = 'block';
+        document.body.style.position = 'relative';
+        document.body.style.width = `${vw}px`;
+        document.body.style.height = `${vh}px`;
+        document.body.style.maxHeight = `${vh}px`;
+        document.body.style.minHeight = '0';
+        document.body.style.overflow = 'hidden';
+        document.body.style.margin = '0';
+
+        if (!this._fitZoomInitialized) {
+            this.restorePersistedZoom();
+        }
+        this.applyZoom();
+    }
+
+    nodeSnapRadius() {
+        return this.isMobileViewport() ? 80 : 60;
     }
 
     fromWorld(nx, ny) {
@@ -760,8 +1478,13 @@ class BaseGame {
     }
 
     initIdentity(name, mode) {
+        const identityChanged = this.gameName !== name || this.mode !== mode;
         this.gameName = name;
         this.mode = mode;
+        if (typeof GameAdapter !== 'undefined') {
+            GameAdapter.attachGameAdapter(this);
+            GameAdapter.refreshCapabilities(this);
+        }
         const urlParams = new URLSearchParams(window.location.search);
         this.roomId = urlParams.get('room');
         this.isMultiplayer = !!(this.roomId && this.roomId !== 'lobby');
@@ -772,6 +1495,14 @@ class BaseGame {
 
         this.loadScores();
         this.renderScoreboard();
+        if (identityChanged) {
+            this._fitZoomInitialized = false;
+            this._mobileContentBounds = null;
+            this._mobileLayoutAnchorLocked = false;
+        }
+        this.restorePersistedZoom();
+        this.applyZoom();
+        requestAnimationFrame(() => this.refreshMobileLayout());
 
         // Notify parent hub
         window.parent.postMessage({ type: 'init-identity', game: this.gameName, mode: this.mode }, '*');
@@ -814,6 +1545,7 @@ class BaseGame {
     }
 
     initZoom() {
+        const container = document.getElementById('game-container') || document.body;
         this.startZoomLoop();
         window.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -821,10 +1553,81 @@ class BaseGame {
         }, { passive: false });
 
         window.addEventListener('message', (e) => {
+            if (!e.data || typeof e.data.type !== 'string') return;
+            if (e.data.type === 'hub-visible-viewport') {
+                this._hubVisibleViewport = {
+                    width: e.data.width,
+                    height: e.data.height,
+                    offsetTop: e.data.offsetTop
+                };
+                if (this.isMobileViewport()) {
+                    if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
+                    else this.refreshMobileLayout();
+                } else if (this.requestRender) {
+                    this.requestRender();
+                }
+                return;
+            }
             if (e.data.type === 'wheel') this.handleZoom(e.data.deltaY);
+            if (e.data.type === 'pinch-zoom-get') {
+                window.parent.postMessage({ type: 'pinch-zoom-current', zoom: this.targetZoom }, '*');
+            }
+            if (e.data.type === 'pinch-zoom-set' && typeof e.data.zoom === 'number') {
+                this.targetZoom = Math.min(Math.max(e.data.zoom, 0.2), 5.0);
+                this.zoom = this.targetZoom;
+                this.applyZoom();
+                this.scheduleSavePersistedZoom();
+            }
+            if (e.data.type === 'pinch-zoom' && typeof e.data.scale === 'number') {
+                const next = this.targetZoom * e.data.scale;
+                this.targetZoom = Math.min(Math.max(next, 0.2), 5.0);
+                this.scheduleSavePersistedZoom();
+            }
         });
 
+        this.initPinchZoom(container);
+
         this.renderScoreboard();
+    }
+
+    initPinchZoom(container) {
+        const base = container || document.getElementById('game-container') || document.body;
+        const target = (this.isMobileViewport() && this._usesFitSquareMobileLayout())
+            ? (document.body || base)
+            : base;
+        let pinch = null;
+
+        const dist = (a, b) => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+
+        target.addEventListener('touchstart', (e) => {
+            if (!this.isMobileViewport()) return;
+            if (e.touches.length === 2) {
+                this._pinchActive = true;
+                pinch = { d0: dist(e.touches[0], e.touches[1]), zoom0: this.zoom };
+            }
+        }, { passive: true });
+
+        target.addEventListener('touchmove', (e) => {
+            if (!this.isMobileViewport()) return;
+            if (!pinch || e.touches.length !== 2) return;
+            this._pinchActive = true;
+            e.preventDefault();
+            const d = dist(e.touches[0], e.touches[1]);
+            if (!pinch.d0) pinch.d0 = d;
+            const scale = d / pinch.d0;
+            const next = pinch.zoom0 * scale;
+            this.targetZoom = Math.min(Math.max(next, 0.2), 5.0);
+            this.scheduleSavePersistedZoom();
+        }, { passive: false });
+
+        const endPinch = (e) => {
+            if (e.touches && e.touches.length >= 2) return;
+            this._pinchActive = false;
+            pinch = null;
+            this.scheduleSavePersistedZoom();
+        };
+        target.addEventListener('touchend', endPinch, { passive: true });
+        target.addEventListener('touchcancel', endPinch, { passive: true });
     }
 
     initKeybinds() {
@@ -939,6 +1742,12 @@ class BaseGame {
                 }
             }
         };
+
+        picker.onchange = () => {
+            picker.style.setProperty('opacity', '0', 'important');
+            picker.style.setProperty('pointer-events', 'none', 'important');
+            this.editingType = null;
+        };
     }
 
     openColorPicker(type) {
@@ -953,11 +1762,32 @@ class BaseGame {
             picker.style.left = '50%';
             picker.style.top = '80%';
             picker.style.transform = 'translate(-50%, -50%)';
-            picker.style.opacity = '0';
-            picker.style.pointerEvents = 'auto';
+            if (this.isMobileViewport()) {
+                picker.style.setProperty('opacity', '1', 'important');
+                picker.style.setProperty('pointer-events', 'auto', 'important');
+                picker.style.width = '56px';
+                picker.style.height = '56px';
+                picker.style.zIndex = '100000';
+            } else {
+                picker.style.opacity = '0';
+                picker.style.pointerEvents = 'auto';
+            }
 
             if (currentColor.startsWith('#')) picker.value = currentColor;
-            picker.click();
+            if (typeof picker.showPicker === 'function') {
+                try {
+                    const shown = picker.showPicker();
+                    if (shown && typeof shown.catch === 'function') {
+                        shown.catch(() => picker.click());
+                    } else {
+                        picker.click();
+                    }
+                } catch (_) {
+                    picker.click();
+                }
+            } else {
+                picker.click();
+            }
         }
     }
 
@@ -989,6 +1819,11 @@ class BaseGame {
     handleZoom(deltaY) {
         const factor = deltaY > 0 ? 0.9 : 1.1;
         this.targetZoom = Math.min(Math.max(this.targetZoom * factor, 0.2), 5.0);
+        if (!this.isMobileViewport()) {
+            this.zoom = this.targetZoom;
+            this.applyZoom();
+        }
+        this.scheduleSavePersistedZoom();
     }
 
     startZoomLoop() {
@@ -1005,7 +1840,40 @@ class BaseGame {
 
     applyZoom() {
         const target = document.getElementById('game-container') || document.body;
-        target.style.transform = `scale(${this.zoom})`;
+        if (this.isMobileViewport() && this._usesFitSquareMobileLayout() && this._mobileContentBounds) {
+            const { width: vw, height: vh } = this.getVisibleViewportSize();
+            const b = this._mobileContentBounds;
+            document.body.style.transform = '';
+            document.body.style.transformOrigin = '';
+            target.style.position = 'absolute';
+            target.style.left = `${vw / 2 - b.cx}px`;
+            target.style.top = `${vh / 2 - b.cy}px`;
+            target.style.width = `${this.localSize}px`;
+            target.style.height = `${this.localSize}px`;
+            target.style.transformOrigin = `${b.cx}px ${b.cy}px`;
+            target.style.transform = `scale(${this.zoom})`;
+        } else if (this.isMobileViewport() && !this._usesFitSquareMobileLayout()) {
+            if (this._shouldLockFreestyleMobileLayout()) {
+                if (!this._mobileLayoutAnchorLocked) this.lockMobileLayoutAnchor();
+            } else if (!this._mobileContentBounds) {
+                this._mobileContentBounds = this.getPilesStableVisualBounds();
+            }
+            const b = this._mobileContentBounds;
+            if (!b) return;
+            this._applyMobilePilesContainerGeometry(b);
+            target.style.transform = `scale(${this.zoom})`;
+        } else {
+            document.body.style.transform = '';
+            document.body.style.transformOrigin = '';
+            target.style.position = '';
+            target.style.left = '';
+            target.style.top = '';
+            target.style.width = '';
+            target.style.height = '';
+            target.style.margin = '';
+            target.style.transformOrigin = 'center center';
+            target.style.transform = `scale(${this.zoom})`;
+        }
 
         let debug = document.getElementById('debug-info');
         if (!debug && this.devMode) {
@@ -1036,6 +1904,14 @@ class BaseGame {
 
         this.isOver = true;
         this.winner = winner;
+
+        if (this.isMultiplayer && this.isHost()) {
+            const updates = { winner };
+            if (this._partyMemberCount() >= 2) {
+                updates.status = 'playing';
+            }
+            this.updateMetadata(updates);
+        }
         this.updateTurnIndicator();
 
         // Increment and Save Scores
@@ -1067,7 +1943,11 @@ class BaseGame {
             console.log('[ENGINE] Guest waiting for host auto-reset');
         } else if (this.isHost()) {
             const isTest = this.roomId && this.roomId.startsWith('MP_AUDIT');
-            const delay = isTest ? 1000 : 2000;
+            const dwell = Number(
+                (typeof window !== 'undefined' && window.FIVE_VICTORY_DWELL_MS)
+                    || (isTest ? 5000 : 2500)
+            );
+            const delay = isTest ? Math.max(dwell, 5000) : dwell;
             console.log(`[ENGINE] Host scheduling auto-reset in ${delay}ms`);
             this.clearAutoReset();
             this.autoResetTimer = setTimeout(() => {
@@ -1115,6 +1995,10 @@ class BaseGame {
     }
 
     updateTurnIndicator() {
+        if (typeof GameAdapter !== 'undefined' && !GameAdapter.cap(this, 'supportsTurnIndicator')) {
+            return;
+        }
+        const turnMsg = typeof HubProtocol !== 'undefined' ? HubProtocol.MSG.UPDATE_TURN : 'update-turn';
         let text = "";
         let color = "white";
 
@@ -1138,25 +2022,31 @@ class BaseGame {
         }
 
         window.parent.postMessage({
-            type: 'update-turn',
+            type: turnMsg,
             text: text,
             color: actualColor || color,
             isOver: this.isOver
         }, '*');
     }
 
+    /** Shorthand for capability checks on this instance. */
+    hasCap(name) {
+        return typeof GameAdapter !== 'undefined' ? GameAdapter.cap(this, name) : true;
+    }
+
     static setupDragging(el, onDragEnd, context, onDragStart, onDrag) {
         let startX, startY, isDragging = false;
         const threshold = 5;
+        el.style.touchAction = 'none';
 
-        el.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return;
-            // Multiplayer Turn Check
+        const onPointerDown = (e) => {
+            if (e.button !== undefined && e.button !== 0) return;
             if (context && context.isMultiplayer && context.turn !== context.playerRole) return;
             if (context && !context.isMultiplayer && (context.turn !== 'P1' || context.isOver)) return;
             if (onDragStart && onDragStart(el) === false) return;
 
-            startX = e.clientX; startY = e.clientY;
+            startX = e.clientX;
+            startY = e.clientY;
             const zoom = (context && context.zoom) || 1.0;
             const rect = el.getBoundingClientRect();
             const parentRect = el.parentElement.getBoundingClientRect();
@@ -1167,36 +2057,49 @@ class BaseGame {
             let movePending = false;
             let latestMe = null;
 
-            const onMouseMove = (me) => {
+            try {
+                if (e.pointerId != null) el.setPointerCapture(e.pointerId);
+            } catch (_) { /* ignore */ }
+
+            const onPointerMove = (me) => {
                 latestMe = me;
-                if (!isDragging && (Math.abs(me.clientX - startX) > threshold || Math.abs(me.clientY - startY) > threshold)) isDragging = true;
+                if (!isDragging && (Math.abs(me.clientX - startX) > threshold || Math.abs(me.clientY - startY) > threshold)) {
+                    isDragging = true;
+                }
                 if (isDragging && !movePending) {
                     movePending = true;
                     requestAnimationFrame(() => {
                         if (!isDragging || !latestMe) { movePending = false; return; }
                         const dx = (latestMe.clientX - startX) / zoom;
                         const dy = (latestMe.clientY - startY) / zoom;
-                        let nextLeft = Math.max(0, Math.min(initialLeft + dx, (parentRect.width - rect.width) / zoom));
-                        let nextTop = Math.max(0, Math.min(initialTop + dy, (parentRect.height - rect.height) / zoom));
-                        el.style.left = `${nextLeft}px`; el.style.top = `${nextTop}px`;
-
+                        const nextLeft = Math.max(0, Math.min(initialLeft + dx, (parentRect.width - rect.width) / zoom));
+                        const nextTop = Math.max(0, Math.min(initialTop + dy, (parentRect.height - rect.height) / zoom));
+                        el.style.left = `${nextLeft}px`;
+                        el.style.top = `${nextTop}px`;
                         if (onDrag) onDrag(nextLeft, nextTop);
-
                         movePending = false;
                     });
                 }
             };
 
-
-            const onMouseUp = (ue) => {
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
+            const onPointerUp = (ue) => {
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+                document.removeEventListener('pointercancel', onPointerUp);
+                try {
+                    if (ue.pointerId != null) el.releasePointerCapture(ue.pointerId);
+                } catch (_) { /* ignore */ }
                 if (onDragEnd) onDragEnd(isDragging, el, ue);
-                isDragging = false; el.style.transition = '';
+                isDragging = false;
+                el.style.transition = '';
             };
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-        });
+
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', onPointerUp);
+            document.addEventListener('pointercancel', onPointerUp);
+        };
+
+        el.addEventListener('pointerdown', onPointerDown);
     }
 
     startRepairWatchdog() {

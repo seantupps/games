@@ -18,6 +18,12 @@ backups/
 ptests/
 scripts/
 
+# Phone debug relay (local dev)
+debug-reports/
+.five/
+.ngrok-token
+ngrok.local.yml
+
 # Firebase emulator / CLI
 .firebase/
 .emulator-data/

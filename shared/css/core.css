@@ -11,6 +11,17 @@
     /* Default AI red */
     --theme-color-rgb: 59, 130, 246;
     --game-zoom: 1;
+
+    /* PC scoreboard size; spacing shared with mobile (--hub-turn-gap / --hub-turn-indent) */
+    --hub-score-top: 32px;
+    --hub-score-left: 32px;
+    --hub-score-font: 2.2rem;
+    --hub-score-pad-block: 12px;
+    --hub-score-pad-inline: 20px;
+    --hub-score-line: 1.15;
+    --hub-turn-gap: 1px;
+    --hub-turn-indent: 4px;
+    --hub-turn-font: 0.8rem;
 }
 
 
@@ -75,23 +86,62 @@ body {
 }
 
 
-/* Scoreboard - Back to TOP LEFT - SCALED DOWN SLIGHTLY */
+/* Scoreboard — PC size by default; mobile overrides in mobile.css */
 .scoreboard {
     position: fixed;
-    top: 32px;
-    left: 32px;
-    padding: 12px 20px;
+    top: var(--hub-score-top);
+    left: var(--hub-score-left);
+    padding: var(--hub-score-pad-block) var(--hub-score-pad-inline);
     background: transparent;
     backdrop-filter: none;
     border: none;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 2.2rem;
-    /* Reduced from 2.8rem to prevent clipping */
+    font-size: var(--hub-score-font);
     font-weight: 900;
     color: white;
     text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9);
     letter-spacing: -0.02em;
     pointer-events: none;
+}
+
+/* Turn flag — mobile spacing (gap + indent); PC uses larger --hub-turn-font */
+#global-turn-indicator {
+    position: fixed;
+    top: calc(
+        var(--hub-score-top) + (2 * var(--hub-score-pad-block))
+        + (var(--hub-score-font) * var(--hub-score-line)) + var(--hub-turn-gap)
+    );
+    left: calc(var(--hub-score-left) + var(--hub-turn-indent));
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    border: none;
+    border-radius: 0;
+    z-index: 10020;
+    font-size: var(--hub-turn-font);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: opacity 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+    opacity: 0;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+#global-turn-indicator.visible {
+    opacity: 1;
+}
+
+#global-turn-indicator .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 10px currentColor;
 }
 
 
@@ -224,7 +274,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.1);
     padding: 16px 24px;
     border-radius: 16px;
-    z-index: 20000;
+    z-index: 10040;
     display: flex;
     flex-direction: column;
     gap: 16px;

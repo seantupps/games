@@ -5,10 +5,10 @@ Three targets — pick how you load the hub (root `index.html` on Pages: `/games
 | Target | When | How |
 |--------|------|-----|
 | **emulator** | Coding, Playwright, CI | `?firebase=emulator` or `window.FIVE_FIREBASE_TARGET = 'emulator'` |
-| **dev** | Real two-phone / two-laptop testing | `?firebase=dev` (configure `DEV` in `shared/js/firebase-env.js`) |
+| **dev** | Real two-phone / two-laptop testing | `?firebase=dev` (configure `DEV` in `shared/network/firebase-env.js`) |
 | **production** | Public release | Default (no query param) |
 
-Playwright **always** uses the emulator (`ptests/multiplayer/emulator-utils.js`). It does not hit production RTDB.
+Playwright **always** uses the emulator (`ptests/desktop/multiplayer/emulator-utils.js`). It does not hit production RTDB.
 
 ## Local stack (emulator + localhost)
 
@@ -41,10 +41,22 @@ Open the app manually:
 
 Emulator UI (optional): `http://127.0.0.1:4000/`
 
+## Real phone (emulator via ngrok)
+
+```powershell
+npm run phone:stack
+npm run phone:ngrok
+npm run phone:urls:wait
+```
+
+Open the printed **https** Game URL on your phone. The link includes `rtdbUrl=` so the RTDB emulator is reached through the second ngrok tunnel.
+
+See `docs/PHONE_TESTING.md`.
+
 ## Dev Firebase project
 
 1. Create a second Firebase project (e.g. `games-fad3a-dev`).
-2. Paste its web config into `DEV` in `shared/js/firebase-env.js`.
+2. Paste its web config into `DEV` in `shared/network/firebase-env.js`.
 3. Update `.firebaserc` `"dev"` project id.
 4. Deploy rules/functions to dev only:  
    `npx firebase deploy --config firebase.prod.json --project YOUR_DEV_PROJECT`

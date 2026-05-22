@@ -19,14 +19,20 @@ class LineGame extends BaseGame {
         this.initAISolver();
         this.loadAITable();
 
+        this.initIdentity('line', this.mode);
+
+        const refit = () => this.fitBoardToViewport();
+        requestAnimationFrame(refit);
+        window.addEventListener('resize', refit);
+        window.addEventListener('orientationchange', refit);
+
         const originalOnIdentitySynced = this.onIdentitySynced;
         this.onIdentitySynced = () => {
             if (originalOnIdentitySynced) originalOnIdentitySynced();
+            this.fitBoardToViewport();
             this.updateTurnIndicator();
             this.requestRender();
         };
-
-        this.initIdentity('line', this.mode);
         this.requestRender();
         window.game = this;
     }
@@ -244,7 +250,12 @@ class LineGame extends BaseGame {
             const x = 100 + (i % 4 * spacing), y = 100 + (Math.floor(i / 4) * spacing);
             const node = { id: i, used: false, center: { x, y }, el: document.createElement('div') };
             node.el.className = 'node'; node.el.dataset.id = i; node.el.style.left = `${x}px`; node.el.style.top = `${y}px`;
-            node.el.onmousedown = (e) => this.startDrag(i, e);
+            node.el.style.touchAction = 'none';
+            node.el.onpointerdown = (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                e.preventDefault();
+                this.startDrag(i, e);
+            };
             container.appendChild(node.el); this.nodes.push(node);
         }
     }
@@ -253,12 +264,21 @@ class LineGame extends BaseGame {
         if (this.isOver || (this.path.length > 0 && !this.endpoints.includes(id))) return;
         if (!this.isMyTurn()) return;
 
-        this.draggingId = id; this.nodes[id].el.classList.add('selected');
-        const mouseMove = (me) => this.dragLine(me);
-        const mouseUp = (ue) => this.endDrag(ue);
-        window.addEventListener('mousemove', mouseMove);
-        window.addEventListener('mouseup', mouseUp, { once: true });
-        this.mouseMoveRef = mouseMove;
+        this.draggingId = id;
+        this.nodes[id].el.classList.add('selected');
+        const pointerMove = (pe) => this.dragLine(pe);
+        const pointerUp = (ue) => {
+            window.removeEventListener('pointermove', pointerMove);
+            window.removeEventListener('pointercancel', pointerUp);
+            this.endDrag(ue);
+        };
+        window.addEventListener('pointermove', pointerMove);
+        window.addEventListener('pointerup', pointerUp, { once: true });
+        window.addEventListener('pointercancel', pointerUp, { once: true });
+        this.mouseMoveRef = pointerMove;
+        try {
+            if (e.pointerId != null) this.nodes[id].el.setPointerCapture(e.pointerId);
+        } catch (_) { /* ignore */ }
     }
 
     dragLine(e) {
@@ -283,7 +303,7 @@ class LineGame extends BaseGame {
     }
 
     endDrag(e) {
-        window.removeEventListener('mousemove', this.mouseMoveRef);
+        window.removeEventListener('pointermove', this.mouseMoveRef);
         const world = this.toWorld(e.clientX, e.clientY);
         const svgX = world.x;
         const svgY = world.y;
@@ -296,7 +316,8 @@ class LineGame extends BaseGame {
         let closestId = null, minDist = Infinity;
         this.nodes.forEach(node => {
             const dist = Math.sqrt((node.center.x - svgX) ** 2 + (node.center.y - svgY) ** 2);
-            if (dist < 60 && dist < minDist) { minDist = dist; closestId = node.id; }
+            const snap = this.nodeSnapRadius ? this.nodeSnapRadius() : 60;
+            if (dist < snap && dist < minDist) { minDist = dist; closestId = node.id; }
         });
         const startId = this.draggingId;
         this.draggingId = null;
@@ -387,6 +408,20 @@ class LineGame extends BaseGame {
 
     getBoardState() {
         return { lines: this.lines, path: this.path, endpoints: this.endpoints };
+    }
+
+    serializeBoard() {
+        return {
+            lines: this.lines,
+            path: this.path,
+            endpoints: this.endpoints,
+            initialized: true
+        };
+    }
+
+    applyBoard(board) {
+        if (!board) return;
+        this.applyState(board);
     }
 
     applyState(board) {

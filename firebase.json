@@ -18,16 +18,16 @@
     "emulators": {
         "database": {
             "port": 9000,
-            "host": "127.0.0.1"
+            "host": "0.0.0.0"
         },
         "functions": {
             "port": 5001,
-            "host": "127.0.0.1"
+            "host": "0.0.0.0"
         },
         "ui": {
             "enabled": true,
             "port": 4000,
-            "host": "127.0.0.1"
+            "host": "0.0.0.0"
         },
         "singleProjectMode": true
     }
