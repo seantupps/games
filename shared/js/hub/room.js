@@ -205,7 +205,7 @@
             startRoomHeartbeat();
         }
 
-        function leaveParty() {
+        async function leaveParty() {
             if (!ctx.roomId || ctx.roomId === 'lobby') {
                 global.ChatEngine.append({ sender: 'System', content: 'You are already in the lobby.' });
                 return;
@@ -226,20 +226,24 @@
                     updates[S.paths.users(leavingRoom, uid)] = null;
                 }
                 partyDbg('host leave RTDB update', { updates: Object.keys(updates) });
-                global.NetworkEngine.db.ref().update(updates).catch((err) => {
+                try {
+                    await global.NetworkEngine.db.ref().update(updates);
+                } catch (err) {
                     console.warn('[HUB] host leave dissolve update failed', err);
                     partyDbg('host leave RTDB update failed', { err: String(err) });
-                });
+                }
                 dissolvePartyAndReturnToLobby('The host left the party.', { skipTerminate: true });
                 return;
             }
 
             const S = global.RtdbSchema;
             if (global.NetworkEngine.isInitialized && uid) {
-                global.NetworkEngine.db.ref(S.paths.playerData(leavingRoom, uid)).remove();
-                global.NetworkEngine.db.ref(S.paths.users(leavingRoom, uid)).remove();
+                await Promise.all([
+                    global.NetworkEngine.db.ref(S.paths.playerData(leavingRoom, uid)).remove(),
+                    global.NetworkEngine.db.ref(S.paths.users(leavingRoom, uid)).remove()
+                ]);
             }
-            global.NetworkEngine.evaluateRoomLifecycleAfterLeave(leavingRoom);
+            await global.NetworkEngine.evaluateRoomLifecycleAfterLeave(leavingRoom);
             returnToLobbyCore('You left the party and returned to the lobby.');
         }
 

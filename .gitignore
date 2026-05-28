@@ -18,6 +18,9 @@ backups/
 ptests/
 scripts/
 
+# Vendored reference clones (local only; not submodules)
+references/
+
 # Phone debug relay (local dev)
 debug-reports/
 .five/
