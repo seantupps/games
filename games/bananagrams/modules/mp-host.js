@@ -6,6 +6,9 @@
             /** Drop players no longer in room playerData (non-host left). */
             _hostPurgeDepartedPlayers() {
                 if (!this._isMultiplayerMode() || !this.isHost()) return false;
+                // During active play (post-SPLIT), transient room snapshots can briefly omit playerData.
+                // Avoid destructive purges that can erase live inventory/ownership state.
+                if (this.gameStarted) return false;
                 const active = new Set(this._getPlayerUids());
                 const hostUid = this.roomData?.host || this._myUid();
                 if (hostUid) active.add(hostUid);
@@ -150,9 +153,13 @@
                 this._selectionHighlight = false;
                 this._bannerText = '';
                 this._bannerPlacement = 'center';
+                // Force a fresh mobile fit so opening rack is fully visible.
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
                 this.centerViewOnOrigin();
                 this._updateHudEl();
                 this.persistState();
+                this._soloDistributionInvariantCheck?.('setupNewHand');
                 this.requestRender();
                 this._syncViewportAfterLayout();
             },
@@ -195,15 +202,13 @@
                 if (!this._tilePool.length) return { ok: false, reason: 'empty-pool' };
         
                 const removed = owned[idx];
-                const poolCopy = [...this._tilePool];
-                const drawn = BananaRules.dumpTile(poolCopy, removed.letter, 3);
+                const nextPool = [...this._tilePool];
+                const drawn = BananaRules.dumpTile(nextPool, removed.letter, 3);
                 if (drawn.length < 3) return { ok: false, reason: 'short-pool' };
-        
-                const realDrawn = BananaRules.dumpTile(this._tilePool, removed.letter, 3);
-                if (realDrawn.length !== drawn.length) return { ok: false, reason: 'pool-race' };
-        
+
+                this._tilePool = nextPool;
                 owned.splice(idx, 1);
-                realDrawn.forEach((letter) => {
+                drawn.forEach((letter) => {
                     owned.push({
                         id: `t-${this._nextTileId++}`,
                         letter,
@@ -229,30 +234,86 @@
                 const hand = uid === myUid
                     ? this.tiles
                     : (guestLayout ? this._handFromOwnedAndPositions(uid, guestLayout) : null);
-                if (!hand?.length) return false;
+                if (!hand?.length || hand.length < 3) return false;
                 const result = BananaGrid.validateGrid(hand, this._checker);
                 if (!result.ok || !this._allTilesPlacedOn(hand)) return false;
+                const hasThreeTileWord = (result.words || []).some((w) => String(w || '').length >= 3);
+                if (!hasThreeTileWord) return false;
         
-                const uids = [...this._getPlayerUids()].sort();
+                const board = this._mpBoardFromRoom?.(this.roomData) || {};
+                const active = new Set(this._getPlayerUids().filter(Boolean));
+                const hostUid = this.roomData?.host || this._myUid();
+                if (hostUid) active.add(hostUid);
+                active.add(uid);
+                const uids = [...active].filter(Boolean).sort();
+                const roomOwned = board?.tilesOwnedByPlayer || {};
+                const ownedByUid = {};
+                // Peel uses an explicit in-memory baseline to avoid room snapshot races.
+                uids.forEach((u) => {
+                    const remote = Array.isArray(roomOwned?.[u])
+                        ? roomOwned[u].map((t) => ({ id: t.id, letter: t.letter, faceUp: !!t.faceUp }))
+                        : [];
+                    const local = Array.isArray(this._mpOwned?.[u])
+                        ? this._mpOwned[u].map((t) => ({ id: t.id, letter: t.letter, faceUp: !!t.faceUp }))
+                        : [];
+                    ownedByUid[u] = local.length ? local : remote;
+                });
+                if (guestLayout && uid !== myUid && ownedByUid[uid]?.length) {
+                    const letterById = {};
+                    ownedByUid[uid].forEach((t) => { letterById[t.id] = t.letter; });
+                    const fallback = ownedByUid[uid];
+                    ownedByUid[uid] = guestLayout.map((p, idx) => ({
+                        id: p.id,
+                        letter: letterById[p.id] || fallback[idx % Math.max(fallback.length, 1)]?.letter || 'A',
+                        faceUp: true
+                    }));
+                }
                 const playerCount = uids.length;
                 if (this._tilePool.length < playerCount) {
+                    if (!BananaGrid.eachTileOccupiesUniqueCell(hand)) return false;
                     this._onPlayerWins(uid);
                     return true;
                 }
                 const drawn = {};
+                const drawnIds = {};
                 uids.forEach((u) => {
                     const letters = BananaRules.drawFromPool(this._tilePool, 1);
                     if (!letters.length) return;
                     const id = `t-${this._nextTileId++}`;
-                    if (!this._mpOwned[u]) this._mpOwned[u] = [];
-                    this._mpOwned[u].push({ id, letter: letters[0], faceUp: true });
+                    if (!ownedByUid[u]) ownedByUid[u] = [];
+                    ownedByUid[u].push({ id, letter: letters[0], faceUp: true });
                     drawn[u] = letters[0];
+                    drawnIds[u] = id;
+                });
+                if (guestLayout && uid !== myUid) {
+                    const letterById = {};
+                    (hand || []).forEach((t) => {
+                        if (t?.id) letterById[t.id] = t.letter;
+                    });
+                    const rebuilt = guestLayout
+                        .filter((p) => p?.id != null)
+                        .map((p) => ({
+                            id: p.id,
+                            letter: letterById[p.id] || 'A',
+                            faceUp: true
+                        }));
+                    if (drawnIds[uid] && drawn[uid]) {
+                        rebuilt.push({ id: drawnIds[uid], letter: drawn[uid], faceUp: true });
+                    }
+                    ownedByUid[uid] = rebuilt;
+                }
+                uids.forEach((u) => {
+                    this._mpOwned[u] = ownedByUid[u] || [];
                 });
                 this._lastPeelDraws = drawn;
                 this._peelSeq = (this._peelSeq || 0) + 1;
                 this._peelActorUid = uid;
                 uids.forEach((u) => this._hostBumpInventorySeq(u));
-                this._hostSyncBoard({ immediate: true });
+                if (typeof this._hostWriteBoard === 'function') {
+                    this._hostWriteBoard('playing');
+                } else {
+                    this._hostSyncBoard({ immediate: true });
+                }
                 return true;
             },
 
@@ -272,11 +333,20 @@
                 }
                 if (msg.type === 'dump' && msg.tileId) {
                     if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
+                    if (Array.isArray(msg.owned) && msg.owned.length) {
+                        this._hostSetOwned(uid, msg.owned, false);
+                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
+                        if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
+                    }
                     console.warn('[Bananagrams] guest dump failed on host for', uid, msg.tileId);
-                    return 'drop';
+                    return 'retry';
                 }
                 if (msg.type === 'peel') {
                     const layout = Array.isArray(msg.positions) ? msg.positions : null;
+                    if (Array.isArray(msg.owned) && msg.owned.length) {
+                        this._hostSetOwned(uid, msg.owned, false);
+                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
+                    }
                     if (this._hostPeelForPlayer(uid, layout)) return 'handled';
                     return 'drop';
                 }

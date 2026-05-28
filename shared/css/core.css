@@ -353,7 +353,7 @@ body {
     color: white;
 }
 
-/* Hub victory banner (classic look; fitWinBanner may shrink font to stay in viewport) */
+/* Hub victory banner (fitWinBanner may shrink font to stay in viewport) */
 #global-win-banner {
     position: fixed;
     top: 15%;
@@ -362,13 +362,13 @@ body {
     z-index: 10030;
     box-sizing: border-box;
     width: max-content;
-    max-width: min(92vw, calc(100vw - 24px));
-    max-height: min(40vh, calc(100vh - 24px));
+    max-width: min(94vw, calc(100vw - 24px));
+    max-height: min(44vh, calc(100vh - 24px));
     overflow: hidden;
-    font-size: 2.625rem;
+    font-size: 3.75rem;
     font-weight: 900;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     color: white;
     pointer-events: none;
     opacity: 0;
@@ -392,6 +392,16 @@ body {
 #global-win-banner.visible:not(.is-fitting) {
     transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1),
         transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+/* Fade out: opacity only — keep fitted size/position until hidden (avoids pre-fade jump) */
+#global-win-banner.is-fading-out {
+    opacity: 0;
+    transform: translateX(-50%) translateY(0) !important;
+    transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1) !important;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 /* Bananagrams: Done is fixed top-center in the game iframe — keep win text below it */

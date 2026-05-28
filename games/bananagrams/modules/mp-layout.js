@@ -19,6 +19,17 @@
                 return `bananagrams_layout_${room || 'lobby'}_${uid}`;
             },
 
+            getHandPersistKey() {
+                let room = this.roomId;
+                if (!room || room === 'lobby') {
+                    try {
+                        room = new URLSearchParams(window.location.search).get('room');
+                    } catch (_) { /* ignore */ }
+                }
+                const uid = this._myUid() || 'local';
+                return `bananagrams_hand_${room || 'lobby'}_${uid}`;
+            },
+
             /** MP clients cache their own layout locally so refresh preserves in-progress boards. */
             _loadLocalLayout() {
                 if (!this._isMultiplayerMode()) return {};
@@ -36,9 +47,27 @@
                 } catch (_) { /* ignore */ }
             },
 
+            _loadLocalHand() {
+                if (!this._isMultiplayerMode()) return [];
+                try {
+                    const hand = JSON.parse(localStorage.getItem(this.getHandPersistKey()) || '[]');
+                    return Array.isArray(hand) ? hand : [];
+                } catch (_) {
+                    return [];
+                }
+            },
+
+            _saveLocalHand(hand) {
+                if (!this._isMultiplayerMode()) return;
+                try {
+                    localStorage.setItem(this.getHandPersistKey(), JSON.stringify(hand || []));
+                } catch (_) { /* ignore */ }
+            },
+
             _clearLocalLayout() {
                 try {
                     localStorage.removeItem(this.getLayoutPersistKey());
+                    localStorage.removeItem(this.getHandPersistKey());
                 } catch (_) { /* ignore */ }
             },
 
@@ -57,6 +86,13 @@
                 if (!uid) return;
                 const layout = this._layoutFromTiles(this.tiles);
                 this._saveLocalLayout(layout);
+                this._saveLocalHand((this.tiles || []).map((t) => ({
+                    id: t.id,
+                    letter: t.letter,
+                    faceUp: !!t.faceUp,
+                    x: Math.round(t.x),
+                    y: Math.round(t.y)
+                })));
                 if (!this.isHost()) return;
                 this._hostEnsureMpStores();
                 if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
@@ -75,9 +111,15 @@
             },
 
             _layoutMapForPlayer(board, uid, owned) {
-                if (uid === this._myUid() && !this.isHost()) {
-                    const local = this._pruneLayout(this._loadLocalLayout(), owned);
-                    if (Object.keys(local).length) return local;
+                // On refresh, always prefer local cached layout for the current player (host or guest).
+                // This avoids falling back to stale/incomplete board tilePositions and snapping tiles back.
+                if (uid === this._myUid()) {
+                    // Before SPLIT, tile ids restart from t-0 and stale local layouts from prior rounds
+                    // can misplace new deal tiles. Only apply local layout once gameplay has started.
+                    if (board?.gameStarted) {
+                        const local = this._pruneLayout(this._loadLocalLayout(), owned);
+                        if (Object.keys(local).length) return local;
+                    }
                 }
                 const list = board?.tilePositionsByPlayer?.[uid];
                 if (Array.isArray(list) && list.length) {

@@ -1,9 +1,20 @@
 (function (global) {
+    const Registry = global.GameRegistry;
     function attach(ctx) {
+        function syncUsernameEditability() {
+            const input = document.getElementById('username-input');
+            const sidebar = document.getElementById('settings-sidebar');
+            if (!input) return;
+            const canEdit = !!sidebar?.classList.contains('open');
+            input.readOnly = !canEdit;
+            input.classList.toggle('is-locked', !canEdit);
+        }
+
         function updateUI() {
             if (ctx.hubGames) ctx.hubGames.updateGamePickerUI();
             const input = document.getElementById('username-input');
             if (input) input.value = ctx.username;
+            syncUsernameEditability();
         }
         ctx.updateUI = updateUI;
 
@@ -14,6 +25,7 @@
             else if (force === false) sidebar.classList.remove('open');
             else sidebar.classList.toggle('open');
             localStorage.setItem('settingsOpen', sidebar.classList.contains('open'));
+            syncUsernameEditability();
         }
         global.toggleSidebar = toggleSidebar;
         ctx.toggleSidebar = toggleSidebar;
@@ -68,7 +80,8 @@
             if (turn?.classList.contains('visible')) add(turn, 'turn-indicator-visible');
 
             const fdoc = document.getElementById('game-frame')?.contentDocument;
-            if (fdoc && ctx.currentGame === 'bananagrams') {
+            const reviewCaps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
+            if (fdoc && reviewCaps.supportsPostGameReview) {
                 [
                     ['banana-done', fdoc.getElementById('banana-done-btn')],
                     ['banana-hud', fdoc.getElementById('banana-hud')],
@@ -92,7 +105,7 @@
         }
 
         function adjustWinBannerObstacleClearance(banner, box) {
-            if (!banner) return;
+            if (!banner || winBannerLayoutLocked) return;
             banner.style.removeProperty('top');
             banner.style.removeProperty('left');
             banner.style.transform = 'translateX(-50%)';
@@ -130,6 +143,7 @@
 
         function fitWinBannerToViewport(banner) {
             if (!banner) return;
+            if (winBannerLayoutLocked || isWinBannerLocked(banner)) return;
             if (!banner.classList.contains('visible') && !banner.classList.contains('is-fitting')) return;
             const mobile = document.documentElement.classList.contains('five-mobile');
             const box = getWinBannerViewportBox();
@@ -142,8 +156,8 @@
             banner.style.lineHeight = mobile ? '1.15' : '1.1';
             banner.style.whiteSpace = mobile ? 'normal' : 'nowrap';
             banner.style.overflowWrap = mobile ? 'anywhere' : 'normal';
-            const preferred = mobile ? 28 : 42;
-            const minSize = 20;
+            const preferred = mobile ? 28 : 60;
+            const minSize = mobile ? 18 : 26;
             const step = 2;
             let size = preferred;
             banner.style.fontSize = `${size}px`;
@@ -181,18 +195,82 @@
             }
         }
 
-        /** Bananagrams: nudge hub banner below iframe Done if boxes overlap. */
-        function adjustBananagramsWinBannerClearance(banner) {
-            if (!banner || ctx.currentGame !== 'bananagrams') return;
+        /** Post-game review: nudge hub banner below iframe Done if boxes overlap. */
+        function adjustPostGameReviewWinBannerClearance(banner) {
+            const caps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
+            if (!banner || !caps.supportsPostGameReview) return;
             adjustWinBannerObstacleClearance(banner, getWinBannerViewportBox());
         }
 
         let winBannerResizeBound = false;
         let winBannerFadeTimer = null;
         let winBannerSettleUntil = 0;
+        let winBannerFadeCleanupTimer = null;
+        let winBannerLayoutLocked = false;
+
+        function isWinBannerLocked(banner) {
+            return !!banner?.classList.contains('is-fading-out');
+        }
+
+        function lockWinBannerLayout(banner) {
+            if (!banner) return;
+            const rect = banner.getBoundingClientRect();
+            const fs = banner.style.fontSize || getComputedStyle(banner).fontSize;
+            banner.style.fontSize = fs;
+            banner.style.width = `${Math.ceil(rect.width)}px`;
+            banner.style.height = `${Math.ceil(rect.height)}px`;
+            banner.style.maxWidth = banner.style.width;
+            banner.style.maxHeight = banner.style.height;
+            banner.style.transform = 'translateX(-50%) translateY(0)';
+            winBannerLayoutLocked = true;
+        }
+
+        function unlockWinBannerLayout() {
+            winBannerLayoutLocked = false;
+        }
+
+        function cleanupWinBannerAfterHide(banner) {
+            if (!banner) return;
+            unlockWinBannerLayout();
+            banner.classList.remove('is-fitting', 'is-fading-out', 'visible');
+            // Keep fitted dimensions off-screen until next show (avoid flash if cleanup races a frame).
+            banner.style.visibility = 'hidden';
+            banner.style.fontSize = '';
+            banner.style.removeProperty('width');
+            banner.style.removeProperty('height');
+            banner.style.removeProperty('top');
+            banner.style.removeProperty('left');
+            banner.style.removeProperty('max-width');
+            banner.style.removeProperty('max-height');
+            banner.style.removeProperty('text-align');
+            banner.style.removeProperty('line-height');
+            banner.style.removeProperty('white-space');
+            banner.style.removeProperty('overflow-wrap');
+            banner.onclick = null;
+        }
+
+        function startWinBannerFadeOut(banner) {
+            if (!banner || isWinBannerLocked(banner)) return;
+            clearTimeout(winBannerFadeTimer);
+            lockWinBannerLayout(banner);
+            clearTimeout(winBannerFadeCleanupTimer);
+            banner.classList.add('is-fading-out');
+            banner.classList.remove('visible');
+            const finish = () => {
+                banner.removeEventListener('transitionend', onTransitionEnd);
+                clearTimeout(winBannerFadeCleanupTimer);
+                cleanupWinBannerAfterHide(banner);
+            };
+            const onTransitionEnd = (e) => {
+                if (e.target !== banner || e.propertyName !== 'opacity') return;
+                finish();
+            };
+            banner.addEventListener('transitionend', onTransitionEnd);
+            winBannerFadeCleanupTimer = setTimeout(finish, 750);
+        }
 
         function refitWinBannerHidden(banner) {
-            if (!banner?.classList.contains('visible')) return;
+            if (!banner?.classList.contains('visible') || isWinBannerLocked(banner)) return;
             banner.classList.add('is-fitting');
             requestAnimationFrame(() => {
                 fitWinBannerToViewport(banner);
@@ -206,7 +284,9 @@
             const refit = () => {
                 if (Date.now() < winBannerSettleUntil) return;
                 const banner = document.getElementById('global-win-banner');
-                if (!banner?.classList.contains('visible') || banner.classList.contains('is-fitting')) return;
+                if (!banner?.classList.contains('visible')
+                    || banner.classList.contains('is-fitting')
+                    || isWinBannerLocked(banner)) return;
                 refitWinBannerHidden(banner);
             };
             window.addEventListener('resize', refit);
@@ -218,11 +298,13 @@
                 const orig = global.FiveHubLayout.notifyGameFrameLayout.bind(global.FiveHubLayout);
                 global.FiveHubLayout.notifyGameFrameLayout = function (...args) {
                     const out = orig(...args);
-                    if (document.body.dataset.hubGame === 'bananagrams') {
+                    const caps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
+                    if (caps.supportsPostGameReview) {
                         const banner = document.getElementById('global-win-banner');
                         if (banner?.classList.contains('visible')
-                            && !banner.classList.contains('is-fitting')) {
-                            adjustBananagramsWinBannerClearance(banner);
+                            && !banner.classList.contains('is-fitting')
+                            && !isWinBannerLocked(banner)) {
+                            adjustPostGameReviewWinBannerClearance(banner);
                         }
                     } else {
                         refit();
@@ -238,6 +320,7 @@
             bindWinBannerResize();
 
             if (data.visible) {
+                banner.style.visibility = '';
                 if (data.bannerText) {
                     banner.innerText = data.bannerText;
                     banner.style.textTransform = 'none';
@@ -285,43 +368,52 @@
                     banner.style.textShadow = `0 0 20px ${winnerColor}`;
                 }
                 const mobile = document.documentElement.classList.contains('five-mobile');
-                banner.style.fontSize = mobile ? '28px' : '42px';
+                banner.style.fontSize = mobile ? '28px' : '60px';
+                banner.classList.remove('is-fading-out');
                 winBannerSettleUntil = Date.now() + 600;
                 banner.classList.add('is-fitting');
                 fitWinBannerToViewport(banner);
                 banner.classList.add('visible');
                 banner.classList.remove('is-fitting');
+                lockWinBannerLayout(banner);
                 winBannerSettleUntil = Date.now() + 600;
                 banner.onclick = () => {
                     clearTimeout(winBannerFadeTimer);
-                    banner.classList.remove('visible');
-                    banner.classList.remove('is-fitting');
+                    startWinBannerFadeOut(banner);
                 };
                 clearTimeout(winBannerFadeTimer);
                 let fadeMs = data.autoFadeMs;
-                if (data.visible && fadeMs == null && document.body.dataset.hubGame === 'bananagrams') {
-                    fadeMs = 4000;
+                if (data.visible && fadeMs == null) {
+                    const envFade = typeof window.FIVE_WIN_BANNER_FADE_MS !== 'undefined'
+                        ? Number(window.FIVE_WIN_BANNER_FADE_MS)
+                        : NaN;
+                    if (!Number.isNaN(envFade) && envFade > 0) {
+                        fadeMs = envFade;
+                    } else {
+                        const caps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
+                        if (typeof caps.winBannerAutoFadeMs === 'number' && caps.winBannerAutoFadeMs > 0) {
+                            fadeMs = caps.winBannerAutoFadeMs;
+                        }
+                    }
                 }
                 if (typeof fadeMs === 'number' && fadeMs > 0) {
-                    winBannerFadeTimer = setTimeout(() => {
-                        banner.classList.remove('visible');
-                        banner.style.fontSize = '';
-                        banner.style.removeProperty('top');
-                        banner.style.removeProperty('left');
-                        banner.onclick = null;
-                    }, fadeMs);
+                    winBannerFadeTimer = setTimeout(() => startWinBannerFadeOut(banner), fadeMs);
                 }
             } else {
                 clearTimeout(winBannerFadeTimer);
-                banner.classList.remove('visible');
-                banner.style.fontSize = '';
-                banner.style.removeProperty('top');
-                banner.onclick = null;
+                clearTimeout(winBannerFadeCleanupTimer);
+                if (banner.classList.contains('visible') && !isWinBannerLocked(banner)) {
+                    startWinBannerFadeOut(banner);
+                } else if (!isWinBannerLocked(banner)) {
+                    cleanupWinBannerAfterHide(banner);
+                }
             }
         }
         ctx.showWinBanner = showWinBanner;
+        ctx.startWinBannerFadeOut = startWinBannerFadeOut;
         ctx.fitWinBannerToViewport = fitWinBannerToViewport;
-        ctx.adjustBananagramsWinBannerClearance = adjustBananagramsWinBannerClearance;
+        ctx.adjustPostGameReviewWinBannerClearance = adjustPostGameReviewWinBannerClearance;
+        ctx.adjustBananagramsWinBannerClearance = adjustPostGameReviewWinBannerClearance;
 
         let hubOverlayMuteUntil = 0;
         function muteHubOverlayDismiss(ms = 450) {
@@ -379,7 +471,9 @@
             if (global.FiveViewport) global.FiveViewport.syncHubViewport();
             if (global.FiveHubLayout?.notifyGameFrameLayout) global.FiveHubLayout.notifyGameFrameLayout();
             const banner = document.getElementById('global-win-banner');
-            if (banner?.classList.contains('visible')) fitWinBannerToViewport(banner);
+            if (banner?.classList.contains('visible') && !isWinBannerLocked(banner)) {
+                fitWinBannerToViewport(banner);
+            }
         }
         window.addEventListener('resize', syncMobileUI);
         if (document.readyState === 'loading') {

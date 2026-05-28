@@ -78,19 +78,27 @@
                     }
                 }
         
+                this._applyMpActionBanners(board);
+            },
+
+            /** Peel/dump banners from board seq — safe even when full board apply is skipped. */
+            _applyMpActionBanners(board) {
+                if (!board) return;
                 const peelSeq = board.peelSeq || 0;
                 const dumpSeq = board.dumpSeq || 0;
                 if (peelSeq > (this._lastPeelSeq || 0)) {
                     this._lastPeelSeq = peelSeq;
-                    if (board.peelActorUid) {
-                        this._showBanner('Peel!', 2200, { actorUid: board.peelActorUid });
-                    }
+                    const actor = board.peelActorUid;
+                    this._showBanner('Peel!', 2200, {
+                        actorUid: actor !== undefined && actor !== null ? actor : null
+                    });
                 }
                 if (dumpSeq > (this._lastDumpSeq || 0)) {
                     this._lastDumpSeq = dumpSeq;
-                    if (board.dumpActorUid) {
-                        this._showBanner('Dump!', 2200, { actorUid: board.dumpActorUid });
-                    }
+                    const actor = board.dumpActorUid;
+                    this._showBanner('Dump!', 2200, {
+                        actorUid: actor !== undefined && actor !== null ? actor : null
+                    });
                 }
             },
 
@@ -107,12 +115,14 @@
 
             _applyMultiplayerBoard(board, options = {}) {
                 if (!board) return;
+                const hadTilesBeforeApply = (this.tiles?.length || 0) > 0;
                 this._seedMpAppliedResetFromRoom();
                 const traceCaller = options._traceCaller
                     || (this._doneTraceOn()
                         ? (new Error().stack || '').split('\n').slice(1, 4).join(' | ')
                         : '');
                 board = this._normalizeMpBoard(board);
+                this._applyMpActionBanners(board);
                 this._traceDoneApply(board, options, traceCaller);
                 const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
                 const epoch = S ? S.readResetCount(this.roomData) : (this.roomData?.global?.resetCount ?? 0);
@@ -254,9 +264,15 @@
         
                 this._updateHudEl();
                 this.renderScoreboard();
+                if (this.isMobileViewport?.() && this._usesPanZoomBoard?.() && !inReview && (this.tiles?.length || 0) > 0) {
+                    this.refreshMobileLayout();
+                }
                 if (layoutChanged) {
                     this.requestRender();
-                    this._syncViewportAfterLayout();
+                    const shouldSyncViewport = !!(options.reset
+                        || (!hadTilesBeforeApply && (this.tiles?.length || 0) > 0)
+                        || (this.isMobileViewport?.() && this._usesPanZoomBoard?.()));
+                    if (shouldSyncViewport) this._syncViewportAfterLayout();
                 } else {
                     this.requestRender();
                     if (inReview && this.tiles?.length) {
@@ -272,19 +288,26 @@
                 const tilesOwnedByPlayer = {};
                 if (!this.isHost()) return { tilesOwnedByPlayer };
                 this._hostEnsureMpStores();
-                const roomHands = this._mpBoardFromRoom(this.roomData)?.tilesOwnedByPlayer || {};
+                const roomBoard = this._mpBoardFromRoom(this.roomData) || {};
+                const roomHands = roomBoard.tilesOwnedByPlayer || {};
+                const roomInv = roomBoard.inventorySeq || {};
                 const active = new Set(this._getPlayerUids());
                 const hostUid = this.roomData?.host || this._myUid();
                 if (hostUid) active.add(hostUid);
                 const uids = new Set([
                     ...active,
-                    ...Object.keys(this._mpOwned || {}).filter((u) => active.has(u))
+                    ...Object.keys(this._mpOwned || {}),
+                    ...Object.keys(roomHands || {}),
+                    ...Object.keys(roomInv || {})
                 ]);
                 uids.forEach((uid) => {
                     if (!active.has(uid)) return;
                     let owned = this._mpOwned[uid] || [];
                     if (!owned.length && Array.isArray(roomHands[uid]) && roomHands[uid].length) {
                         owned = roomHands[uid];
+                    }
+                    if (!owned.length && Array.isArray(this._mpLastKnownOwned?.[uid]) && this._mpLastKnownOwned[uid].length) {
+                        owned = this._mpLastKnownOwned[uid];
                     }
                     if (owned.length) {
                         tilesOwnedByPlayer[uid] = owned.map((t) => ({
@@ -303,6 +326,8 @@
                 if (!this.isHost()) return { tilePositionsByPlayer };
                 this._hostEnsureMpStores();
                 if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
+                const roomBoard = this._mpBoardFromRoom(this.roomData) || {};
+                const roomPos = roomBoard.tilePositionsByPlayer || {};
                 const me = this._myUid();
                 if (me && this.tiles?.length) {
                     this._mpPlayerLayouts[me] = this._layoutFromTiles(this.tiles);
@@ -312,11 +337,13 @@
                 if (hostUid) active.add(hostUid);
                 const uids = new Set([
                     ...active,
-                    ...Object.keys(this._mpPlayerLayouts || {}).filter((u) => active.has(u))
+                    ...Object.keys(this._mpPlayerLayouts || {}),
+                    ...Object.keys(roomPos || {})
                 ]);
                 uids.forEach((uid) => {
                     if (!active.has(uid)) return;
-                    const positions = this._mpPlayerLayouts[uid];
+                    const positions = this._mpPlayerLayouts[uid]
+                        || this._positionsMapFromList(roomPos[uid] || []);
                     if (!positions || !Object.keys(positions).length) return;
                     const list = Object.entries(positions)
                         .filter(([, p]) => Number.isFinite(p?.x) && Number.isFinite(p?.y))
@@ -527,9 +554,9 @@
                         nextTileId: this._nextTileId,
                         started: this.started,
                         peelSeq: this._peelSeq || 0,
-                        peelActorUid: this._peelActorUid || undefined,
+                        peelActorUid: (this._peelSeq || 0) > 0 ? (this._peelActorUid || null) : null,
                         dumpSeq: this._dumpSeq || 0,
-                        dumpActorUid: this._dumpActorUid || undefined,
+                        dumpActorUid: (this._dumpSeq || 0) > 0 ? (this._dumpActorUid || null) : null,
                         scores: { ...this._mpScores },
                         tilesOwnedByPlayer,
                         inventorySeq: { ...(this._mpInventorySeq || {}) }

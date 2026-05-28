@@ -57,6 +57,12 @@
                     const b = this._reviewTilesBounds(this.tiles);
                     if (b) return { x: b.cx, y: b.cy };
                 }
+                if (this.tiles?.length) {
+                    const b = this.getPanZoomWorldVisualBounds();
+                    if (b && Number.isFinite(b.cx) && Number.isFinite(b.cy)) {
+                        return { x: b.cx, y: b.cy };
+                    }
+                }
                 return { x: this.ORIGIN, y: this.ORIGIN };
             },
 

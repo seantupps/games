@@ -106,7 +106,8 @@
 
         /** Join party room in RTDB + hub UI (after invite accepted). */
         function partyGameMode(gameId, mode) {
-            if (gameId === 'bananagrams') return 'multiplayer';
+            const reg = global.GameRegistry;
+            if (reg?.usesHubModeSwitch?.(gameId)) return reg.hubModeFor(gameId, true);
             return mode || ctx.gameMode;
         }
 

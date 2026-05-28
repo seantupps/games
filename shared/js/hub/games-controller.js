@@ -139,10 +139,10 @@
             state.currentGame = gameId;
             syncHubGameAttribute();
             let mode = localStorage.getItem(`${gameId}_mode`) || Registry.defaultModeFor(gameId);
-            if (gameId === 'bananagrams') {
-                mode = isLobby() ? 'solo' : 'multiplayer';
+            if (Registry.usesHubModeSwitch(gameId)) {
+                mode = Registry.hubModeFor(gameId, !isLobby());
                 try {
-                    localStorage.setItem('bananagrams_mode', mode);
+                    localStorage.setItem(`${gameId}_mode`, mode);
                 } catch (_) { /* ignore */ }
             }
             state.gameMode = Registry.normalizeMode(gameId, mode);

@@ -56,15 +56,10 @@
                         });
                         return;
                     }
-                    if (layoutMap[o.id]) {
-                        placed.push({
-                            id: o.id,
-                            letter: o.letter,
-                            faceUp: !!o.faceUp,
-                            x: layoutMap[o.id].x,
-                            y: layoutMap[o.id].y
-                        });
-                    } else if (runtimeById[o.id]) {
+                    // Prefer current in-memory tile positions over cached layout snapshots.
+                    // This avoids full-board translations when a stale layout map lags behind
+                    // live drag/snap state during peel/dump inventory updates.
+                    if (runtimeById[o.id]) {
                         const rt = runtimeById[o.id];
                         placed.push({
                             id: o.id,
@@ -72,6 +67,14 @@
                             faceUp: !!o.faceUp,
                             x: rt.x,
                             y: rt.y
+                        });
+                    } else if (layoutMap[o.id]) {
+                        placed.push({
+                            id: o.id,
+                            letter: o.letter,
+                            faceUp: !!o.faceUp,
+                            x: layoutMap[o.id].x,
+                            y: layoutMap[o.id].y
                         });
                     } else {
                         needSpawn.push(o);
@@ -116,8 +119,72 @@
                         });
                     });
                 } else {
-                    console.warn('[Bananagrams] viewport spawn full — rack fallback', needSpawn.length);
-                    this._rackTilesFromOwned(needSpawn).forEach((t) => placed.push(t));
+                    // If the viewport allocator is saturated, force-place newly added tiles
+                    // in currently visible cells (instead of origin rack, which may be offscreen).
+                    const forceVisible = [];
+                    const gap = BananaRules.TILE_GAP;
+                    const size = BananaRules.TILE_SIZE;
+                    const pad = BananaRules.spawnViewportPad();
+                    const viewportNow = this._getVisibleWorldBounds();
+                    const left = viewportNow.left + pad;
+                    const top = viewportNow.top + pad;
+                    const right = viewportNow.right - pad - size;
+                    const bottom = viewportNow.bottom - pad - size;
+                    const minGX = Math.ceil(left / gap) * gap;
+                    const maxGX = Math.floor(right / gap) * gap;
+                    const minGY = Math.ceil(top / gap) * gap;
+                    const maxGY = Math.floor(bottom / gap) * gap;
+                    const used = [...placed];
+                    const canPlace = (x, y) => {
+                        if (x < left || y < top || x + size > viewportNow.right - pad || y + size > viewportNow.bottom - pad) {
+                            return false;
+                        }
+                        for (const t of used) {
+                            if (BananaRules.tilesOverlap(x, y, t.x, t.y, size)) return false;
+                        }
+                        return true;
+                    };
+                    let cursorY = maxGY;
+                    let cursorX = minGX;
+                    needSpawn.forEach((o) => {
+                        let found = null;
+                        for (let y = cursorY; y >= minGY && !found; y -= gap) {
+                            for (let x = cursorX; x <= maxGX; x += gap) {
+                                if (canPlace(x, y)) {
+                                    found = { x, y };
+                                    break;
+                                }
+                            }
+                            cursorX = minGX;
+                        }
+                        if (!found) {
+                            for (let y = minGY; y <= maxGY && !found; y += gap) {
+                                for (let x = minGX; x <= maxGX; x += gap) {
+                                    if (canPlace(x, y)) {
+                                        found = { x, y };
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        const tile = found
+                            ? {
+                                id: o.id,
+                                letter: o.letter,
+                                faceUp: !!o.faceUp,
+                                x: found.x,
+                                y: found.y
+                            }
+                            : this._rackTilesFromOwned([o])[0];
+                        forceVisible.push(tile);
+                        used.push(tile);
+                    });
+                    if (forceVisible.some((t) => Number.isFinite(t?.x) && Number.isFinite(t?.y))) {
+                        console.warn('[Bananagrams] viewport spawn full — forced visible fallback', needSpawn.length);
+                    } else {
+                        console.warn('[Bananagrams] viewport spawn full — rack fallback', needSpawn.length);
+                    }
+                    forceVisible.forEach((t) => placed.push(t));
                 }
                 return placed;
             },
@@ -138,6 +205,7 @@
             _hostEnsureMpStores() {
                 if (!this._mpOwned) this._mpOwned = {};
                 if (!this._mpInventorySeq) this._mpInventorySeq = {};
+                if (!this._mpLastKnownOwned) this._mpLastKnownOwned = {};
             },
 
             _hostBumpInventorySeq(uid) {
@@ -152,6 +220,9 @@
                     letter: t.letter,
                     faceUp: !!t.faceUp
                 }));
+                if (this._mpOwned[uid].length) {
+                    this._mpLastKnownOwned[uid] = this._mpOwned[uid].map((t) => ({ ...t }));
+                }
                 if (bumpInventory) this._hostBumpInventorySeq(uid);
             },
 
@@ -201,6 +272,9 @@
                 if (inPlay && !owned.length && (this.tiles?.length > 0)) {
                     return;
                 }
+                if (typeof this._applyMpActionBanners === 'function') {
+                    this._applyMpActionBanners(board);
+                }
                 if (this._applyMpInventoryFromBoard(board, uid, { force: true })) {
                     this.requestRender();
                     this._syncViewportAfterLayout();
@@ -213,8 +287,25 @@
 
             _rebuildHandFromBoard(board, options = {}) {
                 const uid = this._myUid();
-                const owned = board.tilesOwnedByPlayer?.[uid] || [];
+                const owned = board.tilesOwnedByPlayer?.[uid]
+                    || board.hands?.[uid]
+                    || [];
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
+                if (!options.reset && inPlay && !owned.length && !this.isHost()) {
+                    const cached = this._loadLocalHand?.() || [];
+                    if (cached.length) {
+                        this.tiles = cached.map((t) => ({
+                            id: t.id,
+                            letter: t.letter,
+                            faceUp: !!t.faceUp,
+                            x: t.x,
+                            y: t.y
+                        }));
+                        this.started = this.tiles.length > 0;
+                        this._persistMpLayout();
+                        return true;
+                    }
+                }
                 if (!options.reset && inPlay && !owned.length && (this.tiles?.length > 0)) {
                     return false;
                 }
@@ -266,7 +357,9 @@
                 if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW && !options.reset) {
                     return false;
                 }
-                const remoteOwned = board.tilesOwnedByPlayer?.[uid] || [];
+                const remoteOwned = board.tilesOwnedByPlayer?.[uid]
+                    || board.hands?.[uid]
+                    || [];
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                 if (!options.reset && !options.force && inPlay
                     && !remoteOwned.length && (this.tiles?.length > 0)) {
@@ -277,13 +370,16 @@
                     return true;
                 }
                 const remote = this._boardInventorySeq(board, uid);
-                const owned = board.tilesOwnedByPlayer?.[uid] || [];
+                const owned = board.tilesOwnedByPlayer?.[uid]
+                    || board.hands?.[uid]
+                    || [];
                 const runtimeIds = new Set((this.tiles || []).map((t) => t.id));
                 const ownedChanged = owned.length !== (this.tiles?.length || 0)
                     || owned.some((o) => !runtimeIds.has(o.id));
                 if (remote <= (this._localInventorySeq || 0) && !ownedChanged) return false;
                 const layout = this._layoutMapForPlayer(board, uid, owned);
-                this.tiles = this._mergeInventoryWithLayout(owned, layout, this.tiles);
+                const runtime = board?.gameStarted ? this.tiles : null;
+                this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
                 this._localInventorySeq = remote;
                 this._persistMpLayout();
                 return true;
@@ -291,25 +387,48 @@
 
             _applyMpInventoryFromBoard(board, uid, options = {}) {
                 if (!options.force && !options.reset && this._isDraggingHand()) {
+                    const incomingPeel = board?.peelSeq || 0;
+                    const incomingDump = board?.dumpSeq || 0;
+                    const urgentInventoryEvent = incomingPeel > (this._lastPeelSeq || 0)
+                        || incomingDump > (this._lastDumpSeq || 0);
+                    if (urgentInventoryEvent) {
+                        // Peel/dump spawns should feel instant on observers even during short
+                        // drag debounce windows; apply now instead of deferring ~500ms.
+                    } else {
                     this._mpDeferredBoard = board;
                     return false;
+                    }
                 }
                 let layoutChanged = false;
                 if (options.reset || options.force) {
-                    const ownedForce = board.tilesOwnedByPlayer?.[uid] || [];
+                    const hadTiles = (this.tiles?.length || 0) > 0;
+                    const ownedForce = board.tilesOwnedByPlayer?.[uid]
+                        || board.hands?.[uid]
+                        || [];
                     const inPlayForce = !!(this.gameStarted || board.gameStarted || this.started);
                     if (options.force && !options.reset && inPlayForce
                         && !ownedForce.length && (this.tiles?.length > 0)) {
                         return false;
                     }
-                    if (this._rebuildHandFromBoard(board, { ...options, reset: options.reset })) {
+                    if (this._rebuildHandFromBoard(board, {
+                        ...options,
+                        reset: options.reset,
+                        // Force-applies during active play should preserve live runtime positions
+                        // to prevent full-board translations on peel/dump sync.
+                        keepRuntime: !options.reset && !!board?.gameStarted
+                    })) {
                         layoutChanged = true;
                         this._mpAwaitReset = false;
-                        if (options.force) this.centerViewOnOrigin();
+                        // Recenter only on true resets/first materialization, not routine force syncs.
+                        if (options.reset || (options.force && !hadTiles && (this.tiles?.length || 0) > 0)) {
+                            this.centerViewOnOrigin();
+                        }
                     }
                 } else {
                     const remote = this._boardInventorySeq(board, uid);
-                    const owned = board.tilesOwnedByPlayer?.[uid] || [];
+                    const owned = board.tilesOwnedByPlayer?.[uid]
+                        || board.hands?.[uid]
+                        || [];
                     const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                     if (!options.reset && !options.force && inPlay
                         && !owned.length && (this.tiles?.length > 0)) {
@@ -323,12 +442,13 @@
                     if (this.isHost?.() && remote === localSeq && ownedChanged) return false;
                     if (remote > localSeq || ownedChanged) {
                         const layout = this._layoutMapForPlayer(board, uid, owned);
-                        this.tiles = this._mergeInventoryWithLayout(owned, layout, this.tiles);
+                        const runtime = board?.gameStarted ? this.tiles : null;
+                        this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
                         this._localInventorySeq = remote;
                         this._persistMpLayout();
                         layoutChanged = true;
                     }
-                    if (!this.tiles.length && board.tilesOwnedByPlayer?.[uid]?.length) {
+                    if (!this.tiles.length && (board.tilesOwnedByPlayer?.[uid]?.length || board.hands?.[uid]?.length)) {
                         this._rebuildHandFromBoard(board, {});
                         layoutChanged = true;
                         this._mpAwaitReset = false;

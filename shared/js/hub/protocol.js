@@ -52,7 +52,15 @@
 
         // tests / dev
         TEST_FORCE_MOVE: 'test-force-move',
-        DEV_WIN: 'dev-win'
+        DEV_WIN: 'dev-win',
+        DICT_ADJUST: 'dict-adjust',
+        DICT_ADJUST_RESULT: 'dict-adjust-result',
+        BOARD_STATE_INSPECT: 'board-state-inspect',
+        BOARD_STATE_INSPECT_RESULT: 'board-state-inspect-result',
+        /** @deprecated use BOARD_STATE_INSPECT */
+        BANANA_BOARD_STATE: 'banana-board-state',
+        /** @deprecated use BOARD_STATE_INSPECT_RESULT */
+        BANANA_BOARD_STATE_RESULT: 'banana-board-state-result'
     };
 
     const ALL_TYPES = new Set([
@@ -70,7 +78,11 @@
         [MSG.UPDATE_WIN_BANNER]: ['visible'],
         [MSG.INIT_IDENTITY]: ['role'],
         [MSG.WHEEL]: ['deltaY'],
-        [MSG.KEYDOWN]: ['key', 'code']
+        [MSG.KEYDOWN]: ['key', 'code'],
+        [MSG.DICT_ADJUST]: ['adjustments'],
+        [MSG.DICT_ADJUST_RESULT]: ['ok'],
+        [MSG.BANANA_BOARD_STATE]: [],
+        [MSG.BANANA_BOARD_STATE_RESULT]: ['summary']
     };
 
     function normalizeType(data) {

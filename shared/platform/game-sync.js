@@ -33,11 +33,15 @@
         return S?.readBoardFromRoom ? S.readBoardFromRoom(snap) : snap.global?.board ?? snap.state?.board ?? null;
     }
 
+    /** Hybrid = event-log applyState; board-authoritative / snapshot = global.board is source of truth. */
     function isSnapshotAuthoritative(game, board = readBoard(game)) {
         const style = syncStyleFor(game);
-        if (style === 'snapshot') return true;
-        if (style === 'hybrid') return !!board && capabilitiesFor(game)?.hasBoardState !== false;
-        return !!board && game?.gameName === 'bananagrams' && board.version >= 2;
+        const caps = capabilitiesFor(game);
+        if (style === 'board-authoritative' || style === 'snapshot') {
+            return !!board && (board.version == null || board.version >= 2);
+        }
+        if (style === 'hybrid') return !!board && caps?.hasBoardState !== false;
+        return false;
     }
 
     function mergeRoomSnapshot(prev, incoming) {
@@ -142,6 +146,34 @@
         }, '*');
     }
 
+    function patchFromHostResetUpdates(updates) {
+        if (!updates || typeof updates !== 'object') return {};
+        const incoming = {};
+        Object.entries(updates).forEach(([key, val]) => {
+            if (key.startsWith('global/')) {
+                incoming.global = incoming.global || {};
+                incoming.global[key.slice(7)] = val;
+            } else {
+                incoming[key] = val;
+            }
+        });
+        return incoming;
+    }
+
+    /** Merge host reset writes into roomData before RTDB echo (HEAD engine relied on fast echo; this removes the race). */
+    function applyHostResetLocally(game, updates) {
+        const incoming = patchFromHostResetUpdates(updates);
+        if (!incoming.global && !incoming.status && !incoming.winner) return;
+        game.roomData = mergeRoomSnapshot(game.roomData || {}, incoming);
+        const rc = game.roomData?.global?.resetCount;
+        if (typeof rc === 'number' && rc > 0) {
+            game.lastResetCount = rc;
+            game._resetAcknowledgedCount = rc;
+            game._eventsSyncedAtResetCount = rc;
+            if (!game._resetAcknowledgedAt) game._resetAcknowledgedAt = Date.now();
+        }
+    }
+
     function buildHostResetUpdates(game, { wasOver = false } = {}) {
         if (!game) return {};
         if (wasOver) {
@@ -181,6 +213,7 @@
         game.lastResetCount = resetCount;
         game._resetAcknowledgedCount = resetCount;
         game._resetAcknowledgedAt = Date.now();
+        applyHostResetLocally(game, updates);
         return updates;
     }
 
@@ -201,7 +234,8 @@
             send: sendNetwork,
             updateRoom,
             sendEvent: (event) => sendEvent(game, event),
-            buildHostResetUpdates: (opts) => buildHostResetUpdates(game, opts)
+            buildHostResetUpdates: (opts) => buildHostResetUpdates(game, opts),
+            applyHostResetLocally: (patch) => applyHostResetLocally(game, patch)
         };
         game.sync = sync;
         return sync;
@@ -209,6 +243,8 @@
 
     const GameSync = {
         attachGameSync,
+        applyHostResetLocally,
+        patchFromHostResetUpdates,
         capabilitiesFor,
         syncStyleFor,
         readBoard,

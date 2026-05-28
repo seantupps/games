@@ -147,7 +147,15 @@
 
         const usernameInput = document.getElementById('username-input');
         if (usernameInput) {
+            const canEditUsername = () => {
+                const sidebar = document.getElementById('settings-sidebar');
+                return !!sidebar?.classList.contains('open');
+            };
             usernameInput.addEventListener('input', (e) => {
+                if (!canEditUsername()) {
+                    e.target.value = ctx.username;
+                    return;
+                }
                 ctx.username = e.target.value.trim().substring(0, 16) || ctx.username;
                 if (global.DeviceStorage) {
                     global.DeviceStorage.write('username', ctx.username);

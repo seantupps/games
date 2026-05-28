@@ -216,10 +216,36 @@ const BananagramsLogic = {
     }
 };
 
+/** Minimal stub — copy/rename when scaffolding a new game (see scripts/new-game.js). */
+const TemplateLogic = {
+    initialState() {
+        return { initialized: true, ticks: 0, turn: 'P1', isOver: false, winner: null };
+    },
+    isValidMove(state) {
+        return !state.isOver;
+    },
+    applyMove(state) {
+        const next = { ...state, ticks: (state.ticks || 0) + 1 };
+        if (next.ticks >= 12) {
+            next.isOver = true;
+            next.winner = state.turn;
+        } else {
+            next.turn = state.turn === 'P1' ? 'P2' : 'P1';
+        }
+        return next;
+    },
+    applyInitialBoard(state, board) {
+        if (!board) return state;
+        return { ...state, ...board };
+    }
+};
+
 const Logic = {
     piles: PilesLogic,
     line: LineLogic,
     bananagrams: BananagramsLogic,
+    template: TemplateLogic,
+    // NEW_GAME_LOGIC_INSERT
     computeState(gameType, events = [], initialConfig = {}) {
         const logic = this[gameType];
         if (!logic) return null;

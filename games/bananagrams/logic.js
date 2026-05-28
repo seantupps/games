@@ -3,35 +3,42 @@
  */
 (function (global) {
     /** Full game / multiplayer — 144 tiles. */
-    const TILE_BAG = {
+    const TILE_BAG = Object.freeze({
         A: 13, B: 3, C: 3, D: 6, E: 18, F: 3, G: 4, H: 3, I: 12, J: 2, K: 2, L: 5,
         M: 3, N: 8, O: 11, P: 3, Q: 2, R: 9, S: 6, T: 9, U: 6, V: 3, W: 3, X: 2, Y: 3, Z: 2
-    };
+    });
 
     /** Solo fast — 50 tiles (default; 21 dealt → 29 in bunch). */
-    const SOLO_FAST_TILE_BAG = {
+    const SOLO_FAST_TILE_BAG = Object.freeze({
         A: 5, B: 1, C: 1, D: 2, E: 5, F: 1, G: 1, H: 1, I: 4, J: 1, K: 1, L: 2,
         M: 1, N: 3, O: 4, P: 1, Q: 1, R: 3, S: 2, T: 3, U: 2, V: 1, W: 1, X: 1, Y: 1, Z: 1
-    };
+    });
 
     /** Solo classic — 72 tiles (21 dealt, 51 in bunch). */
-    const SOLO_CLASSIC_TILE_BAG = {
+    const SOLO_CLASSIC_TILE_BAG = Object.freeze({
         A: 7, B: 2, C: 2, D: 3, E: 9, F: 1, G: 2, H: 2, I: 6, J: 1, K: 1, L: 3,
         M: 1, N: 4, O: 6, P: 1, Q: 1, R: 5, S: 3, T: 4, U: 3, V: 1, W: 1, X: 1, Y: 1, Z: 1
-    };
+    });
+
+    /** Scrabble distribution — 100 tiles (used as MP default). */
+    const SCRABBLE_TILE_BAG = Object.freeze({
+        A: 10, B: 2, C: 2, D: 4, E: 13, F: 2, G: 3, H: 2, I: 9, J: 1, K: 1, L: 4,
+        M: 2, N: 6, O: 8, P: 2, Q: 1, R: 6, S: 4, T: 6, U: 4, V: 2, W: 2, X: 1,
+        Y: 2, Z: 1
+    });
 
     /** @deprecated alias — default solo bag is fast (50). */
     const SOLO_TILE_BAG = SOLO_FAST_TILE_BAG;
 
     const SOLO_HAND = 21;
     const STARTING_HAND = 21;
-    const MP_BAG = TILE_BAG;
+    const MP_BAG = SCRABBLE_TILE_BAG;
 
     /**
      * MP testing only — set to e.g. 4 to deal fewer tiles; null = official rules.
      * Or pass ?hand=4 on the game iframe URL.
-     */
-    const MP_HAND_OVERRIDE = null;
+     */ 
+    const MP_HAND_OVERRIDE = 21;
 
     /** Official deal size by player count (rules.txt). */
     function startingHandSize(playerCount) {
@@ -455,11 +462,17 @@
         return Object.values(bag).reduce((sum, n) => sum + n, 0);
     }
 
+    const SCRABBLE_TILE_TOTAL = poolTotal(SCRABBLE_TILE_BAG);
+    if (SCRABBLE_TILE_TOTAL !== 100) {
+        throw new Error(`SCRABBLE_TILE_BAG must total 100, got ${SCRABBLE_TILE_TOTAL}`);
+    }
+
     const BananaRules = {
         TILE_BAG,
         SOLO_TILE_BAG,
         SOLO_FAST_TILE_BAG,
         SOLO_CLASSIC_TILE_BAG,
+        SCRABBLE_TILE_BAG,
         SOLO_HAND,
         resolveBagConfig,
         STARTING_HAND,

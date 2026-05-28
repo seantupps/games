@@ -175,6 +175,82 @@
             },
 
             handleCommand(text) {
+                const trimmed = text.trim();
+                if (/^\/b(\s|$)/i.test(trimmed)) {
+                    const arg = trimmed.substring(2).trim().toLowerCase();
+                    if (arg !== 'state') {
+                        this.append({
+                            sender: 'System',
+                            content: 'Usage: /b state — list invalid words or peel/win-ready status'
+                        });
+                        return true;
+                    }
+                    const gameId = global.FiveHubCtx?.currentGame || 'piles';
+                    const mode = global.GameRegistry?.hubModeFor
+                        ? global.GameRegistry.hubModeFor(
+                            gameId,
+                            !!(global.FiveHubCtx?.roomId && global.FiveHubCtx.roomId !== 'lobby')
+                        )
+                        : (global.FiveHubCtx?.gameMode || 'classic');
+                    if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
+                        this.append({
+                            sender: 'System',
+                            content: 'Board state inspect is not available for this game.'
+                        });
+                        return true;
+                    }
+                    const frame = document.getElementById('game-frame');
+                    if (!frame?.contentWindow) {
+                        this.append({ sender: 'System', content: 'No game loaded.' });
+                        return true;
+                    }
+                    const H = global.HubProtocol?.MSG || {};
+                    frame.contentWindow.postMessage({
+                        type: H.BOARD_STATE_INSPECT || H.BANANA_BOARD_STATE || 'board-state-inspect'
+                    }, '*');
+                    return true;
+                }
+                if (/^\/w(\s|$)/i.test(text)) {
+                    const argText = text.substring(2).trim();
+                    if (!argText) {
+                        this.append({
+                            sender: 'System',
+                            content: 'Usage: /w word1 -word2 ... (add plain words, remove with -prefix)'
+                        });
+                        return true;
+                    }
+                    const tokens = argText.split(/\s+/).filter(Boolean);
+                    const add = [];
+                    const remove = [];
+                    const invalid = [];
+                    tokens.forEach((tok) => {
+                        const isRemove = tok.startsWith('-');
+                        const word = (isRemove ? tok.slice(1) : tok).trim().toLowerCase();
+                        if (!/^[a-z]+$/.test(word)) {
+                            invalid.push(tok);
+                            return;
+                        }
+                        if (isRemove) remove.push(word);
+                        else add.push(word);
+                    });
+                    if (!add.length && !remove.length) {
+                        this.append({
+                            sender: 'System',
+                            content: `No valid words in command.${invalid.length ? ` Invalid: ${invalid.join(', ')}` : ''}`
+                        });
+                        return true;
+                    }
+                    const frame = document.getElementById('game-frame');
+                    if (!frame?.contentWindow) {
+                        this.append({ sender: 'System', content: 'No game loaded.' });
+                        return true;
+                    }
+                    frame.contentWindow.postMessage({
+                        type: (global.HubProtocol?.MSG?.DICT_ADJUST || 'dict-adjust'),
+                        adjustments: { add, remove }
+                    }, '*');
+                    return true;
+                }
                 if (text.toLowerCase() === '/p leave') {
                     ctx.leaveParty();
                     return true;
@@ -183,6 +259,8 @@
                     [
                         '/p <name> — invite a player to your party',
                         '/p leave — leave the party and return to the lobby',
+                        '/w word1 -word2 ... — add/remove dictionary words',
+                        '/b state — invalid words on your board, or peel/win-ready',
                         '/clear — clear local data and reload',
                         '/win — same as _onPlayerWins (real victory path)',
                         '/win banner <name> — hub win banner only (dev)',

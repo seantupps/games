@@ -6,7 +6,7 @@
  * Target (migration): games/{roomId}/meta + events + state (per-game opaque state blob)
  */
 (function (global) {
-    /** @typedef {'event-log'|'snapshot'|'hybrid'} SyncStyle */
+    /** @typedef {'event-log'|'snapshot'|'hybrid'|'board-authoritative'} SyncStyle */
     /** @typedef {'generic'|'piles'|'line'|'crossword'} BoardKind */
     /**
      * @typedef {'none'|'fit-square'|'piles-dynamic'|'fixed-spiral-anchor'|'pan-zoom-board'} MobileLayoutPolicy
@@ -32,6 +32,12 @@
      * @property {boolean} supportsPileColors
      * @property {boolean} hasBoardState
      * @property {SyncStyle} syncStyle
+     * @property {boolean} [mpBoardAuthoritative] — MP: global/board drives state; skip event-log applyState
+     * @property {boolean} [supportsPostGameReview] — review phase, Done in iframe, hub banner clearance
+     * @property {boolean} [flexiblePlayerRoles] — party roles P1…Pn (not fixed P1/P2)
+     * @property {boolean} [supportsBoardStateInspect] — hub chat can request board-state snapshot
+     * @property {number} [winBannerAutoFadeMs] — hub win banner auto-hide (post-game review games)
+     * @property {boolean} [auditReadyCallable] — iframe implements isAuditReady(); MP/SP waits use it
      * Guest MP reset: engine calls optional onRemoteReset() then applyBoard(global/board).
      * Host reset: onGameReset() then host pushes global/board via resetGame().
      */
@@ -52,7 +58,11 @@
         supportsRealtimePreviews: false,
         supportsPileColors: false,
         hasBoardState: true,
-        syncStyle: 'event-log'
+        syncStyle: 'event-log',
+        mpBoardAuthoritative: false,
+        supportsPostGameReview: false,
+        flexiblePlayerRoles: false,
+        supportsBoardStateInspect: false
     };
 
     /**
@@ -70,8 +80,15 @@
      * @property {string} [auditConfig] — default SP audit dir when single mode
      * @property {Record<string, string>} [mpAuditByMode] — MP audit config dir per mode
      * @property {string} [mpAuditConfig] — default MP audit dir when single mode
+     * @property {string} [mobileMpExtras] — optional ptests module with runMobileMpExtras(page1, page2, ctx)
+     * @property {'default'|'extended'} [mpSuite] — MP runner tier (`test:mp` uses default only)
+     * @property {number[]} [mpPlayerCounts] — MP audit player counts (default [2])
+     * @property {string} [mpAudit3p] — optional custom 3p audit module path (no .js)
      * @property {number} [maxPartyPlayers] — max party size for this game (default 8)
      * @property {boolean} [hideWhenPartyAtLeast] — hide in hub picker when party has this many+ members
+     * @property {string} [hubModeInLobby] — iframe mode in lobby (e.g. bananagrams solo)
+     * @property {string} [hubModeInParty] — iframe mode in party room (e.g. bananagrams multiplayer)
+     * @property {number} [preferredForPartySizeAtLeast] — default picker when party has N+ members
      */
 
     const DEFAULT_MAX_PARTY = 8;
@@ -83,6 +100,7 @@
             label: 'Piles',
             logicKey: 'piles',
             maxPartyPlayers: 2,
+            mpPlayerCounts: [2],
             hideWhenPartyAtLeast: 3,
             modes: ['classic', 'freestyle'],
             defaultMode: 'classic',
@@ -107,12 +125,12 @@
             ],
             clearGameDataOnReset: true,
             auditByMode: {
-                classic: 'ptests/desktop/singleplayer/classic_piles',
-                freestyle: 'ptests/desktop/singleplayer/freestyle_piles'
+                classic: 'ptests/games/classic-piles/desktop-sp',
+                freestyle: 'ptests/games/freestyle-piles/desktop-sp'
             },
             mpAuditByMode: {
-                classic: 'ptests/desktop/multiplayer/mp_classic_piles',
-                freestyle: 'ptests/desktop/multiplayer/mp_freestyle_piles'
+                classic: 'ptests/games/classic-piles/desktop-mp',
+                freestyle: 'ptests/games/freestyle-piles/desktop-mp'
             }
         },
         {
@@ -120,6 +138,7 @@
             label: 'Line',
             logicKey: 'line',
             maxPartyPlayers: 2,
+            mpPlayerCounts: [2],
             hideWhenPartyAtLeast: 3,
             modes: ['classic'],
             defaultMode: 'classic',
@@ -135,16 +154,22 @@
             },
             globalResetKeys: ['board'],
             clearGameDataOnReset: true,
-            auditConfig: 'ptests/desktop/singleplayer/line',
-            mpAuditConfig: 'ptests/desktop/multiplayer/mp_line'
+            auditConfig: 'ptests/games/line/desktop-sp',
+            mpAuditConfig: 'ptests/games/line/desktop-mp'
         },
         {
             id: 'bananagrams',
             label: 'Bananagrams',
             logicKey: 'bananagrams',
+            mpSuite: 'extended',
+            mpPlayerCounts: [2, 3],
+            mpAudit3p: 'ptests/games/bananagrams/desktop-mp/mp_bananagrams_3p',
             modes: ['solo'],
             defaultMode: 'solo',
             maxPartyPlayers: 8,
+            hubModeInLobby: 'solo',
+            hubModeInParty: 'multiplayer',
+            preferredForPartySizeAtLeast: 3,
             capabilities: {
                 ...DEFAULT_CAPABILITIES,
                 boardKind: 'crossword',
@@ -161,23 +186,57 @@
                 supportsModes: false,
                 supportsZoom: true,
                 hasBoardState: true,
-                syncStyle: 'event-log'
+                syncStyle: 'event-log',
+                flexiblePlayerRoles: true,
+                supportsBoardStateInspect: true
             },
             capabilitiesByMode: {
-                solo: { supportsWinBanner: false, supportsVictoryAutoReset: false },
-                multiplayer: { supportsWinBanner: true, supportsVictoryAutoReset: false }
+                solo: {
+                    supportsWinBanner: true,
+                    supportsVictoryAutoReset: false,
+                    supportsScoreboard: false
+                },
+                multiplayer: {
+                    supportsWinBanner: true,
+                    supportsVictoryAutoReset: false,
+                    supportsScoreboard: true,
+                    syncStyle: 'board-authoritative',
+                    mpBoardAuthoritative: true,
+                    supportsPostGameReview: true,
+                    winBannerAutoFadeMs: 4000
+                }
             },
             globalResetKeys: ['board'],
             clearGameDataOnReset: true,
-            auditConfig: 'ptests/desktop/singleplayer/bananagrams',
-            mobileAuditConfig: 'ptests/mobile/bananagrams_sp',
-            mpAuditConfig: 'ptests/desktop/multiplayer/mp_bananagrams',
-            mobileMpAuditConfig: 'ptests/mobile/bananagrams_mp'
+            auditConfig: 'ptests/games/bananagrams/desktop-sp',
+            mobileAuditConfig: 'ptests/games/bananagrams/mobile/bananagrams_sp',
+            mpAuditConfig: 'ptests/games/bananagrams/desktop-mp/index',
+            mobileMpAuditConfig: 'ptests/games/bananagrams/mobile/bananagrams_mp'
         }
+        // NEW_GAME_REGISTRY_INSERT
     ];
 
     function maxPartyPlayers(id) {
         return get(id)?.maxPartyPlayers ?? DEFAULT_MAX_PARTY;
+    }
+
+    /** @param {string} id @returns {number[]} */
+    function mpPlayerCountsFor(id) {
+        const counts = get(id)?.mpPlayerCounts;
+        return Array.isArray(counts) && counts.length ? [...counts] : [2];
+    }
+
+    function supportsMpPlayerCount(id, count) {
+        return mpPlayerCountsFor(id).includes(count);
+    }
+
+    /** @param {string} id @param {number} count */
+    function mpAuditPathForPlayerCount(id, mode, count, { mobile = false } = {}) {
+        if (count === 3) {
+            const custom = get(id)?.mpAudit3p;
+            if (custom) return custom;
+        }
+        return mpAuditPathFor(id, mode, { mobile });
     }
 
     /** Whether this game should appear in the hub picker for the current party size. */
@@ -190,8 +249,56 @@
     }
 
     function defaultPartyGameId(partySize) {
-        if (partySize >= 3) return 'bananagrams';
+        const preferred = GAMES.find(
+            (g) => g.preferredForPartySizeAtLeast != null && partySize >= g.preferredForPartySizeAtLeast
+        );
+        if (preferred) return preferred.id;
         return defaultId();
+    }
+
+    /** Hub iframe mode for lobby vs party (uses hubModeInLobby / hubModeInParty when set). */
+    function hubModeFor(id, inParty) {
+        const def = get(id);
+        if (!def) return 'classic';
+        if (inParty && def.hubModeInParty) return def.hubModeInParty;
+        if (!inParty && def.hubModeInLobby) return def.hubModeInLobby;
+        return def.defaultMode;
+    }
+
+    function hasCapability(id, capName, mode) {
+        return !!getCapabilities(id, mode)[capName];
+    }
+
+    /** @param {string} id @param {string} [mode] */
+    function boardKindFor(id, mode) {
+        return getCapabilities(id, mode).boardKind || 'generic';
+    }
+
+    /**
+     * Playwright MP ready-wait — branch on boardKind, not game id.
+     * @param {object} status — snapshot from multiplayer_base wait loop
+     * @param {import('./registry').BoardKind} boardKind
+     */
+    function auditBoardReady(status, boardKind) {
+        if (!status || typeof status !== 'object') return false;
+        if (status.auditReady === true) return true;
+        switch (boardKind) {
+            case 'piles':
+                return !!status.hasPiles;
+            case 'line':
+                return !!status.hasNodes;
+            case 'crossword':
+                return !!(status.hasTiles && status.started && status.dictReady);
+            default:
+                return !!(status.hasPiles || status.hasNodes
+                    || (status.hasTiles && status.started && status.dictReady));
+        }
+    }
+
+    /** Games that use hubModeInLobby / hubModeInParty instead of a fixed picker mode. */
+    function usesHubModeSwitch(id) {
+        const def = get(id);
+        return !!(def?.hubModeInLobby || def?.hubModeInParty);
     }
 
     const BY_ID = Object.fromEntries(GAMES.map((g) => [g.id, g]));
@@ -223,7 +330,7 @@
     function normalizeMode(id, mode) {
         const def = get(id);
         if (!def) return 'classic';
-        if (id === 'bananagrams' && mode === 'multiplayer') return 'multiplayer';
+        if (def.hubModeInParty && mode === def.hubModeInParty) return def.hubModeInParty;
         if (def.modes.includes(mode)) return mode;
         return def.defaultMode;
     }
@@ -322,8 +429,16 @@
         auditPathFor,
         mpAuditPathFor,
         maxPartyPlayers,
+        mpPlayerCountsFor,
+        supportsMpPlayerCount,
+        mpAuditPathForPlayerCount,
         isAvailableForPartySize,
         defaultPartyGameId,
+        hubModeFor,
+        hasCapability,
+        boardKindFor,
+        auditBoardReady,
+        usesHubModeSwitch,
         buildHostGameSwitchUpdates
     };
 

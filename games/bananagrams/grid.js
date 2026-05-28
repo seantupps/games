@@ -120,6 +120,12 @@
         });
     }
 
+    /** True when no two tiles round to the same grid cell. */
+    function eachTileOccupiesUniqueCell(tiles) {
+        if (!tiles.length) return false;
+        return buildCellMap(tiles).size === tiles.length;
+    }
+
     /**
      * Every tile on the board is in one connected grid and not the undealt starting rack.
      * Count can be 21, 22, … after earlier peels — not tied to initial hand size.
@@ -200,6 +206,25 @@
         return { ok: true, words };
     }
 
+    /** Word list + validity for dev /b state (does not mutate the board). */
+    function inspectBoardWords(tiles, checker) {
+        const words = collectWords(tiles || []);
+        const valid = [];
+        const invalid = [];
+        words.forEach((w) => {
+            if (!checker || !checker.isWord(w)) invalid.push(w);
+            else valid.push(w);
+        });
+        valid.sort();
+        invalid.sort();
+        return {
+            connected: isConnected(tiles || []),
+            words,
+            valid,
+            invalid
+        };
+    }
+
     const BananaGrid = {
         TILE_SIZE,
         SNAP_THRESHOLD,
@@ -213,9 +238,11 @@
         isTileInRack,
         computeDealSlots,
         isStartingRack,
+        eachTileOccupiesUniqueCell,
         allTilesPlacedInGrid,
         buildCellMap,
         collectWords,
+        inspectBoardWords,
         isConnected,
         validateGrid
     };

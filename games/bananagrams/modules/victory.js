@@ -27,7 +27,7 @@
                     });
                     return;
                 }
-                super.setGameOver(winner, options);
+                this._finishVictory(null);
             },
 
             _finishVictory(winnerUid = null) {
@@ -83,48 +83,40 @@
                     ? Number(window.FIVE_VICTORY_DWELL_MS)
                     : 4000;
                 const fadeMs = options.autoFadeMs ?? defaultFade;
-                const postBanner = () => {
+
+                if (this._victoryRegistered) {
                     if (!this._isMultiplayerMode()) {
-                        window.parent.postMessage({
-                            type: 'update-win-banner',
+                        this._postHubWinBanner({
                             visible: true,
                             winner,
                             bannerText: this._formatTime(this.elapsedMs),
                             bannerColor: this._bannerColorForUid(this._myUid())
-                        }, '*');
-                    } else if (this.hasCap('supportsWinBanner')) {
-                        window.parent.postMessage({
-                            type: 'update-win-banner',
+                        });
+                    } else {
+                        this._postHubWinBanner({
+                            visible: true,
                             winner,
                             winnerUid: options.winnerUid || undefined,
-                            visible: true,
                             autoFadeMs: fadeMs
-                        }, '*');
+                        });
                     }
-                };
-
-                if (this._victoryRegistered) {
-                    postBanner();
                     return;
                 }
-                this._victoryRegistered = true;
-                this.isOver = true;
-                this.winner = winner;
 
-                if (this.isMultiplayer && this.isHost()) {
-                    const updates = {};
-                    if (this._partyMemberCount() >= 2) updates.status = 'playing';
-                    if (Object.keys(updates).length) this.updateMetadata(updates);
+                if (!this._isMultiplayerMode()) {
+                    this._registerVictoryState(winner, {
+                        winnerUid: options.winnerUid,
+                        bannerText: this._formatTime(this.elapsedMs),
+                        bannerColor: this._bannerColorForUid(this._myUid()),
+                        autoFadeMs: fadeMs
+                    });
+                    return;
                 }
 
-                if (this.scores && this.scores[winner] !== undefined) {
-                    this.scores[winner]++;
-                    this.saveScores();
-                    this.renderScoreboard();
-                }
-
-                postBanner();
-                this.updateTurnIndicator();
+                this._registerVictoryState(winner, {
+                    winnerUid: options.winnerUid,
+                    autoFadeMs: fadeMs
+                });
             }
     });
 })(typeof window !== 'undefined' ? window : global);

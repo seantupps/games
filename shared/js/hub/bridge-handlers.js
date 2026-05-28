@@ -21,7 +21,9 @@
             const myUid = global.NetworkEngine.uid;
             if (!myUid || game.host === myUid || ctx.roomId === 'lobby') return 'P1';
             const gameId = game?.global?.game || game?.meta?.game || '';
-            if (gameId !== 'bananagrams') return 'P2';
+            const Registry = global.GameRegistry;
+            const partyMode = Registry?.hubModeFor(gameId, true) || 'classic';
+            if (!Registry?.hasCapability(gameId, 'flexiblePlayerRoles', partyMode)) return 'P2';
             const pd = game.playerData || {};
             const users = game.users || {};
             const others = Object.keys(pd).filter((id) => id && id !== game.host);
@@ -72,9 +74,20 @@
             });
         }
 
+        function edgeSwipeAllowedFromIframeGame() {
+            try {
+                const frameGame = document.getElementById('game-frame')?.contentWindow?.game;
+                if (frameGame?.hasCap) {
+                    return frameGame.hasCap('supportsSettingsEdgeSwipe');
+                }
+            } catch (_) { /* ignore */ }
+            return true;
+        }
+
         global.HubMessageBridge.install({
             [L.TOGGLE_SETTINGS]: () => ctx.toggleSidebar(),
             [H.OPEN_SETTINGS_EDGE_SWIPE]: () => {
+                if (!edgeSwipeAllowedFromIframeGame()) return;
                 ctx.toggleSidebar(true);
                 global.muteHubOverlayDismiss(80);
             },
@@ -172,11 +185,59 @@
                 }
             },
             [H.UPDATE_WIN_BANNER]: (e) => ctx.showWinBanner(e.data),
+            [H.BOARD_STATE_INSPECT_RESULT || H.BANANA_BOARD_STATE_RESULT || 'board-state-inspect-result']: (e) => {
+                const payload = e.data || {};
+                const lines = Array.isArray(payload.lines) ? payload.lines : [];
+                const parts = [payload.summary, ...lines].filter(Boolean);
+                global.ChatEngine.append({
+                    sender: 'System',
+                    content: parts.length ? parts.join('\n') : 'Board state unavailable.'
+                });
+            },
+            [H.DICT_ADJUST_RESULT || 'dict-adjust-result']: (e) => {
+                const payload = e.data || {};
+                const added = Array.isArray(payload.effectiveAdded) ? payload.effectiveAdded : [];
+                const removed = Array.isArray(payload.effectiveRemoved) ? payload.effectiveRemoved : [];
+                const invalid = Array.isArray(payload.invalid) ? payload.invalid : [];
+                const failures = Array.isArray(payload.applyFailures) ? payload.applyFailures : [];
+
+                if (added.length) {
+                    added.forEach((w) => global.ChatEngine.append({
+                        sender: 'System',
+                        content: `Added ${w}`
+                    }));
+                }
+                if (removed.length) {
+                    removed.forEach((w) => global.ChatEngine.append({
+                        sender: 'System',
+                        content: `Removed ${w}`
+                    }));
+                }
+                if (!added.length && !removed.length) {
+                    const message = payload.message
+                        || (payload.ok ? 'Dictionary update loaded.' : 'Dictionary update failed.');
+                    global.ChatEngine.append({ sender: 'System', content: message });
+                }
+                if (invalid.length) {
+                    global.ChatEngine.append({
+                        sender: 'System',
+                        content: `Ignored invalid: ${invalid.join(', ')}`
+                    });
+                }
+                if (failures.length) {
+                    global.ChatEngine.append({
+                        sender: 'System',
+                        content: `Verification failed: ${failures.join(', ')}`
+                    });
+                }
+            },
             'post-game-blocking': (e) => {
-                if (!e.data?.active || ctx.currentGame !== 'bananagrams') return;
+                if (!e.data?.active) return;
+                const caps = global.GameRegistry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
+                if (!caps.supportsPostGameReview) return;
                 const banner = document.getElementById('global-win-banner');
-                if (!banner?.classList.contains('visible')) return;
-                ctx.adjustBananagramsWinBannerClearance?.(banner);
+                if (!banner?.classList.contains('visible') || banner.classList.contains('is-fading-out')) return;
+                ctx.adjustPostGameReviewWinBannerClearance?.(banner);
             }
         });
     }

@@ -28,8 +28,9 @@ window.NetworkEngine = {
         if (room.host === uid) return 'P1';
 
         const gameId = room?.global?.game || room?.meta?.game || '';
-        // Keep legacy 2P behavior for non-bananagrams games.
-        if (gameId !== 'bananagrams') return 'P2';
+        const Registry = typeof GameRegistry !== 'undefined' ? GameRegistry : null;
+        const partyMode = Registry?.hubModeFor(gameId, true) || 'classic';
+        if (!Registry?.hasCapability(gameId, 'flexiblePlayerRoles', partyMode)) return 'P2';
 
         const pd = room.playerData || {};
         const users = room.users || {};

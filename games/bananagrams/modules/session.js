@@ -56,6 +56,36 @@
                 return BananaRules.buildShuffledPool(bag, cfg.bunchCount);
             },
 
+            _soloDistributionInvariantCheck(context = 'unknown') {
+                if (this._isMultiplayerMode() || typeof BananaRules === 'undefined') return true;
+                const bagLabel = this._soloBagLabel();
+                const bag = bagLabel === 'solo-classic'
+                    ? BananaRules.SOLO_CLASSIC_TILE_BAG
+                    : BananaRules.SOLO_FAST_TILE_BAG;
+                const counts = {};
+                const add = (letter) => {
+                    const ch = String(letter || '').toUpperCase();
+                    if (!/^[A-Z]$/.test(ch)) return;
+                    counts[ch] = (counts[ch] || 0) + 1;
+                };
+                (this.tiles || []).forEach((t) => add(t?.letter));
+                (this._tilePool || []).forEach((l) => add(l));
+                for (const [letter, n] of Object.entries(counts)) {
+                    const max = bag[letter] || 0;
+                    if (n > max) {
+                        console.error('[Bananagrams] solo distribution invariant failed', {
+                            context,
+                            bag: bagLabel,
+                            letter,
+                            count: n,
+                            max
+                        });
+                        return false;
+                    }
+                }
+                return true;
+            },
+
             _soloBagLabel() {
                 const cfg = this._bagConfig();
                 return cfg.soloVariant === 'classic' ? 'solo-classic' : 'solo-fast';
@@ -246,7 +276,9 @@
                     this._bannerTimer = 0;
                 }
                 this._bannerText = text;
-                this._bannerActorUid = options.actorUid ?? this._myUid();
+                this._bannerActorUid = Object.prototype.hasOwnProperty.call(options, 'actorUid')
+                    ? options.actorUid
+                    : this._myUid();
                 this._bannerPlacement = (text === 'Peel!' || text === 'Dump!') ? 'top' : 'center';
                 this._bannerUntil = Date.now() + ms;
                 this._syncBannerEl();
@@ -317,47 +349,234 @@
             persistState() {
                 if (this._isMultiplayerMode()) return;
                 try {
-                    localStorage.setItem(this.getPersistKey(), JSON.stringify(this.serializeBoard()));
+                    const payload = JSON.stringify(this.serializeBoard());
+                    localStorage.setItem(this.getPersistKey(), payload);
+                    // Stable fallback key for solo mobile refresh when uid/session identity shifts.
+                    localStorage.setItem('bananagrams_solo', payload);
                 } catch (_) { /* ignore quota */ }
             },
 
             loadPersistedState() {
                 try {
-                    const raw = localStorage.getItem(this.getPersistKey());
-                    if (!raw) return false;
-                    const board = JSON.parse(raw);
-                    if (!board || !Array.isArray(board.tiles) || !board.tiles.length) return false;
-                    if (board.version === 2 || board.bagMode === 'multiplayer') {
-                        localStorage.removeItem(this.getPersistKey());
-                        return false;
+                    const boardFitsSoloBag = (board, expectedBagLabel) => {
+                        if (typeof BananaRules === 'undefined') return true;
+                        const countLetters = (list) => {
+                            const counts = {};
+                            (list || []).forEach((entry) => {
+                                const letter = typeof entry === 'string' ? entry : entry?.letter;
+                                const ch = String(letter || '').toUpperCase();
+                                if (!/^[A-Z]$/.test(ch)) return;
+                                counts[ch] = (counts[ch] || 0) + 1;
+                            });
+                            return counts;
+                        };
+                        const mergeCounts = (a, b) => {
+                            const out = { ...(a || {}) };
+                            Object.entries(b || {}).forEach(([k, v]) => {
+                                out[k] = (out[k] || 0) + v;
+                            });
+                            return out;
+                        };
+                        const used = mergeCounts(
+                            countLetters(board.tiles),
+                            countLetters(board.pool)
+                        );
+                        const fitsBag = (bag) => Object.entries(used).every(
+                            ([letter, n]) => n <= (bag[letter] || 0)
+                        );
+                        const bagByLabel = {
+                            'solo-fast': BananaRules.SOLO_FAST_TILE_BAG,
+                            'solo-classic': BananaRules.SOLO_CLASSIC_TILE_BAG
+                        };
+                        const targetLabel = expectedBagLabel || this._soloBagLabel?.() || 'solo-fast';
+                        const targetBag = bagByLabel[targetLabel] || BananaRules.SOLO_FAST_TILE_BAG;
+                        // Always validate against the currently selected solo bag.
+                        if (!fitsBag(targetBag)) return false;
+                        // If the save declares bagMode, it must match current selected bag.
+                        if (board.bagMode && board.bagMode !== targetLabel) return false;
+                        return true;
+                    };
+
+                    const expectedBagLabel = this._soloBagLabel?.() || 'solo-fast';
+                    const keys = [...new Set([this.getPersistKey(), 'bananagrams_solo'])];
+                    for (const key of keys) {
+                        const raw = localStorage.getItem(key);
+                        if (!raw) continue;
+                        let board = null;
+                        try {
+                            board = JSON.parse(raw);
+                        } catch (_) {
+                            continue;
+                        }
+                        if (!board || !Array.isArray(board.tiles) || !board.tiles.length) continue;
+                        if (board.version === 2 || board.bagMode === 'multiplayer') {
+                            localStorage.removeItem(key);
+                            continue;
+                        }
+                        const expected = typeof BananaRules !== 'undefined' ? BananaRules.SOLO_HAND : null;
+                        const soloPoolMax = typeof BananaRules !== 'undefined'
+                            ? Math.max(
+                                BananaRules.poolTotal(BananaRules.SOLO_FAST_TILE_BAG),
+                                BananaRules.poolTotal(BananaRules.SOLO_CLASSIC_TILE_BAG)
+                            )
+                            : 72;
+                        if (Array.isArray(board.pool) && board.pool.length > soloPoolMax) {
+                            localStorage.removeItem(key);
+                            continue;
+                        }
+                        if (expected != null) {
+                            if (board.soloHandSize != null && board.soloHandSize !== expected) continue;
+                            // Legacy boards without soloHandSize can be in-progress; only enforce starting
+                            // hand count when the saved game has not started yet.
+                            if (board.soloHandSize == null && !board.gameStarted && board.tiles.length !== expected) {
+                                continue;
+                            }
+                        }
+                        if (!boardFitsSoloBag(board, expectedBagLabel)) {
+                            localStorage.removeItem(key);
+                            continue;
+                        }
+                        this.applyBoard(board);
+                        // Normalize both keys to the most recent valid board.
+                        const normalized = JSON.stringify(board);
+                        localStorage.setItem(this.getPersistKey(), normalized);
+                        localStorage.setItem('bananagrams_solo', normalized);
+                        return true;
                     }
-                    const expected = typeof BananaRules !== 'undefined' ? BananaRules.SOLO_HAND : null;
-                    const soloPoolMax = typeof BananaRules !== 'undefined'
-                        ? Math.max(
-                            BananaRules.poolTotal(BananaRules.SOLO_FAST_TILE_BAG),
-                            BananaRules.poolTotal(BananaRules.SOLO_CLASSIC_TILE_BAG)
-                        )
-                        : 72;
-                    if (Array.isArray(board.pool) && board.pool.length > soloPoolMax) {
-                        localStorage.removeItem(this.getPersistKey());
-                        return false;
-                    }
-                    if (expected != null) {
-                        if (board.soloHandSize != null && board.soloHandSize !== expected) return false;
-                        if (board.soloHandSize == null && board.tiles.length !== expected) return false;
-                    }
-                    this.applyBoard(board);
-                    return true;
+                    return false;
                 } catch (_) {
                     return false;
                 }
             },
 
+    _dictOverrideKey() {
+        return 'bananagrams_dict_overrides_v1';
+    },
+
+    _loadDictOverrides() {
+        try {
+            const raw = localStorage.getItem(this._dictOverrideKey());
+            const parsed = raw ? JSON.parse(raw) : {};
+            return {
+                add: Array.isArray(parsed?.add) ? parsed.add : [],
+                remove: Array.isArray(parsed?.remove) ? parsed.remove : []
+            };
+        } catch (_) {
+            return { add: [], remove: [] };
+        }
+    },
+
+    _saveDictOverrides(overrides) {
+        try {
+            localStorage.setItem(this._dictOverrideKey(), JSON.stringify({
+                add: [...(overrides?.add || [])],
+                remove: [...(overrides?.remove || [])]
+            }));
+        } catch (_) { /* ignore */ }
+    },
+
+    _buildCheckerWithOverrides(baseChecker, overrides = {}) {
+        if (!baseChecker) return null;
+        const add = new Set((overrides.add || []).map((w) => String(w).toLowerCase()).filter(Boolean));
+        const remove = new Set((overrides.remove || []).map((w) => String(w).toLowerCase()).filter(Boolean));
+        return {
+            isPrefix(str) {
+                const s = String(str || '').toLowerCase();
+                if (!s) return false;
+                if (baseChecker.isPrefix(s)) return true;
+                for (const w of add) {
+                    if (w.startsWith(s)) return true;
+                }
+                return false;
+            },
+            isWord(str) {
+                const s = String(str || '').toLowerCase();
+                if (!s) return false;
+                if (add.has(s)) return true;
+                if (remove.has(s)) return false;
+                return baseChecker.isWord(s);
+            }
+        };
+    },
+
+    applyDictionaryAdjustments(adjustments = {}) {
+        if (!this._baseChecker) {
+            window.parent.postMessage({
+                type: 'dict-adjust-result',
+                ok: false,
+                message: 'Dictionary is not loaded yet.'
+            }, '*');
+            return;
+        }
+        const norm = (list) => (Array.isArray(list) ? list : [])
+            .map((w) => String(w || '').trim().toLowerCase())
+            .filter((w) => /^[a-z]+$/.test(w));
+        const addList = norm(adjustments.add);
+        const removeList = norm(adjustments.remove);
+        const invalid = [];
+        (Array.isArray(adjustments.add) ? adjustments.add : []).forEach((w) => {
+            if (!/^[a-z]+$/.test(String(w || '').trim().toLowerCase())) invalid.push(String(w || '').trim());
+        });
+        (Array.isArray(adjustments.remove) ? adjustments.remove : []).forEach((w) => {
+            if (!/^[a-z]+$/.test(String(w || '').trim().toLowerCase())) invalid.push(String(w || '').trim());
+        });
+
+        const current = this._dictOverrides || this._loadDictOverrides();
+        const add = new Set(current.add || []);
+        const remove = new Set(current.remove || []);
+        addList.forEach((w) => {
+            add.add(w);
+            remove.delete(w);
+        });
+        removeList.forEach((w) => {
+            remove.add(w);
+            add.delete(w);
+        });
+
+        this._dictOverrides = { add: [...add], remove: [...remove] };
+        this._saveDictOverrides(this._dictOverrides);
+        this._checker = this._buildCheckerWithOverrides(this._baseChecker, this._dictOverrides);
+        this.requestRender();
+
+        const effectiveAdded = [];
+        const effectiveRemoved = [];
+        const applyFailures = [];
+        addList.forEach((w) => {
+            if (this._checker?.isWord?.(w)) effectiveAdded.push(w);
+            else applyFailures.push(`+${w}`);
+        });
+        removeList.forEach((w) => {
+            if (!this._checker?.isWord?.(w)) effectiveRemoved.push(w);
+            else applyFailures.push(`-${w}`);
+        });
+
+        const msg = `Dictionary updated`
+            + (invalid.length ? ` (ignored: ${invalid.join(', ')})` : '')
+            + (applyFailures.length ? ` (verify failed: ${applyFailures.join(', ')})` : '');
+        window.parent.postMessage({
+            type: 'dict-adjust-result',
+            ok: applyFailures.length === 0,
+            message: msg,
+            added: addList,
+            removed: removeList,
+            effectiveAdded,
+            effectiveRemoved,
+            invalid,
+            applyFailures,
+            totals: {
+                add: this._dictOverrides.add.length,
+                remove: this._dictOverrides.remove.length
+            }
+        }, '*');
+    },
+
     async _loadDictionary() {
         if (typeof BananaDictionary === 'undefined') return;
         try {
             const { nodes } = await BananaDictionary.loadWordlist('dict/enable.bin.gz');
-            this._checker = BananaDictionary.createChecker(nodes);
+            this._baseChecker = BananaDictionary.createChecker(nodes);
+            this._dictOverrides = this._loadDictOverrides();
+            this._checker = this._buildCheckerWithOverrides(this._baseChecker, this._dictOverrides);
         } catch (err) {
             console.warn('[Bananagrams] wordlist load failed', err);
         }

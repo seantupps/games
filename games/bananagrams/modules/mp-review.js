@@ -268,6 +268,7 @@
                 let cursorMaxX = -Infinity;
                 let cursorMaxY = -Infinity;
                 let cursorMinY = Infinity;
+                let cursorMinX = Infinity;
 
                 uids.forEach((uid, idx) => {
                     const tiles = layouts[uid] || [];
@@ -281,6 +282,7 @@
                     let dy = 0;
                     if (idx > 0) {
                         if (portrait) {
+                            dx = Math.round(cursorMinX - bounds.minX);
                             if (bounds.minY < cursorMaxY + gap) {
                                 dy = Math.ceil(cursorMaxY + gap - bounds.minY);
                             }
@@ -292,6 +294,7 @@
                         }
                     } else {
                         cursorMinY = bounds.minY;
+                        cursorMinX = bounds.minX;
                     }
 
                     arranged[uid] = tiles.map((t) => ({
@@ -302,6 +305,7 @@
                     const placed = this._listTilesBounds(arranged[uid]);
                     if (portrait) {
                         cursorMaxY = placed.maxY;
+                        cursorMinX = Math.min(cursorMinX, placed.minX);
                     } else {
                         cursorMaxX = placed.maxX;
                         cursorMinY = Math.min(cursorMinY, placed.minY);
@@ -378,7 +382,10 @@
                 this._reviewDbg('burst', { source });
                 const run = () => {
                     if (!this.tiles?.length) return;
-                    if (!this._reviewViewportSettled) {
+                    const shouldRefit = !this._reviewViewportSettled
+                        || source === 'resize'
+                        || source === 'apply-review-layouts';
+                    if (shouldRefit) {
                         this._fitReviewViewportOnce();
                     } else {
                         this._flushReviewViewportImmediate({ paintOnly: true });
@@ -501,10 +508,12 @@
                     this._reviewDbg('fit-no-bounds', { tileCount: this.tiles?.length ?? 0 });
                     return;
                 }
-                const { width: vw, height: vh } = this.getVisibleViewportSize();
-                const margin = this.isMobileViewport?.() ? 20 : 28;
-                const scaleX = (vw - margin * 2) / Math.max(bounds.w, 1);
-                const scaleY = (vh - margin * 2) / Math.max(bounds.h, 1);
+                const fitBox = this._reviewFitViewportBox();
+                const vw = fitBox.width;
+                const vh = fitBox.height;
+                const margin = fitBox.margin;
+                const scaleX = Math.max(vw - margin * 2, 1) / Math.max(bounds.w, 1);
+                const scaleY = Math.max(vh - margin * 2, 1) / Math.max(bounds.h, 1);
                 const fit = Math.min(Math.max(Math.min(scaleX, scaleY), 0.2), 5);
                 this.targetZoom = fit;
                 this.zoom = fit;
@@ -516,10 +525,66 @@
                     cx: bounds.cx,
                     cy: bounds.cy
                 };
-                this._reviewDbg('fit', { vw, vh, margin, fit, bounds, metrics: this._canvasLayoutMetrics() });
+                this._reviewDbg('fit', {
+                    vw,
+                    vh,
+                    margin,
+                    fit,
+                    bounds,
+                    fitBox,
+                    metrics: this._canvasLayoutMetrics()
+                });
                 this._flushReviewViewportImmediate({ paintOnly: true });
                 this._reviewViewportSettled = true;
                 this._scheduleReviewViewportBurst('fit-done');
+            },
+
+            _reviewFitViewportBox() {
+                const metrics = this._canvasLayoutMetrics();
+                const vis = this.getVisibleViewportSize?.()
+                    || { width: window.innerWidth, height: window.innerHeight };
+                const baseW = Math.max(1, Math.min(vis.width || 1, metrics.cw || vis.width || 1));
+                const baseH = Math.max(1, Math.min(vis.height || 1, metrics.ch || vis.height || 1));
+                const mobile = this.isMobileViewport?.();
+                const margin = mobile ? 20 : 28;
+                const canvas = document.getElementById('board-canvas');
+                const cr = canvas?.getBoundingClientRect?.();
+                if (!cr || !cr.width || !cr.height) {
+                    return { width: baseW, height: baseH, margin, topInset: 0, bottomInset: 0 };
+                }
+
+                const safeGap = mobile ? 10 : 8;
+                let topInset = 0;
+                let bottomInset = 0;
+                const check = (el) => {
+                    if (!el) return;
+                    const style = getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
+                    const r = el.getBoundingClientRect();
+                    if (!r.width || !r.height) return;
+                    const overlapH = Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top);
+                    const overlapW = Math.min(cr.right, r.right) - Math.max(cr.left, r.left);
+                    if (overlapH <= 0 || overlapW <= 0) return;
+                    const centerY = r.top + r.height / 2;
+                    if (centerY <= cr.top + cr.height / 2) {
+                        topInset = Math.max(topInset, Math.max(0, r.bottom - cr.top) + safeGap);
+                    } else {
+                        bottomInset = Math.max(bottomInset, Math.max(0, cr.bottom - r.top) + safeGap);
+                    }
+                };
+
+                check(document.querySelector('.scoreboard.show'));
+                check(document.getElementById('banana-hud'));
+                check(document.querySelector('#banana-banner.is-visible'));
+                check(document.querySelector('#banana-done-btn.show'));
+
+                return {
+                    width: baseW,
+                    height: Math.max(1, baseH - topInset - bottomInset),
+                    margin,
+                    topInset,
+                    bottomInset
+                };
             },
 
             _enterPostGameReview(winnerUid) {

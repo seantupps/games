@@ -3,6 +3,7 @@
  * Overlay #mobile-settings-edge + same-origin iframe relay (engine.js).
  */
 (function () {
+    const root = typeof globalThis !== 'undefined' ? globalThis : window;
     const EDGE_INSET_PX = 44;
     const MIN_SWIPE_PX = 52;
     const MAX_VERTICAL_DRIFT_PX = 90;
@@ -14,16 +15,24 @@
 
     function settingsEdgeSwipeEnabled() {
         if (!isMobileHub()) return false;
-        const Registry = global.GameRegistry;
+        try {
+            const frameGame = document.getElementById('game-frame')?.contentWindow?.game;
+            if (frameGame?.hasCap) {
+                return frameGame.hasCap('supportsSettingsEdgeSwipe');
+            }
+        } catch (_) { /* ignore cross-frame read */ }
+        const Registry = root.GameRegistry;
         if (!Registry) return true;
-        const game = global.FiveHubCtx?.currentGame
+        const game = root.FiveHubCtx?.currentGame
             || localStorage.getItem('lastGame')
             || 'piles';
-        let mode = global.FiveHubCtx?.gameMode || localStorage.getItem(`${game}_mode`);
-        if (game === 'bananagrams') {
-            const room = global.FiveHubCtx?.roomId || null;
-            mode = !room || room === 'lobby' ? 'solo' : 'multiplayer';
-        }
+        const inParty = (() => {
+            const room = root.FiveHubCtx?.roomId || null;
+            return !!room && room !== 'lobby';
+        })();
+        const mode = Registry.hubModeFor
+            ? Registry.hubModeFor(game, inParty)
+            : (root.FiveHubCtx?.gameMode || localStorage.getItem(`${game}_mode`));
         const caps = Registry.getCapabilities(game, mode);
         return caps.supportsSettingsEdgeSwipe !== false;
     }

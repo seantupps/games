@@ -1,4 +1,4 @@
-class BaseGame {
+﻿class BaseGame {
     constructor() {
         this.turn = 'P1';
         this.isOver = false;
@@ -125,9 +125,6 @@ class BaseGame {
         window.addEventListener('message', (e) => {
             if (e.data.type === 'mousemove') {
                 this.mousePos = { x: e.data.clientX, y: e.data.clientY };
-            }
-            if (e.data.type === 'five-viewport-mode' && e.data.mobile) {
-                this._onMobileViewportModeEnabled();
             }
         });
         window.addEventListener('contextmenu', (e) => {
@@ -355,27 +352,33 @@ class BaseGame {
     }
 
     _mobileLayoutPolicy() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.policy) return M.policy(this);
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.policy(this)
+            : (this.capabilities?.mobileLayoutPolicy || 'none');
     }
 
     _usesFitSquareMobileLayout() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.usesFitSquare) return M.usesFitSquare(this);
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesFitSquare(this)
+            : this._mobileLayoutPolicy() === 'fit-square';
     }
 
     _usesPanZoomBoard() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.usesPanZoomBoard) return M.usesPanZoomBoard(this);
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesPanZoomBoard(this)
+            : this._mobileLayoutPolicy() === 'pan-zoom-board';
     }
 
     _usesFixedSpiralMobileAnchor() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.usesFixedSpiralAnchor) return M.usesFixedSpiralAnchor(this);
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesFixedSpiralAnchor(this)
+            : this._mobileLayoutPolicy() === 'fixed-spiral-anchor';
     }
 
-    _boardKind() {
-        return this.capabilities?.boardKind || 'generic';
+    _isPilesBoard() {
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.isPilesBoard(this)
+            : (this.capabilities?.boardKind || 'generic') === 'piles';
     }
 
     initViewportPan() {
@@ -384,42 +387,518 @@ class BaseGame {
 
     /** Current rematch generation (defaults legacy events without field to round 1). */
     _currentResetRound() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.currentResetRound) return M.currentResetRound(this);
-        const roomRc = this.roomData?.global?.resetCount;
-        const last = this.lastResetCount;
-        const ack = this._resetAcknowledgedCount;
-        const candidates = [roomRc, last, ack].filter((n) => typeof n === 'number' && n > 0);
-        return candidates.length ? Math.max(...candidates) : 1;
+        return this.roomData?.global?.resetCount ?? this.lastResetCount ?? 1;
     }
 
     _eventTimestamp(ev) {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.eventTimestamp) return M.eventTimestamp(this, ev);
+        const ts = ev?.timestamp;
+        if (typeof ts === 'number' && Number.isFinite(ts)) {
+            return ts < 1e12 ? ts * 1000 : ts;
+        }
+        return 0;
     }
 
     _dropStaleFinishedBatch(events, round) {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.dropStaleFinishedBatch) return M.dropStaleFinishedBatch(this, events, round);
+        if (events.length === 0) return [];
+
+        const newestTs = events.reduce((max, ev) => Math.max(max, this._eventTimestamp(ev)), 0);
+        const preReset =
+            (newestTs > 0 && newestTs < this._resetAcknowledgedAt)
+            || (
+                newestTs === 0
+                && this._resetAcknowledgedCount != null
+                && round <= this._resetAcknowledgedCount
+            );
+        if (preReset) return [];
+
+        const cfg = {
+            mode: this.mode,
+            createdAt: this.roomData?.createdAt || Date.now(),
+            board: this.roomData?.global?.board || null,
+            firstPlayer: this.roomData?.global?.firstPlayer || 'P1'
+        };
+        const probe = GameLogic.computeState(this.gameName, events, cfg);
+        return probe?.isOver ? [] : events;
     }
 
     /** Only replay moves from the active game after host auto-reset. */
     _eventsForReplay(events) {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.eventsForReplay) return M.eventsForReplay(this, events);
+        if (!this.isMultiplayer || !Array.isArray(events)) return events || [];
+        const round = Number(this._currentResetRound());
+        const tagged = events.filter((ev) => Number(ev.resetCount ?? 1) === round);
+        if (tagged.length > 0) return tagged;
+
+        // Mid-game (no rematch yet): legacy events without resetCount stay in the log.
+        if (!this._resetAcknowledgedAt) return events;
+
+        return this._dropStaleFinishedBatch(events, round);
     }
 
     initNetworkListeners() {
-        if (typeof EngineNetwork !== 'undefined' && EngineNetwork.registerAll) {
-            EngineNetwork.registerAll(this);
-            return;
-        }
-        console.warn('[ENGINE] EngineNetwork not loaded; MP sync disabled');
+        window.addEventListener('message', (e) => {
+            if (!e.data) return;
+
+            // 1. Identity & Theme Updates
+            if (e.data.type === 'init-identity') {
+                this.uid = e.data.uid || this.uid;
+                this.playerRole = (e.data.role || 'P1').toUpperCase();
+                this.roomId = e.data.roomId || 'lobby';
+                if (e.data.username) this.username = e.data.username;
+                this.isMultiplayer = !!this.roomId && this.roomId !== 'lobby';
+                if (!this.isMultiplayer) {
+                    this.opponentName = "AI";
+                    this.loadScores();
+                }
+
+                if (e.data.game) {
+                    this.roomData = e.data.game;
+                    this.lastResetCount = this.roomData.global?.resetCount || 0;
+                    this.firstPlayer = this.roomData.global?.firstPlayer || 'P1';
+                    if (this.roomData.global?.mode) {
+                        this.mode = this.roomData.global.mode;
+                    }
+                }
+                if (this.gameName === 'bananagrams' && this.isMultiplayer && this.roomId !== 'lobby') {
+                    this.mode = 'multiplayer';
+                    if (typeof GameAdapter !== 'undefined') GameAdapter.refreshCapabilities(this);
+                }
+
+                if (this.hasCap('supportsPileColors') && this.mode === 'freestyle' && this.applyServerPileColors) {
+                    this.applyServerPileColors();
+                }
+                this.rebuildState();
+
+                if (this.onIdentitySynced) this.onIdentitySynced();
+                this.renderScoreboard();
+                if (this.safeRender) this.safeRender();
+
+                // Warmup check directly in message handler - guarantees it is ALWAYS executed and never overridden!
+                const hasBoard = this.roomData?.global?.board && (
+                    !this._isPilesBoard()
+                        ? true
+                        : Object.values(this.roomData.global.board).flat().filter(Boolean).length > 0
+                );
+                
+                // Inspect board to detect classic vs freestyle mismatches
+                let boardModeMismatch = false;
+                if (this.roomData?.global?.board) {
+                    if (this._isPilesBoard()) {
+                        const board = this.roomData.global.board;
+                        const allPieces = Object.values(board).flat().filter(Boolean);
+                        if (allPieces.length > 0) {
+                            const hasGridIdx = allPieces.some(p => typeof p.gridIdx === 'number');
+                            if (this.mode === 'freestyle' && !hasGridIdx) {
+                                boardModeMismatch = true;
+                            } else if (this.mode === 'classic' && hasGridIdx) {
+                                boardModeMismatch = true;
+                            }
+                        }
+                    }
+                }
+
+                // Warm up when board missing or mode/board mismatch. Skip on refresh or mid-game (events already replayed).
+                const needsWarmup = !this.roomData || !this.roomData.global || !hasBoard || boardModeMismatch;
+                const gameInProgress = this._eventsLoaded && this.gameEvents.length > 0;
+                const skipWarmupOnRefresh = gameInProgress
+                    || (hasBoard && !boardModeMismatch && (this.roomData?.global?.resetCount || 0) >= 1);
+                if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp && needsWarmup && !skipWarmupOnRefresh) {
+                    this._hasWarmedUp = true;
+                    console.log(`[ENGINE] Host warming up uninitialized or mismatched room: ${this.roomId} (boardModeMismatch=${boardModeMismatch})`);
+                    this.resetGame();
+                } else if (this.isMultiplayer && this.isHost() && !this._hasWarmedUp) {
+                    this._hasWarmedUp = true;
+                }
+
+                // Start Host-led impossible/stuck state repair watchdog
+                if (this.isHost() && this.isMultiplayer) {
+                    this.startRepairWatchdog();
+                }
+            }
+            if (e.data.type === 'update-role') {
+                this.playerRole = e.data.role;
+                console.log(`Piles Identity: Role updated to ${this.playerRole}`);
+                this.updateTurnIndicator();
+                this.renderScoreboard();
+            }
+            if (e.data.type === 'update-theme') {
+                this.uid = e.data.uid || this.uid;
+                document.documentElement.style.setProperty('--theme-color', e.data.color);
+                if (e.data.opponentColor) document.documentElement.style.setProperty('--opponent-color', e.data.opponentColor);
+                if (e.data.username) this.username = e.data.username;
+                this.updateTurnIndicator();
+                this.safeRender();
+            }
+            if (e.data.type === 'update-opponent-theme') {
+                document.documentElement.style.setProperty('--opponent-color', e.data.color);
+                if (e.data.name) this.opponentName = e.data.name;
+                this.updateTurnIndicator();
+                this.safeRender();
+            }
+            if (e.data.type === 'test-force-move') {
+                this.submitMove(e.data.move);
+            }
+
+            // 2. Authoritative Network Updates (Events)
+            if (e.data.type === 'network-events') {
+                if (this.roomId === 'lobby' || !this.isMultiplayer) return;
+                this._eventsLoaded = true;
+                const events = Array.isArray(e.data.events) ? e.data.events : [];
+                const roomRc = this._currentResetRound();
+                const replay = this._eventsForReplay(events);
+
+                if (events.length > 0 && replay.length === 0 && this._resetAcknowledgedAt) {
+                    console.warn('[ENGINE] Dropping pre-reset / wrong-round event batch');
+                    this.gameEvents = [];
+                    this._eventsSyncedAtResetCount = roomRc;
+                    this.rebuildState();
+                    return;
+                }
+
+                this.gameEvents = events;
+                this._eventsSyncedAtResetCount = roomRc;
+                this.rebuildState();
+            }
+
+            if (e.data.type === 'network-update' && e.data.payload) {
+                if (this.roomId === 'lobby' || !this.isMultiplayer) return;
+                const data = e.data.payload;
+                this.roomData = this._mergeRoomSnapshot(this.roomData, data);
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneNetwork === 'function') {
+                    this._traceDoneNetwork(data, 'engine-network-update');
+                }
+                if (data.global && data.global.firstPlayer) {
+                    this.firstPlayer = data.global.firstPlayer;
+                }
+
+                // Detect Reset Signal (resetCount increased). Skip 0→N on first room sync — not a rematch.
+                const currentResetCount = typeof RtdbSchema !== 'undefined'
+                    ? RtdbSchema.readResetCount(this.roomData)
+                    : (this.roomData?.global?.resetCount ?? this.roomData?.meta?.resetCount ?? 0);
+                if (currentResetCount > this.lastResetCount) {
+                    if (this.lastResetCount > 0) {
+                        const who = this.isHost() ? 'Host' : 'Guest';
+                        console.log(`[ENGINE] ${who} received reset signal (resetCount: ${currentResetCount})`);
+                        if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                            this._traceDoneFlags('before-remote-reset');
+                        }
+                        this._applyRemoteResetSignal(data);
+                    }
+                    this.lastResetCount = currentResetCount;
+                }
+
+                // Game hooks (e.g. banana interactions) before replaying board from room snapshot.
+                if (this.onNetworkUpdate) {
+                    this.onNetworkUpdate(data);
+                }
+
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('before-rebuildState');
+                }
+                this.rebuildState();
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('after-rebuildState');
+                }
+
+                // Handle Global Reset Signal (Legacy, but keeping metadata sync)
+                if (data.global && data.global.colors) {
+                    const varMap = { 'B': '--blue-color', 'R': '--red-color', 'G': '--green-color', 'Y': '--yellow-color' };
+                    Object.keys(data.global.colors).forEach(type => {
+                        const val = data.global.colors[type];
+                        const current = document.documentElement.style.getPropertyValue(varMap[type]) || getComputedStyle(document.documentElement).getPropertyValue(varMap[type]);
+                        if (current.trim() !== val.trim()) {
+                            document.documentElement.style.setProperty(varMap[type], val);
+                        }
+                    });
+                }
+
+                const myUid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
+
+                // Auto-handle Interaction Sync (Dragging, Selection) - Still real-time outside event stream
+
+                // Auto-handle Real-time Dragging
+                if (data.interactions && data.interactions.drag) {
+                    Object.entries(data.interactions.drag).forEach(([uid, pieces]) => {
+                        if (uid !== myUid && pieces) {
+                            Object.entries(pieces).forEach(([pid, dragData]) => {
+                                if (!dragData) return;
+                                const el = document.getElementById(pid);
+                                if (el && !this.isDragging) {
+                                    const worldPos = this.fromWorld(dragData.x + 500, dragData.y + 500);
+                                    el.style.transition = 'none';
+                                    el.style.left = `${worldPos.lx}px`;
+                                    el.style.top = `${worldPos.ly}px`;
+                                    el.style.zIndex = '1000';
+
+                                    this.piecePositions[pid] = { nx: dragData.x + 500, ny: dragData.y + 500 };
+                                    this.remotelyDraggedPieces[pid] = Date.now();
+                                }
+                            });
+                        }
+                    });
+                }
+
+                if (data.global && (data.global.piecePositions || data.global.piecePositions === null)) {
+                    if (data.global.piecePositions === null) {
+                        this.piecePositions = {};
+                    } else {
+                        Object.entries(data.global.piecePositions).forEach(([id, pos]) => {
+                            if (pos && pos.uid !== myUid) {
+                                // Drag Protection
+                                if (this.remotelyDraggedPieces[id] && (Date.now() - this.remotelyDraggedPieces[id] < 500)) return;
+
+                                this.piecePositions[id] = pos;
+                                const el = document.getElementById(id);
+                                if (el && !this.isDragging) {
+                                    const worldPos = this.fromWorld(pos.nx, pos.ny);
+                                    el.style.left = `${worldPos.lx}px`;
+                                    el.style.top = `${worldPos.ly}px`;
+                                }
+                            } else if (pos === null) {
+                                delete this.piecePositions[id];
+                            }
+                        });
+                    }
+                }
+
+                if (data.interactions) {
+                    if (data.interactions.select) {
+                        const opponentUid = Object.keys(data.interactions.select).find(uid => uid !== myUid);
+                        if (opponentUid) {
+                            const selectData = data.interactions.select[opponentUid];
+                            if (selectData && typeof selectData === 'object' && selectData.ids) {
+                                this.opponentSelection = selectData;
+                            } else {
+                                this.opponentSelection = null;
+                            }
+                        } else {
+                            this.opponentSelection = null;
+                        }
+                    } else {
+                        this.opponentSelection = null;
+                    }
+                } else {
+                    this.opponentSelection = null;
+                }
+                this.safeRender();
+
+                // Real-time drag previews for line game
+                if (data.previews) {
+                    const opponentUid = Object.keys(data.previews).find(uid => uid !== myUid);
+                    if (opponentUid) {
+                        const previewVal = data.previews[opponentUid];
+                        if (previewVal) {
+                            this.opponentPreview = {
+                                start: previewVal.start,
+                                nx: previewVal.nx,
+                                ny: previewVal.ny
+                            };
+                        } else {
+                            this.opponentPreview = null;
+                        }
+                    } else {
+                        this.opponentPreview = null;
+                    }
+                    this.safeRender();
+                } else if ('previews' in data && !data.previews) {
+                    this.opponentPreview = null;
+                    this.safeRender();
+                }
+
+                // Auto-handle Invalid Move Feedback
+                if (data.interactions && data.interactions.invalid && data.interactions.invalid.uid !== myUid) {
+                    this.triggerInvalidFlash(data.interactions.invalid.ids);
+                }
+
+                // Auto-handle Color Sync
+                if (data.global) {
+                    if (data.global.pileColors && typeof data.global.pileColors === 'object') {
+                        const varMap = this.colorVariableMap;
+                        Object.entries(data.global.pileColors).forEach(([type, color]) => {
+                            if (typeof color !== 'string') return;
+                            const varName = varMap ? varMap[type] : null;
+                            if (varName) document.documentElement.style.setProperty(varName, color);
+                        });
+                        this.safeRender();
+                    } else if (this._isPilesBoard() && this.mode === 'classic') {
+                        // Restore classic defaults if pileColors is null/missing
+                        const defaults = { '--blue-color': '#3b82f6', '--red-color': '#ef4444', '--green-color': '#22c55e', '--yellow-color': '#eab308' };
+                        Object.entries(defaults).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
+                        this.safeRender();
+                    }
+                }
+
+                // Sync Opponent Name & Color
+                if (data.playerData) {
+                    const oppUid = Object.keys(data.playerData).find(uid => uid !== myUid);
+                    if (oppUid) {
+                        if (data.playerData[oppUid].name) {
+                            this.opponentName = data.playerData[oppUid].name;
+                        }
+                        if (data.playerData[oppUid].color) {
+                            document.documentElement.style.setProperty('--opponent-color', data.playerData[oppUid].color);
+                        }
+                        this.updateTurnIndicator();
+                        this.safeRender();
+                    }
+                }
+
+            }
+
+            if (e.data.type === 'keydown') {
+                this._handleKeyDown(e.data);
+            }
+        });
     }
 
     rebuildState() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.rebuildState) M.rebuildState(this);
+        if (!window.GameLogic) return;
+        if (this.isMultiplayer) {
+            if (!this.roomData || !this.roomData.global) {
+                return; // Wait for room metadata sync from Firebase
+            }
+            // Authority: Sync scores from Firebase
+            const scoresObj = this.roomData.global.scores?.[this.gameName]?.[this.mode];
+            this.scores = scoresObj ? { ...scoresObj } : { P1: 0, P2: 0 };
+
+            // Bananagrams MP: global/board is authoritative; event log must not drive isOver/applyState.
+            if (this.gameName === 'bananagrams' && this.isMultiplayer) {
+                const mpBoard = typeof RtdbSchema !== 'undefined' && RtdbSchema.readBoardFromRoom
+                    ? RtdbSchema.readBoardFromRoom(this.roomData)
+                    : this.roomData?.global?.board;
+                const g = this.roomData.global;
+                this.turn = g.turn || g.firstPlayer || this.turn;
+                if (typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('rebuildState-banana-board-only');
+                }
+                this.updateTurnIndicator();
+                this.renderScoreboard();
+                this.safeRender();
+                return;
+            }
+        }
+        const config = {
+            mode: this.mode,
+            createdAt: this.roomData?.createdAt || Date.now(),
+            board: this.roomData?.global?.board || null,
+            firstPlayer: this.roomData?.global?.firstPlayer || 'P1'
+        };
+        const replayEvents = this._eventsForReplay(this.gameEvents);
+        try {
+            const state = GameLogic.computeState(this.gameName, replayEvents, config);
+            if (state) {
+                // Multiplayer turn: replayed event log is source of truth (emulator has no cloud functions).
+                // Host writes global/turn only when a new event arrives to avoid repair races on refresh.
+                if (this.isMultiplayer && this._eventsLoaded && replayEvents.length > 0) {
+                    this.turn = state.turn;
+                    if (this.isHost()) {
+                        const eventCount = replayEvents.length;
+                        if (eventCount !== this._lastTurnSyncedEventCount) {
+                            this._lastTurnSyncedEventCount = eventCount;
+                            if (this.roomData?.global?.turn !== state.turn) {
+                                this.broadcastTurn(state.turn);
+                            }
+                        }
+                    }
+                } else if (this.isMultiplayer) {
+                    const g = this.roomData.global;
+                    this.turn = g.turn || g.firstPlayer || state.turn;
+                } else {
+                    this.turn = state.turn;
+                }
+
+                const mpBoard = typeof RtdbSchema !== 'undefined' && RtdbSchema.readBoardFromRoom
+                    ? RtdbSchema.readBoardFromRoom(this.roomData)
+                    : this.roomData?.global?.board;
+                const boardInReview = this.gameName === 'bananagrams'
+                    && (mpBoard?.phase === 'review' || mpBoard?.reviewPhase === true);
+                const bananaBoardAuthoritative = this.gameName === 'bananagrams'
+                    && this.isMultiplayer
+                    && mpBoard?.version >= 2;
+
+                if (this.isMultiplayer && replayEvents.length === 0 && !boardInReview) {
+                    this.isOver = false;
+                    this.winner = null;
+                } else {
+                    this.isOver = state.isOver;
+                    this.winner = state.winner;
+                }
+                if (boardInReview) {
+                    this.isOver = true;
+                    if (mpBoard?.winnerUid) {
+                        this._winnerUid = mpBoard.winnerUid;
+                    }
+                }
+
+                // After host reset, RTDB may still replay the previous game's finished log.
+                const resetCountStale =
+                    (this.roomData?.global?.resetCount || 0) > (this._eventsSyncedAtResetCount ?? 0);
+                const replayStale = replayEvents.length < this.gameEvents.length;
+                // Bananagrams MP: winner lives on global/board, not the move event log.
+                const staleVictory =
+                    this.isMultiplayer
+                    && state.isOver
+                    && !boardInReview
+                    && (
+                        resetCountStale
+                        || (this.gameName !== 'bananagrams' && replayStale)
+                    );
+
+                if (staleVictory) {
+                    console.warn('[ENGINE] Ignoring stale game-over from event log after host reset');
+                    this.isOver = false;
+                    this.winner = null;
+                    this._victoryRegistered = false;
+                    this.clearWinOverlay();
+                    window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+                    this._applyFreshBoardFromRoom();
+                } else if (bananaBoardAuthoritative) {
+                    if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                        this._traceDoneFlags('rebuildState-skip-banana-applyState');
+                    }
+                } else {
+                    const skipBananaApply = this.gameName === 'bananagrams'
+                        && boardInReview
+                        && this._victoryRegistered;
+                    if (this.applyState && !skipBananaApply) {
+                        if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                            this._traceDoneFlags('rebuildState-before-applyState');
+                        }
+                        this.applyState(state);
+                    } else if (this.gameName === 'bananagrams' && skipBananaApply && typeof this._traceDoneFlags === 'function') {
+                        this._traceDoneFlags('rebuildState-skip-applyState');
+                    }
+                    if (this.isOver) {
+                        this.setGameOver(this.winner);
+                    } else if (!this._victoryRegistered) {
+                        // Do not hide the victory banner on a later rebuild after setGameOver already ran.
+                        this._victoryRegistered = false;
+                        this.clearWinOverlay();
+                        window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+                    }
+                }
+                if (boardInReview) {
+                    this.isOver = true;
+                    if (mpBoard?.winnerUid) {
+                        this._winnerUid = mpBoard.winnerUid;
+                    }
+                }
+
+                this.updateTurnIndicator();
+                this.renderScoreboard();
+                this.safeRender();
+            } else if (!this.isMultiplayer && this.gameName !== 'unknown') {
+                // Rebuild local state for solo mode if GameLogic exists but events stream is empty
+                const logic = GameLogic[this.gameName];
+                if (logic) {
+                    const config = { mode: this.mode, createdAt: Date.now(), board: null };
+                    const state = logic.initialState(this.mode);
+                    if (this.applyState) this.applyState(state);
+                    this.safeRender();
+                }
+            }
+        } catch (e) {
+            console.error(`[ENGINE] State compute failed for ${this.gameName}:`, e);
+        }
     }
 
     applyState(state) {
@@ -427,21 +906,72 @@ class BaseGame {
     }
 
     _partyMemberCount() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.partyMemberCount) return M.partyMemberCount(this);
+        const pd = this.roomData?.playerData || {};
+        return Object.keys(pd).filter((id) => pd[id] != null && typeof pd[id] === 'object').length;
     }
 
     /** Merge partial RTDB payloads; board uses resetCount epoch + board.seq (see RtdbSchema.mergeRoomBoard). */
     _mergeRoomSnapshot(prev, incoming) {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.mergeRoomSnapshot) return M.mergeRoomSnapshot(this, prev, incoming);
-        return incoming || prev;
+        if (this.sync?.mergeRoomSnapshot) {
+            return this.sync.mergeRoomSnapshot(prev, incoming);
+        }
+        if (!incoming || typeof incoming !== 'object') return prev;
+        if (!prev || typeof prev !== 'object') return incoming;
+        const hasPayload = incoming.global || incoming.state || incoming.meta
+            || incoming.playerData || incoming.interactions || incoming.previews;
+        if (!hasPayload) return incoming;
+
+        const merged = { ...prev, ...incoming };
+        if (prev.meta || incoming.meta) {
+            merged.meta = { ...(prev.meta || {}), ...(incoming.meta || {}) };
+        }
+        if (prev.global || incoming.global) {
+            merged.global = { ...(prev.global || {}), ...(incoming.global || {}) };
+        }
+        if (prev.state || incoming.state) {
+            merged.state = { ...(prev.state || {}), ...(incoming.state || {}) };
+        }
+        if (incoming.playerData != null) {
+            merged.playerData = { ...incoming.playerData };
+        } else if (prev.playerData) {
+            merged.playerData = { ...prev.playerData };
+        }
+        if (prev.interactions || incoming.interactions) {
+            merged.interactions = { ...(prev.interactions || {}), ...(incoming.interactions || {}) };
+        }
+        if (incoming.interactions === null) merged.interactions = null;
+        if (incoming.previews === null) merged.previews = null;
+        else if (prev.previews || incoming.previews) {
+            merged.previews = { ...(prev.previews || {}), ...(incoming.previews || {}) };
+        }
+
+        const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
+        if (S?.mergeRoomBoard) {
+            const picked = S.mergeRoomBoard(prev, incoming);
+            if (picked !== undefined) {
+                merged.global = merged.global || {};
+                merged.global.board = picked;
+                merged.state = merged.state || {};
+                merged.state.board = picked;
+            }
+        }
+
+        return S?.normalizeRoomSnapshot ? S.normalizeRoomSnapshot(merged) : merged;
     }
 
     /** Shared transient cleanup when resetCount advances (host or guest). */
     _clearResetTransientState() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.clearResetTransientState) M.clearResetTransientState(this);
+        this.clearAutoReset();
+        this._victoryRegistered = false;
+        this._winBannerSent = false;
+        this.isOver = false;
+        this.winner = null;
+        this.clearWinOverlay();
+        this.selection = { pk: null, ids: [] };
+        this.opponentSelection = null;
+        this.gameEvents = [];
+        this._lastTurnSyncedEventCount = -1;
+        window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
     }
 
     /**
@@ -449,20 +979,69 @@ class BaseGame {
      * Guest: apply global/board from the same RTDB payload — do not wipe locally first.
      */
     _applyRemoteResetSignal(data) {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.applyRemoteResetSignal) M.applyRemoteResetSignal(this, data);
+        const snap = this.roomData || data;
+        const g = snap?.global;
+        if (!g) return;
+
+        const currentResetCount = g.resetCount || 0;
+        this.lastResetCount = currentResetCount;
+        this._resetAcknowledgedCount = currentResetCount;
+        this._resetAcknowledgedAt = Date.now();
+        this._eventsSyncedAtResetCount = currentResetCount;
+
+        this._clearResetTransientState();
+
+        if (g.firstPlayer) this.firstPlayer = g.firstPlayer;
+        if (g.turn) this.turn = g.turn;
+        if (g.mode) this.mode = g.mode;
+
+        if (this.isHost()) {
+            if (this.onGameReset) this.onGameReset();
+            return;
+        }
+
+        let board = g.board;
+        if (typeof RtdbSchema !== 'undefined' && RtdbSchema.normalizeRoomSnapshot) {
+            board = RtdbSchema.normalizeRoomSnapshot(snap).global?.board ?? board;
+        }
+        if (board != null && typeof this.applyBoard === 'function') {
+            if (typeof this.onRemoteReset === 'function') {
+                this.onRemoteReset();
+            }
+            this.applyBoard(board, { force: true });
+            this.updateTurnIndicator();
+            this.renderScoreboard();
+            this.safeRender();
+            if (typeof this._syncViewportAfterLayout === 'function') {
+                this._syncViewportAfterLayout();
+            }
+            return;
+        }
+
+        if (!window.GameLogic || !this.applyState) {
+            if (this.onGameReset) this.onGameReset();
+            return;
+        }
+        const fresh = GameLogic.computeState(this.gameName, [], {
+            mode: this.mode,
+            createdAt: this.roomData?.createdAt || Date.now(),
+            board: board || null,
+            firstPlayer: g.firstPlayer || 'P1'
+        });
+        if (fresh) this.applyState(fresh);
+        if (g.turn) this.turn = g.turn;
     }
 
     /** Rebuild visible board from host reset payload (not from stale event log). */
     _applyFreshBoardFromRoom() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.applyFreshBoardFromRoom) M.applyFreshBoardFromRoom(this);
+        if (!this.roomData?.global) return;
+        this._applyRemoteResetSignal({ global: this.roomData.global });
     }
 
     notifyGameRendered() {
         if (this._gameRenderedNotified || window.parent === window) return;
         let visible = 0;
-        if (this.hasCap('supportsPileColors') && this.piles) {
+        if (this._isPilesBoard() && this.piles) {
             visible = Object.values(this.piles).reduce((n, arr) => n + (arr?.length || 0), 0);
         } else if (this.nodes) {
             visible = this.nodes.length;
@@ -653,11 +1232,7 @@ class BaseGame {
                         interactions: null
                     };
                 })();
-            if (typeof GameSync !== 'undefined' && GameSync.applyHostResetLocally) {
-                GameSync.applyHostResetLocally(this, updates);
-            }
             this.updateMetadata(updates);
-            if (this.isHost()) this.rebuildState();
         } else if (!this.isMultiplayer) {
             this.turn = 'P1';
             this.piecePositions = {};
@@ -719,93 +1294,401 @@ class BaseGame {
 
     /** Stable piles layout bounds in world units (nx/ny around 500) — does not move when pieces are picked. */
     _spiralCoords(n) {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.spiralCoords) return M.spiralCoords(this, n);
+        if (n === 0) return { x: 0, y: 0 };
+        let x = 0;
+        let y = 0;
+        let step = 1;
+        let count = 0;
+        while (count < n) {
+            for (let i = 0; i < step && count < n; i++) { x++; count++; }
+            if (count === n) break;
+            for (let i = 0; i < step && count < n; i++) { y--; count++; }
+            if (count === n) break;
+            step++;
+            for (let i = 0; i < step && count < n; i++) { x--; count++; }
+            if (count === n) break;
+            for (let i = 0; i < step && count < n; i++) { y++; count++; }
+            if (count === n) break;
+            step++;
+        }
+        return { x, y };
     }
 
     _classicPileWorldBounds(portrait) {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.classicPileWorldBounds) return M.classicPileWorldBounds(this, portrait);
+        const piece = 44;
+        const pad = piece / 2;
+        const gap = 70;
+        const vgap = 70;
+        const spacing = portrait ? 200 : 250;
+        const centers = { B: -spacing, R: 0, G: spacing };
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+
+        for (const pk of ['B', 'R', 'G']) {
+            for (let idx = 0; idx < 5; idx++) {
+                let offsetX;
+                let offsetY;
+                if (portrait) {
+                    const centerYOffset = centers[pk];
+                    if (idx < 3) {
+                        offsetX = (idx - 1) * gap;
+                        offsetY = centerYOffset;
+                    } else {
+                        offsetX = idx === 3 ? -gap / 2 : gap / 2;
+                        offsetY = centerYOffset - vgap;
+                    }
+                } else {
+                    const centerXOffset = centers[pk];
+                    if (idx < 3) {
+                        offsetX = centerXOffset + (idx - 1) * gap;
+                        offsetY = 0;
+                    } else {
+                        offsetX = centerXOffset + (idx === 3 ? -gap / 2 : gap / 2);
+                        offsetY = -vgap;
+                    }
+                }
+                const nx = 500 + offsetX;
+                const ny = 500 + offsetY;
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            }
+        }
+
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
     }
 
     _shouldLockFreestyleMobileLayout() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.shouldLockFreestyle) return M.shouldLockFreestyle(this);
+        return this.isMobileViewport() && this._usesFixedSpiralMobileAnchor();
     }
 
     /** Full freestyle spiral bbox — stable; does not shrink when pieces are removed. */
     getFreestyleInitialVisualBounds() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.getFreestyleInitialVisualBounds) return M.getFreestyleInitialVisualBounds(this);
+        const piece = 44;
+        const pad = piece / 2;
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+        for (let i = 0; i < 12; i++) {
+            const spiral = this._spiralCoords(i);
+            const nx = 500 + spiral.x * 75;
+            const ny = 500 + spiral.y * 75;
+            minNx = Math.min(minNx, nx - pad);
+            maxNx = Math.max(maxNx, nx + pad);
+            minNy = Math.min(minNy, ny - pad);
+            maxNy = Math.max(maxNy, ny + pad);
+        }
+        if (!Number.isFinite(minNx)) {
+            return { w: 400, h: 400, cx: 500, cy: 500 };
+        }
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
     }
 
     getPilesStableVisualBounds() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.getPilesStableVisualBounds) return M.getPilesStableVisualBounds(this);
+        const piece = 44;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        const portrait = vh > vw;
+
+        if (this.mode === 'classic') {
+            return this._classicPileWorldBounds(portrait);
+        }
+
+        if (this._mobileLayoutAnchorLocked && this._mobileContentBounds) {
+            return this._mobileContentBounds;
+        }
+
+        const pad = piece / 2;
+        let minNx = Infinity;
+        let maxNx = -Infinity;
+        let minNy = Infinity;
+        let maxNy = -Infinity;
+        const items = this.piles
+            ? Object.values(this.piles).flat().filter(Boolean)
+            : [];
+        const walk = (idx) => {
+            const spiral = this._spiralCoords(idx);
+            let nx = 500 + spiral.x * 75;
+            let ny = 500 + spiral.y * 75;
+            return { nx, ny };
+        };
+        if (items.length) {
+            items.forEach((piece) => {
+                let { nx, ny } = walk(piece.gridIdx ?? 0);
+                const saved = this.piecePositions?.[piece.id];
+                if (saved) {
+                    if (saved.nx !== undefined) nx = saved.nx;
+                    if (saved.ny !== undefined) ny = saved.ny;
+                }
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            });
+        } else {
+            for (let i = 0; i < 12; i++) {
+                const { nx, ny } = walk(i);
+                minNx = Math.min(minNx, nx - pad);
+                maxNx = Math.max(maxNx, nx + pad);
+                minNy = Math.min(minNy, ny - pad);
+                maxNy = Math.max(maxNy, ny + pad);
+            }
+        }
+        if (!Number.isFinite(minNx)) {
+            return { w: 400, h: 400, cx: 500, cy: 500 };
+        }
+        return {
+            w: maxNx - minNx,
+            h: maxNy - minNy,
+            cx: (minNx + maxNx) / 2,
+            cy: (minNy + maxNy) / 2
+        };
     }
 
     lockMobileLayoutAnchor() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.lockMobileLayoutAnchor) return M.lockMobileLayoutAnchor(this);
+        if (this._mobileLayoutAnchorLocked) return;
+        this._mobileContentBounds = this.getFreestyleInitialVisualBounds();
+        this._mobileLayoutAnchorLocked = true;
     }
 
     _applyMobilePilesContainerGeometry(bounds) {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.applyMobilePilesContainerGeometry) M.applyMobilePilesContainerGeometry(this, bounds);
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        if (!vw || !vh || !bounds) return;
+        const board = this.localSize || 1000;
+        const docEl = document.documentElement;
+        docEl.style.height = '100%';
+        docEl.style.width = '100%';
+        docEl.style.maxHeight = '';
+        docEl.style.overflow = 'hidden';
+        document.body.style.display = 'block';
+        document.body.style.position = 'relative';
+        document.body.style.width = `${vw}px`;
+        document.body.style.height = `${vh}px`;
+        document.body.style.maxHeight = `${vh}px`;
+        document.body.style.minHeight = '0';
+        document.body.style.overflow = 'hidden';
+        document.body.style.margin = '0';
+        document.body.style.transform = '';
+        document.body.style.transformOrigin = '';
+        const container = document.getElementById('game-container');
+        if (container) {
+            container.style.position = 'absolute';
+            container.style.left = `${vw / 2 - bounds.cx}px`;
+            container.style.top = `${vh / 2 - bounds.cy}px`;
+            container.style.width = `${board}px`;
+            container.style.height = `${board}px`;
+            container.style.margin = '0';
+            container.style.transformOrigin = `${bounds.cx}px ${bounds.cy}px`;
+        }
     }
 
     /** Union of actual play pieces/nodes in local coordinates (not full board size). */
     getMobileVisualBounds() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.getMobileVisualBounds) return M.getMobileVisualBounds(this);
+        const pad = this.isMobileViewport() ? 32 : 12;
+        const ls = this.localSize || 800;
+        const fallback = { w: ls, h: ls, cx: ls / 2, cy: ls / 2 };
+
+        if (this._usesPanZoomBoard()) {
+            return this.getPanZoomWorldVisualBounds();
+        }
+
+        if (this._isPilesBoard() || this._usesFixedSpiralMobileAnchor() || this._mobileLayoutPolicy() === 'piles-dynamic') {
+            return this.getPilesStableVisualBounds();
+        }
+
+        if (this.nodes?.length && this._usesFitSquareMobileLayout()) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (const n of this.nodes) {
+                const x = parseFloat(n.el?.style?.left) || 0;
+                const y = parseFloat(n.el?.style?.top) || 0;
+                minX = Math.min(minX, x - pad);
+                maxX = Math.max(maxX, x + pad);
+                minY = Math.min(minY, y - pad);
+                maxY = Math.max(maxY, y + pad);
+            }
+            if (!Number.isFinite(minX)) return fallback;
+            return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+        }
+
+        const container = document.getElementById('game-container');
+        const pieces = container?.querySelectorAll('.piece') || [];
+        if (pieces.length) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            pieces.forEach((p) => {
+                const x = parseFloat(p.style.left) || 0;
+                const y = parseFloat(p.style.top) || 0;
+                const w = p.offsetWidth || 36;
+                const h = p.offsetHeight || 36;
+                minX = Math.min(minX, x - pad);
+                maxX = Math.max(maxX, x + w + pad);
+                minY = Math.min(minY, y - pad);
+                maxY = Math.max(maxY, y + h + pad);
+            });
+            if (!Number.isFinite(minX)) return fallback;
+            return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+        }
+
+        return fallback;
     }
 
     /** World-space bounds for pan-zoom-board games (tile rack / spread). */
     getPanZoomWorldVisualBounds() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.getPanZoomWorldVisualBounds) return M.getPanZoomWorldVisualBounds(this);
+        const pad = 56;
+        const size = 40;
+        const gap = 40;
+        const center = typeof this.getViewportContentCenter === 'function'
+            ? this.getViewportContentCenter()
+            : { x: 2400, y: 2400 };
+        const tiles = this.tiles;
+        if (!tiles?.length) {
+            const cols = 7;
+            const rows = 3;
+            const w = (cols - 1) * gap + size + pad * 2;
+            const h = (rows - 1) * gap + size + pad * 2;
+            return { w, h, cx: center.x, cy: center.y };
+        }
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const t of tiles) {
+            if (t.x == null || t.y == null) continue;
+            minX = Math.min(minX, t.x);
+            maxX = Math.max(maxX, t.x + size);
+            minY = Math.min(minY, t.y);
+            maxY = Math.max(maxY, t.y + size);
+        }
+        if (!Number.isFinite(minX)) {
+            const w = 7 * gap + size + pad * 2;
+            const h = 3 * gap + size + pad * 2;
+            return { w, h, cx: center.x, cy: center.y };
+        }
+        minX -= pad;
+        minY -= pad;
+        maxX += pad;
+        maxY += pad;
+        return {
+            w: maxX - minX,
+            h: maxY - minY,
+            cx: (minX + maxX) / 2,
+            cy: (minY + maxY) / 2
+        };
     }
 
     _fitPanZoomMobileViewport() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.fitPanZoomMobileViewport) return M.fitPanZoomMobileViewport(this);
-    }
-
-    /** Hub iframe: five-mobile class applied after initZoom — refit pan-zoom rack once mobile is known. */
-    _onMobileViewportModeEnabled() {
-        if (!this.isMobileViewport?.()) return;
-        if (this._usesPanZoomBoard?.()) {
-            this.refreshMobileLayout();
+        const bounds = this.getPanZoomWorldVisualBounds();
+        this._mobileContentBounds = bounds;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        const margin = 24;
+        const scaleX = (vw - margin * 2) / Math.max(bounds.w, 1);
+        const scaleY = (vh - margin * 2) / Math.max(bounds.h, 1);
+        const fit = Math.min(Math.max(Math.min(scaleX, scaleY), 0.2), 5);
+        if (!this._fitZoomInitialized) {
+            this.targetZoom = fit;
+            this.zoom = fit;
+            this._mobileBaseFit = fit;
+            this._fitZoomInitialized = true;
+            this._mobileLayoutAnchorLocked = true;
             if (typeof GameViewport !== 'undefined') {
-                const c = typeof this.getViewportContentCenter === 'function'
+                const focal = typeof this.getViewportContentCenter === 'function'
                     ? this.getViewportContentCenter()
-                    : null;
-                const ox = this.ORIGIN ?? (this.localSize || 1000) / 2;
-                const focal = c || { x: ox, y: ox };
+                    : { x: bounds.cx, y: bounds.cy };
                 GameViewport.centerWorldPoint(this, focal.x, focal.y);
             }
-            this.applyZoom();
-        } else if (!this._usesFitSquareMobileLayout?.()) {
-            this.refreshMobileLayout();
+        } else if ((this.zoom || 1) < fit * 0.98) {
+            this.targetZoom = fit;
+            this.zoom = fit;
+            this._mobileBaseFit = fit;
+            if (typeof GameViewport !== 'undefined') {
+                const focal = typeof this.getViewportContentCenter === 'function'
+                    ? this.getViewportContentCenter()
+                    : { x: bounds.cx, y: bounds.cy };
+                GameViewport.centerWorldPoint(this, focal.x, focal.y);
+            }
+        } else if (typeof GameViewport !== 'undefined') {
+            GameViewport.reflowOnResize(this);
         }
-        this.requestRender();
+        this.applyZoom();
     }
 
     /** Recompute mobile zoom anchor once (not per render) — line fits board; piles use stable center. */
     refreshMobileLayout() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.refreshMobileLayout) return M.refreshMobileLayout(this);
+        if (!this.isMobileViewport()) return;
+        if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
+            this.fitBoardToViewport();
+            return;
+        }
+        if (this._usesPanZoomBoard()) {
+            this._fitPanZoomMobileViewport();
+            return;
+        }
+        if (this._shouldLockFreestyleMobileLayout()) {
+            this.lockMobileLayoutAnchor();
+            this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+            this.applyZoom();
+            return;
+        }
+        this._mobileContentBounds = this.getPilesStableVisualBounds();
+        this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+        this.applyZoom();
     }
 
     /** Resize viewport shell without recomputing freestyle anchor (cx/cy stay fixed). */
     refreshMobileLayoutViewportOnly() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.refreshMobileLayoutViewportOnly) return M.refreshMobileLayoutViewportOnly(this);
+        if (!this.isMobileViewport()) return;
+        if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
+            this.fitBoardToViewport();
+            return;
+        }
+        if (this._usesPanZoomBoard()) {
+            if (typeof GameViewport !== 'undefined') {
+                GameViewport.reflowOnResize(this);
+            }
+            this.applyZoom();
+            return;
+        }
+        if (!this._mobileLayoutAnchorLocked || !this._mobileContentBounds) {
+            this.refreshMobileLayout();
+            return;
+        }
+        this._applyMobilePilesContainerGeometry(this._mobileContentBounds);
+        this.applyZoom();
     }
 
     getDefaultZoomForViewport() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.getDefaultZoomForViewport) return M.getDefaultZoomForViewport(this);
+        if (this.isMobileViewport()) {
+            const { width: vw, height: vh } = this.getVisibleViewportSize();
+            const margin = 20;
+            const bounds = this._shouldLockFreestyleMobileLayout()
+                ? (this._mobileContentBounds || this.getFreestyleInitialVisualBounds())
+                : this.getMobileVisualBounds();
+            const scaleX = (vw - margin * 2) / Math.max(bounds.w, 1);
+            const scaleY = (vh - margin * 2) / Math.max(bounds.h, 1);
+            const base = Math.min(Math.max(Math.min(scaleX, scaleY), 0.25), 5);
+            this._mobileBaseFit = base;
+            this._mobileContentBounds = bounds;
+            return base;
+        }
+        return 1;
     }
 
     restorePersistedZoom() {
@@ -817,10 +1700,7 @@ class BaseGame {
             let zoom = Math.min(Math.max(saved, 0.2), 5);
             if (mobilePanZoom) {
                 const fit = this.getDefaultZoomForViewport();
-                if (Number.isFinite(fit)) {
-                    if (zoom < fit) zoom = fit;
-                    if (zoom > fit * 1.02) zoom = fit;
-                }
+                if (Number.isFinite(fit) && zoom < fit) zoom = fit;
             }
             this.targetZoom = zoom;
             this.zoom = zoom;
@@ -845,8 +1725,37 @@ class BaseGame {
 
     /** Fit square boards (line only) inside the visible iframe — mobile viewport only. */
     fitBoardToViewport() {
-        const M = typeof EngineMobileLayout !== 'undefined' ? EngineMobileLayout : null;
-        if (M?.fitBoardToViewport) return M.fitBoardToViewport(this);
+        if (!this.isMobileViewport()) return;
+        if (!this.localSize || !this._usesFitSquareMobileLayout()) return;
+        const container = document.getElementById('game-container');
+        if (!container) return;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        if (!vw || !vh) return;
+        this._mobileContentBounds = this.getMobileVisualBounds();
+
+        container.style.width = `${this.localSize}px`;
+        container.style.height = `${this.localSize}px`;
+        container.style.margin = '0';
+        container.style.flexShrink = '0';
+
+        const docEl = document.documentElement;
+        docEl.style.height = `${vh}px`;
+        docEl.style.width = `${vw}px`;
+        docEl.style.maxHeight = `${vh}px`;
+        docEl.style.overflow = 'hidden';
+        document.body.style.display = 'block';
+        document.body.style.position = 'relative';
+        document.body.style.width = `${vw}px`;
+        document.body.style.height = `${vh}px`;
+        document.body.style.maxHeight = `${vh}px`;
+        document.body.style.minHeight = '0';
+        document.body.style.overflow = 'hidden';
+        document.body.style.margin = '0';
+
+        if (!this._fitZoomInitialized) {
+            this.restorePersistedZoom();
+        }
+        this.applyZoom();
     }
 
     nodeSnapRadius() {
@@ -1046,7 +1955,7 @@ class BaseGame {
         if (key === '/') window.parent.postMessage('toggle-command', '*');
         if (key === 'p') this.toggleScore();
 
-        if (key === '`') {
+        if (key === 'r') {
             if (!this.isHost()) return;
             if (this.onResetRequest) this.onResetRequest();
             else {
@@ -1306,39 +2215,10 @@ class BaseGame {
         }
     }
 
-    /** Shared iframe → hub win banner (see shared/js/hub/win-banner-payload.js). */
-    _postHubWinBanner(data) {
-        if (!data || !this.hasCap('supportsWinBanner')) return;
-        if (typeof HubWinBannerPayload !== 'undefined') {
-            HubWinBannerPayload.postWinBanner(data);
-        } else {
-            window.parent.postMessage({ type: 'update-win-banner', ...data }, '*');
-        }
-    }
-
-    /** Registry / test override for hub banner auto-fade (ms); null = stay until reset. */
-    _resolveWinBannerAutoFadeMs(options = {}) {
-        if (options.autoFadeMs != null) return options.autoFadeMs;
-        if (typeof window !== 'undefined' && window.FIVE_WIN_BANNER_FADE_MS != null) {
-            const t = Number(window.FIVE_WIN_BANNER_FADE_MS);
-            if (!Number.isNaN(t) && t > 0) return t;
-        }
-        const caps = typeof GameRegistry !== 'undefined' && this.gameName
-            ? GameRegistry.getCapabilities(this.gameName, this.mode)
-            : {};
-        if (typeof caps.winBannerAutoFadeMs === 'number' && caps.winBannerAutoFadeMs > 0) {
-            return caps.winBannerAutoFadeMs;
-        }
-        return null;
-    }
-
-    /**
-     * Core victory state — scores, MP metadata, hub banner. Games with post-game review
-     * (Bananagrams) override setGameOver and call this without scheduling auto-reset.
-     */
-    _registerVictoryState(winner, options = {}) {
-        if (this._victoryRegistered) return false;
+    setGameOver(winner, options = {}) {
+        if (this._victoryRegistered) return;
         this._victoryRegistered = true;
+
         this.isOver = true;
         this.winner = winner;
 
@@ -1350,38 +2230,32 @@ class BaseGame {
             }
             this.updateMetadata(updates);
         }
+        this.updateTurnIndicator();
 
+        // Increment and Save Scores
         if (this.scores && this.scores[winner] !== undefined) {
             this.scores[winner]++;
             this.saveScores();
             this.renderScoreboard();
         }
 
-        const fadeMs = this._resolveWinBannerAutoFadeMs(options);
-        const bannerPayload = {
-            visible: true,
-            winner,
-            winnerUid: options.winnerUid || undefined
-        };
-        if (fadeMs != null) bannerPayload.autoFadeMs = fadeMs;
-        if (options.bannerText != null) {
-            bannerPayload.bannerText = options.bannerText;
-            if (options.bannerColor) bannerPayload.bannerColor = options.bannerColor;
-        }
-        this._postHubWinBanner(bannerPayload);
-
-        const overlay = document.querySelector('.win-overlay');
-        if (overlay) {
-            overlay.innerHTML = '<div style="font-size: 0.2em; opacity: 0.7; margin-top: 15vh;">PRESS \'R\' TO REMATCH</div>';
-            overlay.classList.add('show');
+        // Hub win banner + legacy overlay (games like Bananagrams use in-game BANANAS! only)
+        if (this.hasCap('supportsWinBanner')) {
+            window.parent.postMessage({
+                type: 'update-win-banner',
+                winner: winner,
+                winnerUid: options.winnerUid || undefined,
+                visible: true
+            }, '*');
+            const overlay = document.querySelector('.win-overlay');
+            if (overlay) {
+                overlay.innerHTML = `<div style="font-size: 0.2em; opacity: 0.7; margin-top: 15vh;">PRESS 'R' TO REMATCH</div>`;
+                overlay.classList.add('show');
+            }
         }
 
+        // Update turn indicator (BaseGame will handle "Game Over" text)
         this.updateTurnIndicator();
-        return true;
-    }
-
-    setGameOver(winner, options = {}) {
-        if (!this._registerVictoryState(winner, options)) return;
 
         // Auto-Restart Timer (host / P1 only — guest waits for resetCount from host)
         const victoryAutoReset = typeof this.hasCap === 'function'
@@ -1392,15 +2266,11 @@ class BaseGame {
             console.log('[ENGINE] Guest waiting for host auto-reset');
         } else if (this.isHost()) {
             const isTest = this.roomId && this.roomId.startsWith('MP_AUDIT');
-            const envDwell = (typeof window !== 'undefined' && window.FIVE_VICTORY_DWELL_MS != null)
-                ? Number(window.FIVE_VICTORY_DWELL_MS)
-                : NaN;
-            const delay = isTest
-                ? ((!Number.isNaN(envDwell) ? envDwell : 5000))
-                : Number(
-                    (!Number.isNaN(envDwell) ? envDwell : null)
-                        || 2500
-                );
+            const dwell = Number(
+                (typeof window !== 'undefined' && window.FIVE_VICTORY_DWELL_MS)
+                    || (isTest ? 5000 : 2500)
+            );
+            const delay = isTest ? Math.max(dwell, 5000) : dwell;
             console.log(`[ENGINE] Host scheduling auto-reset in ${delay}ms`);
             this.clearAutoReset();
             this.autoResetTimer = setTimeout(() => {
@@ -1493,21 +2363,6 @@ class BaseGame {
         return typeof GameAdapter !== 'undefined' ? GameAdapter.cap(this, name) : true;
     }
 
-    _mpBoardFromRoomData() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.mpBoardFromRoomData) return M.mpBoardFromRoomData(this);
-    }
-
-    _mpBoardAuthoritative() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.mpBoardAuthoritative) return M.mpBoardAuthoritative(this);
-    }
-
-    _boardInReviewPhase() {
-        const M = typeof EngineRoomSync !== 'undefined' ? EngineRoomSync : null;
-        if (M?.boardInReviewPhase) return M.boardInReviewPhase(this);
-    }
-
     static setupDragging(el, onDragEnd, context, onDragStart, onDrag, options) {
         const drag = typeof GameDrag !== 'undefined' ? GameDrag : null;
         if (drag) return drag.setupDragging(el, onDragEnd, context, onDragStart, onDrag, options);
@@ -1531,9 +2386,3 @@ class BaseGame {
 }
 window.addEventListener('dragstart', (e) => e.preventDefault());
 window.BaseGame = BaseGame;
-if (typeof EngineRoomSync !== 'undefined' && EngineRoomSync.install) {
-    EngineRoomSync.install(BaseGame);
-}
-if (typeof EngineMobileLayout !== 'undefined' && EngineMobileLayout.install) {
-    EngineMobileLayout.install(BaseGame);
-}

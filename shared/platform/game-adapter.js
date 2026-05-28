@@ -18,7 +18,11 @@
                 supportsLongPressEndTurn: false,
                 supportsRealtimePreviews: false,
                 hasBoardState: true,
-                syncStyle: 'event-log'
+                syncStyle: 'event-log',
+                mpBoardAuthoritative: false,
+                supportsPostGameReview: false,
+                flexiblePlayerRoles: false,
+                supportsBoardStateInspect: false
             };
     }
 
