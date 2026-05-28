@@ -1,0 +1,30 @@
+#center-dot {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    background-color: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 100000;
+    pointer-events: none;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    display: none;
+}
+
+#debug-info {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 10px;
+    border-radius: 5px;
+    font-family: monospace;
+    z-index: 99999;
+    pointer-events: none;
+    color: #22c55e;
+    font-size: 12px;
+    border: 1px solid #22c55e;
+    display: none;
+}

@@ -16,6 +16,25 @@
             }, '*');
         }
 
+        function resolvePartyRole(game) {
+            if (!game) return 'P1';
+            const myUid = global.NetworkEngine.uid;
+            if (!myUid || game.host === myUid || ctx.roomId === 'lobby') return 'P1';
+            const gameId = game?.global?.game || game?.meta?.game || '';
+            if (gameId !== 'bananagrams') return 'P2';
+            const pd = game.playerData || {};
+            const users = game.users || {};
+            const others = Object.keys(pd).filter((id) => id && id !== game.host);
+            others.sort((a, b) => {
+                const ta = typeof users[a] === 'number' ? users[a] : Number.MAX_SAFE_INTEGER;
+                const tb = typeof users[b] === 'number' ? users[b] : Number.MAX_SAFE_INTEGER;
+                if (ta !== tb) return ta - tb;
+                return a.localeCompare(b);
+            });
+            const idx = others.indexOf(myUid);
+            return idx >= 0 ? `P${idx + 2}` : 'P2';
+        }
+
         function loadRoomIntoIframe(frame) {
             if (!frame?.contentWindow || !ctx.roomId || ctx.roomId === 'lobby') {
                 pushIframeIdentity(frame, 'P1', null);
@@ -36,8 +55,7 @@
 
                 if (!game || !frame.contentWindow) return;
 
-                const calculatedRole =
-                    game.host === global.NetworkEngine.uid || ctx.roomId === 'lobby' ? 'P1' : 'P2';
+                const calculatedRole = resolvePartyRole(game);
                 global.NetworkEngine.playerRole = calculatedRole;
 
                 frame.contentWindow.postMessage({
@@ -93,6 +111,14 @@
                 }
                 global.NetworkEngine.db.ref().update(multiUpdates);
             },
+            [H.INIT_IDENTITY]: (e) => {
+                const game = e.data?.game || ctx.currentGame;
+                const mode = e.data?.mode || ctx.gameMode;
+                const caps = global.GameRegistry?.getCapabilities(game, mode);
+                if (!caps?.supportsTurnIndicator && hubGames.clearGlobalTurnIndicator) {
+                    hubGames.clearGlobalTurnIndicator();
+                }
+            },
             [H.GAME_RENDERED]: () => {
                 global.hideHubLoading();
                 if (global.FivePhoneDebug) global.FivePhoneDebug.flush('game-rendered');
@@ -145,7 +171,13 @@
                     indicator.classList.toggle('visible', !!e.data.text);
                 }
             },
-            [H.UPDATE_WIN_BANNER]: (e) => ctx.showWinBanner(e.data)
+            [H.UPDATE_WIN_BANNER]: (e) => ctx.showWinBanner(e.data),
+            'post-game-blocking': (e) => {
+                if (!e.data?.active || ctx.currentGame !== 'bananagrams') return;
+                const banner = document.getElementById('global-win-banner');
+                if (!banner?.classList.contains('visible')) return;
+                ctx.adjustBananagramsWinBannerClearance?.(banner);
+            }
         });
     }
 

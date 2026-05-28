@@ -1,0 +1,19 @@
+/* Pan-zoom games use the same iframe background as piles/line (core.css: transparent). */
+html,
+body {
+    background: transparent;
+}
+
+#game-container.pan-zoom-board,
+#game-container.pan-zoom-board #board-canvas {
+    background: transparent;
+}
+
+#game-container.pan-zoom-board .board-pan-layer {
+    background: transparent;
+    touch-action: none;
+}
+
+#game-container.pan-zoom-board .tile {
+    touch-action: none;
+}

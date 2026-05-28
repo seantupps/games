@@ -8,10 +8,19 @@
     function bootstrap() {
         if (global.HubBoot) global.HubBoot.init();
 
-        let username = sessionStorage.getItem('username');
+        const store = global.DeviceStorage;
+        let username = store ? store.read('username') : (
+            localStorage.getItem('username') || sessionStorage.getItem('username')
+        );
         if (!username) {
             username = `Guest${Math.floor(Math.random() * 9000 + 1000)}`;
-            sessionStorage.setItem('username', username);
+            if (store) store.write('username', username);
+            else {
+                try { localStorage.setItem('username', username); } catch (_) { /* ignore */ }
+                sessionStorage.setItem('username', username);
+            }
+        } else if (store) {
+            store.write('username', username);
         }
 
         try {
@@ -32,13 +41,23 @@
             urlParams.get('game') || localStorage.getItem('lastGame') || global.GameRegistry.defaultId();
         let gameMode = urlParams.get('mode') || 'classic';
 
-        let userColor = sessionStorage.getItem('userColor');
+        let userColor = store ? store.read('userColor') : (
+            localStorage.getItem('userColor') || sessionStorage.getItem('userColor')
+        );
         if (!userColor) {
             userColor = VIBRANT_COLORS[Math.floor(Math.random() * VIBRANT_COLORS.length)];
-            sessionStorage.setItem('userColor', userColor);
+            if (store) store.write('userColor', userColor);
+            else {
+                try { localStorage.setItem('userColor', userColor); } catch (_) { /* ignore */ }
+                sessionStorage.setItem('userColor', userColor);
+            }
+        } else if (store) {
+            store.write('userColor', userColor);
         }
 
         const lastFrameGameRef = { current: null };
+
+        let partyMemberCount = 1;
 
         const ctx = {
             username,
@@ -46,6 +65,10 @@
             initialRole,
             lastFrameGameRef,
             hubGames: null,
+            getPartyMemberCount: () => partyMemberCount,
+            setPartyMemberCount: (n) => {
+                partyMemberCount = typeof n === 'number' ? n : 1;
+            },
             get currentGame() { return currentGame; },
             set currentGame(v) { currentGame = v; },
             get gameMode() { return gameMode; },
@@ -55,6 +78,7 @@
         };
 
         global.HubApp = { ctx };
+        global.FiveHubCtx = ctx;
 
         global.HubTheme.attach(ctx);
         global.HubUI.attach(ctx);
@@ -125,7 +149,12 @@
         if (usernameInput) {
             usernameInput.addEventListener('input', (e) => {
                 ctx.username = e.target.value.trim().substring(0, 16) || ctx.username;
-                sessionStorage.setItem('username', ctx.username);
+                if (global.DeviceStorage) {
+                    global.DeviceStorage.write('username', ctx.username);
+                } else {
+                    try { localStorage.setItem('username', ctx.username); } catch (_) { /* ignore */ }
+                    sessionStorage.setItem('username', ctx.username);
+                }
                 global.NetworkEngine.updatePresence();
             });
         }

@@ -48,11 +48,24 @@
             game.getExtraGlobalReset = () => ({});
         }
 
+        syncViewportPan(game);
+        syncMobileSettingsEdgeSwipe(game);
         return game;
     }
 
     function cap(game, name) {
         return !!(game?.capabilities && game.capabilities[name]);
+    }
+
+    /** Pan listeners attach after capabilities (initZoom runs too early in BaseGame ctor). */
+    function syncViewportPan(game) {
+        if (!game || game.capabilities?.viewportPanEnabled === false) return;
+        const usesPan = typeof game._usesPanZoomBoard === 'function'
+            ? game._usesPanZoomBoard()
+            : game.capabilities?.mobileLayoutPolicy === 'pan-zoom-board';
+        if (usesPan && typeof game.initViewportPan === 'function') {
+            game.initViewportPan();
+        }
     }
 
     /**
@@ -66,10 +79,26 @@
         game.capabilities = Registry
             ? Registry.getCapabilities(id, mode)
             : defaultCapabilities();
+        syncViewportPan(game);
+        syncMobileSettingsEdgeSwipe(game);
         return game;
     }
 
-    const GameAdapter = { attachGameAdapter, refreshCapabilities, cap, defaultCapabilities };
+    function syncMobileSettingsEdgeSwipe(game) {
+        if (!game || typeof game.initMobileSettingsEdgeSwipe !== 'function') return;
+        if (game.hasCap && !game.hasCap('supportsSettingsEdgeSwipe')) return;
+        if (game._settingsEdgeSwipeInit) return;
+        game.initMobileSettingsEdgeSwipe();
+        game._settingsEdgeSwipeInit = true;
+    }
+
+    const GameAdapter = {
+        attachGameAdapter,
+        refreshCapabilities,
+        cap,
+        defaultCapabilities,
+        syncMobileSettingsEdgeSwipe
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = GameAdapter;

@@ -18,53 +18,310 @@
         global.toggleSidebar = toggleSidebar;
         ctx.toggleSidebar = toggleSidebar;
 
+        function getWinBannerViewportBox() {
+            const vv = window.visualViewport;
+            const pad = 12;
+            const vw = vv?.width ?? window.innerWidth;
+            const vh = vv?.height ?? window.innerHeight;
+            const offTop = (vv?.offsetTop ?? 0) + pad;
+            const offLeft = (vv?.offsetLeft ?? 0) + pad;
+            return {
+                maxW: Math.max(100, vw - pad * 2),
+                maxH: Math.max(40, vh * 0.42 - pad),
+                minTop: offTop,
+                minLeft: offLeft,
+                maxRight: offLeft + Math.max(100, vw - pad * 2),
+                maxBottom: offTop + Math.max(40, vh - pad * 2)
+            };
+        }
+
+        function isObstacleVisible(el) {
+            if (!el) return false;
+            const st = getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) {
+                return false;
+            }
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+        }
+
+        function collectWinBannerObstacles() {
+            const rects = [];
+            const add = (el, id) => {
+                if (!isObstacleVisible(el)) return;
+                rects.push({ id, rect: el.getBoundingClientRect() });
+            };
+            [
+                ['mobile-bar', document.getElementById('mobile-bar')],
+                ['settings-trigger', document.getElementById('settings-trigger')],
+                ['turn-indicator', document.getElementById('global-turn-indicator')],
+                ['chat', document.getElementById('chat-container')],
+                ['invite-toast', document.getElementById('invite-toast')]
+            ].forEach(([id, el]) => add(el, id));
+            if (document.getElementById('chat-container')?.classList.contains('active')) {
+                add(document.getElementById('chat-container'), 'chat-active');
+            }
+            if (document.getElementById('invite-toast')?.classList.contains('show')) {
+                add(document.getElementById('invite-toast'), 'invite-toast-show');
+            }
+            const turn = document.getElementById('global-turn-indicator');
+            if (turn?.classList.contains('visible')) add(turn, 'turn-indicator-visible');
+
+            const fdoc = document.getElementById('game-frame')?.contentDocument;
+            if (fdoc && ctx.currentGame === 'bananagrams') {
+                [
+                    ['banana-done', fdoc.getElementById('banana-done-btn')],
+                    ['banana-hud', fdoc.getElementById('banana-hud')],
+                    ['banana-banner', fdoc.getElementById('banana-banner')],
+                    ['scoreboard', fdoc.querySelector('.scoreboard')]
+                ].forEach(([id, el]) => {
+                    if (id === 'banana-done' && !el?.classList.contains('show')) return;
+                    if (id === 'banana-banner' && !el?.classList.contains('is-visible')) return;
+                    if (id === 'scoreboard' && !el?.classList.contains('show')) return;
+                    add(el, id);
+                });
+            }
+            return rects;
+        }
+
+        function rectsOverlap(a, b, gap = 8) {
+            return a.left < b.right + gap
+                && a.right > b.left - gap
+                && a.top < b.bottom + gap
+                && a.bottom > b.top - gap;
+        }
+
+        function adjustWinBannerObstacleClearance(banner, box) {
+            if (!banner) return;
+            banner.style.removeProperty('top');
+            banner.style.removeProperty('left');
+            banner.style.transform = 'translateX(-50%)';
+            const gap = 12;
+            const obstacles = collectWinBannerObstacles();
+            let rect = banner.getBoundingClientRect();
+
+            for (let attempt = 0; attempt < 16; attempt++) {
+                const overlapping = obstacles.filter((o) => rectsOverlap(rect, o.rect, gap));
+                const outOfBox = rect.top < box.minTop
+                    || rect.left < box.minLeft
+                    || rect.right > box.maxRight
+                    || rect.bottom > box.maxBottom;
+                if (!overlapping.length && !outOfBox) break;
+
+                let nextTop = rect.top;
+                if (rect.top < box.minTop) nextTop = box.minTop;
+                overlapping.forEach((o) => {
+                    if (rectsOverlap(rect, o.rect, gap)) {
+                        nextTop = Math.max(nextTop, o.rect.bottom + gap);
+                    }
+                });
+                if (rect.bottom > box.maxBottom) {
+                    nextTop = Math.min(nextTop, box.maxBottom - rect.height);
+                }
+                if (nextTop !== rect.top) {
+                    banner.style.top = `${Math.ceil(nextTop)}px`;
+                    banner.style.transform = 'translateX(-50%)';
+                } else {
+                    break;
+                }
+                rect = banner.getBoundingClientRect();
+            }
+        }
+
+        function fitWinBannerToViewport(banner) {
+            if (!banner) return;
+            if (!banner.classList.contains('visible') && !banner.classList.contains('is-fitting')) return;
+            const mobile = document.documentElement.classList.contains('five-mobile');
+            const box = getWinBannerViewportBox();
+            banner.style.removeProperty('top');
+            banner.style.removeProperty('left');
+            banner.style.transform = 'translateX(-50%)';
+            banner.style.maxWidth = `${box.maxW}px`;
+            banner.style.maxHeight = `${box.maxH}px`;
+            banner.style.textAlign = 'center';
+            banner.style.lineHeight = mobile ? '1.15' : '1.1';
+            banner.style.whiteSpace = mobile ? 'normal' : 'nowrap';
+            banner.style.overflowWrap = mobile ? 'anywhere' : 'normal';
+            const preferred = mobile ? 28 : 42;
+            const minSize = 20;
+            const step = 2;
+            let size = preferred;
+            banner.style.fontSize = `${size}px`;
+            for (let i = 0; i < 48; i++) {
+                const fitsMax = banner.scrollWidth <= box.maxW && banner.scrollHeight <= box.maxH;
+                const fitsClient = banner.scrollHeight <= banner.clientHeight + 1
+                    && banner.scrollWidth <= banner.clientWidth + 1;
+                if (fitsMax && fitsClient) break;
+                size = Math.max(minSize, size - step);
+                banner.style.fontSize = `${size}px`;
+            }
+            if (banner.scrollWidth > box.maxW || banner.scrollHeight > box.maxH
+                || banner.scrollHeight > banner.clientHeight + 1) {
+                banner.style.whiteSpace = 'normal';
+                banner.style.overflowWrap = 'anywhere';
+                for (let i = 0; i < 16; i++) {
+                    const fitsMax = banner.scrollWidth <= box.maxW && banner.scrollHeight <= box.maxH;
+                    const fitsClient = banner.scrollHeight <= banner.clientHeight + 1
+                        && banner.scrollWidth <= banner.clientWidth + 1;
+                    if (fitsMax && fitsClient) break;
+                    size = Math.max(minSize, size - step);
+                    banner.style.fontSize = `${size}px`;
+                }
+            }
+            adjustWinBannerObstacleClearance(banner, box);
+            let rect = banner.getBoundingClientRect();
+            if (rect.right > box.maxRight) {
+                const left = Math.max(box.minLeft, box.maxRight - rect.width);
+                banner.style.left = `${left + rect.width / 2}px`;
+                banner.style.transform = 'translateX(-50%)';
+            }
+            rect = banner.getBoundingClientRect();
+            if (rect.bottom > box.maxBottom) {
+                banner.style.top = `${Math.max(box.minTop, box.maxBottom - rect.height)}px`;
+            }
+        }
+
+        /** Bananagrams: nudge hub banner below iframe Done if boxes overlap. */
+        function adjustBananagramsWinBannerClearance(banner) {
+            if (!banner || ctx.currentGame !== 'bananagrams') return;
+            adjustWinBannerObstacleClearance(banner, getWinBannerViewportBox());
+        }
+
+        let winBannerResizeBound = false;
+        let winBannerFadeTimer = null;
+        let winBannerSettleUntil = 0;
+
+        function refitWinBannerHidden(banner) {
+            if (!banner?.classList.contains('visible')) return;
+            banner.classList.add('is-fitting');
+            requestAnimationFrame(() => {
+                fitWinBannerToViewport(banner);
+                banner.classList.remove('is-fitting');
+            });
+        }
+
+        function bindWinBannerResize() {
+            if (winBannerResizeBound) return;
+            winBannerResizeBound = true;
+            const refit = () => {
+                if (Date.now() < winBannerSettleUntil) return;
+                const banner = document.getElementById('global-win-banner');
+                if (!banner?.classList.contains('visible') || banner.classList.contains('is-fitting')) return;
+                refitWinBannerHidden(banner);
+            };
+            window.addEventListener('resize', refit);
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', refit);
+                window.visualViewport.addEventListener('scroll', refit);
+            }
+            if (global.FiveHubLayout?.notifyGameFrameLayout) {
+                const orig = global.FiveHubLayout.notifyGameFrameLayout.bind(global.FiveHubLayout);
+                global.FiveHubLayout.notifyGameFrameLayout = function (...args) {
+                    const out = orig(...args);
+                    if (document.body.dataset.hubGame === 'bananagrams') {
+                        const banner = document.getElementById('global-win-banner');
+                        if (banner?.classList.contains('visible')
+                            && !banner.classList.contains('is-fitting')) {
+                            adjustBananagramsWinBannerClearance(banner);
+                        }
+                    } else {
+                        refit();
+                    }
+                    return out;
+                };
+            }
+        }
+
         function showWinBanner(data) {
             const banner = document.getElementById('global-win-banner');
             if (!banner) return;
+            bindWinBannerResize();
 
             if (data.visible) {
-                const winner = data.winner;
-                const isSolo = !ctx.roomId || ctx.roomId === 'lobby';
-                let winnerName = '';
-                let winnerColor = '#ffffff';
-
-                if (isSolo) {
-                    winnerName = winner === 'P1' ? (ctx.username || 'PLAYER') : 'AI';
-                    winnerColor =
-                        (winner === 'P1' ? ctx.userColor : ctx.getOpponentColor(ctx.userColor)) || '#ffffff';
+                if (data.bannerText) {
+                    banner.innerText = data.bannerText;
+                    banner.style.textTransform = 'none';
+                    const color = data.bannerColor
+                        || ctx.userColor
+                        || '#ffffff';
+                    banner.style.color = color;
+                    banner.style.textShadow = `0 0 20px ${color}`;
                 } else {
-                    const rd = global.NetworkEngine.roomData;
-                    if (rd?.playerData) {
-                        const hostUid = rd.host;
-                        const guestUid = Object.keys(rd.playerData).find((uid) => uid !== hostUid);
-                        const winnerUid = winner === 'P1' ? hostUid : guestUid;
-                        if (winnerUid && rd.playerData[winnerUid]) {
-                            winnerName = rd.playerData[winnerUid].name;
-                            winnerColor = rd.playerData[winnerUid].color;
+                    banner.style.textTransform = 'uppercase';
+                    const winner = data.winner;
+                    const isSolo = !ctx.roomId || ctx.roomId === 'lobby';
+                    let winnerName = '';
+                    let winnerColor = '#ffffff';
+
+                    if (isSolo) {
+                        winnerName = winner === 'P1' ? (ctx.username || 'PLAYER') : 'AI';
+                        winnerColor =
+                            (winner === 'P1' ? ctx.userColor : ctx.getOpponentColor(ctx.userColor)) || '#ffffff';
+                    } else {
+                        const rd = global.NetworkEngine.roomData;
+                        if (rd?.playerData) {
+                            const hostUid = rd.host;
+                            const resolvedUid = data.winnerUid
+                                || (winner === 'P1' ? hostUid : Object.keys(rd.playerData).find((uid) => uid !== hostUid));
+                            if (resolvedUid && rd.playerData[resolvedUid]) {
+                                winnerName = rd.playerData[resolvedUid].name;
+                                winnerColor = rd.playerData[resolvedUid].color;
+                            }
+                        }
+                        if (!winnerName) {
+                            winnerName = winner === 'P1' ? 'HOSTP1' : 'GUESTP2';
+                        }
+                        if (!winnerColor || winnerColor === '#ffffff') {
+                            const myRole = global.NetworkEngine.playerRole || 'P1';
+                            winnerColor = winner === myRole
+                                ? ctx.userColor
+                                : (document.documentElement.style.getPropertyValue('--opponent-color').trim()
+                                    || ctx.userColor);
                         }
                     }
-                    if (!winnerName) {
-                        winnerName = winner === 'P1' ? 'HOSTP1' : 'GUESTP2';
-                    }
-                    if (!winnerColor || winnerColor === '#ffffff') {
-                        const myRole = global.NetworkEngine.playerRole || 'P1';
-                        winnerColor = winner === myRole
-                            ? ctx.userColor
-                            : (document.documentElement.style.getPropertyValue('--opponent-color').trim()
-                                || ctx.userColor);
-                    }
-                }
 
-                banner.innerText = `${winnerName} WINS!`.toUpperCase();
-                banner.style.color = winnerColor;
-                banner.style.textShadow = `0 0 20px ${winnerColor}`;
+                    banner.innerText = `${winnerName} WINS!`.toUpperCase();
+                    banner.style.color = winnerColor;
+                    banner.style.textShadow = `0 0 20px ${winnerColor}`;
+                }
+                const mobile = document.documentElement.classList.contains('five-mobile');
+                banner.style.fontSize = mobile ? '28px' : '42px';
+                winBannerSettleUntil = Date.now() + 600;
+                banner.classList.add('is-fitting');
+                fitWinBannerToViewport(banner);
                 banner.classList.add('visible');
-                banner.onclick = () => banner.classList.remove('visible');
+                banner.classList.remove('is-fitting');
+                winBannerSettleUntil = Date.now() + 600;
+                banner.onclick = () => {
+                    clearTimeout(winBannerFadeTimer);
+                    banner.classList.remove('visible');
+                    banner.classList.remove('is-fitting');
+                };
+                clearTimeout(winBannerFadeTimer);
+                let fadeMs = data.autoFadeMs;
+                if (data.visible && fadeMs == null && document.body.dataset.hubGame === 'bananagrams') {
+                    fadeMs = 4000;
+                }
+                if (typeof fadeMs === 'number' && fadeMs > 0) {
+                    winBannerFadeTimer = setTimeout(() => {
+                        banner.classList.remove('visible');
+                        banner.style.fontSize = '';
+                        banner.style.removeProperty('top');
+                        banner.style.removeProperty('left');
+                        banner.onclick = null;
+                    }, fadeMs);
+                }
             } else {
+                clearTimeout(winBannerFadeTimer);
                 banner.classList.remove('visible');
+                banner.style.fontSize = '';
+                banner.style.removeProperty('top');
+                banner.onclick = null;
             }
         }
         ctx.showWinBanner = showWinBanner;
+        ctx.fitWinBannerToViewport = fitWinBannerToViewport;
+        ctx.adjustBananagramsWinBannerClearance = adjustBananagramsWinBannerClearance;
 
         let hubOverlayMuteUntil = 0;
         function muteHubOverlayDismiss(ms = 450) {
@@ -120,6 +377,9 @@
 
         function syncMobileUI() {
             if (global.FiveViewport) global.FiveViewport.syncHubViewport();
+            if (global.FiveHubLayout?.notifyGameFrameLayout) global.FiveHubLayout.notifyGameFrameLayout();
+            const banner = document.getElementById('global-win-banner');
+            if (banner?.classList.contains('visible')) fitWinBannerToViewport(banner);
         }
         window.addEventListener('resize', syncMobileUI);
         if (document.readyState === 'loading') {

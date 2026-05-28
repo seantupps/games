@@ -184,7 +184,8 @@
                         '/p <name> — invite a player to your party',
                         '/p leave — leave the party and return to the lobby',
                         '/clear — clear local data and reload',
-                        '/win <name> — show win banner (dev)',
+                        '/win — same as _onPlayerWins (real victory path)',
+                        '/win banner <name> — hub win banner only (dev)',
                         '/help — show this list'
                     ].forEach((line) => this.append({ sender: 'System', content: line }));
                     return true;
@@ -207,8 +208,21 @@
                     }
                     return true;
                 }
-                if (text.startsWith('/win ')) {
-                    const target = text.substring(5).trim();
+                if (text.trim().toLowerCase() === '/win') {
+                    const frame = document.getElementById('game-frame');
+                    if (frame?.contentWindow) {
+                        frame.contentWindow.postMessage({ type: 'dev-win' }, '*');
+                        this.append({
+                            sender: 'System',
+                            content: 'Triggered in-game win (dev).'
+                        });
+                    } else {
+                        this.append({ sender: 'System', content: 'No game loaded.' });
+                    }
+                    return true;
+                }
+                if (text.toLowerCase().startsWith('/win banner ')) {
+                    const target = text.substring(12).trim();
                     const myName = ctx.username || 'Guest';
                     const winner = target.toUpperCase() === myName.toUpperCase() ? 'P1' : 'P2';
                     ctx.showWinBanner({ winner, visible: true });

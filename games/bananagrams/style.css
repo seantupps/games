@@ -1,0 +1,264 @@
+#game-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+
+#board-canvas {
+    position: absolute;
+    inset: 0;
+    touch-action: none;
+    background: transparent;
+}
+
+.board-pan-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 4800px;
+    height: 4800px;
+    cursor: default;
+    touch-action: none;
+    background: transparent;
+}
+
+.board-pan-layer.is-panning {
+    cursor: grabbing;
+}
+
+/* Score digits align with timer/BUNCH (shared .scoreboard has horizontal padding). */
+.scoreboard {
+    display: none;
+    z-index: 25;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.scoreboard.show {
+    display: block;
+}
+
+.banana-hud {
+    position: absolute;
+    top: calc(var(--hub-score-top, 28px) + 6px);
+    left: var(--hub-score-left, 28px);
+    z-index: 21;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    pointer-events: none;
+    user-select: none;
+}
+
+body:has(.scoreboard.show) .banana-hud {
+    top: calc(
+        var(--hub-score-top, 28px) + (2 * var(--hub-score-pad-block, 12px))
+        + (var(--hub-score-font, 2.2rem) * var(--hub-score-line, 1.15)) + 10px
+    );
+}
+
+.banana-timer {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    letter-spacing: 0.02em;
+    color: var(--theme-color, #3b82f6);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+.banana-pool-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45em;
+    line-height: 1.1;
+}
+
+.banana-done-btn {
+    display: none;
+    position: fixed;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10040;
+    padding: 16px 40px;
+    border-radius: 12px;
+    border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 55%, rgba(255, 255, 255, 0.2));
+    background: rgba(8, 8, 8, 0.88);
+    color: var(--theme-color, #3b82f6);
+    font-family: 'Inter', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    pointer-events: auto;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.banana-done-btn.show {
+    display: block;
+}
+
+.banana-done-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.board-pan-layer.is-review-frozen {
+    cursor: grab;
+}
+
+.tile.is-review-tile {
+    box-shadow: 0 0 0 2px var(--tile-owner-color, var(--theme-color, #3b82f6));
+}
+
+.tile.is-review-tile .tile-face {
+    background: var(--tile-owner-color, var(--theme-color, #3b82f6));
+    border-color: color-mix(in srgb, var(--tile-owner-color, #3b82f6) 70%, #000);
+}
+
+.banana-pool-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    opacity: 0.55;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.banana-pool-count {
+    font-size: 1.1rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--theme-color, #3b82f6);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+/* Fixed to iframe viewport — not inside zoomed #board-canvas */
+.banana-banner.banana-banner--top {
+    position: fixed;
+    top: calc(
+        var(--hub-score-top, 28px) + (2 * var(--hub-score-pad-block, 12px))
+        + (var(--hub-score-font, 2.2rem) * var(--hub-score-line, 1.15)) + 12px
+    );
+    left: 50%;
+    transform: translateX(-50%) scale(0.92);
+}
+
+.banana-banner.banana-banner--top.is-visible {
+    transform: translateX(-50%) scale(1);
+}
+
+.banana-banner {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    z-index: 10030;
+    transform: translate(-50%, -50%) scale(0.92);
+    padding: 0.6rem 1.4rem;
+    font-family: system-ui, 'Segoe UI', sans-serif;
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.72);
+    border-radius: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.banana-banner.is-visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* Default 40×40 tile. Larger grab area: set TILE_HIT_INSET in game.js (adds padding per side). */
+.tile {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    aspect-ratio: 1 / 1;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, 'Segoe UI', sans-serif;
+    font-weight: 700;
+    font-size: 1.25rem;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: #fff;
+    background: var(--theme-color, #3b82f6);
+    border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 70%, #000);
+    border-radius: 6px;
+    box-shadow: none;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+    z-index: 2;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: geometricPrecision;
+    backface-visibility: hidden;
+}
+
+.tile:has(.tile-face) {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.tile-face {
+    width: 40px;
+    height: 40px;
+    aspect-ratio: 1 / 1;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    font-weight: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+    color: #fff;
+    background: var(--theme-color, #3b82f6);
+    border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 70%, #000);
+    border-radius: 6px;
+    box-shadow: none;
+    pointer-events: none;
+}
+
+.tile.is-dragging {
+    cursor: grabbing;
+    z-index: 10;
+    box-shadow: none;
+    will-change: transform;
+}
+
+.tile.is-selected {
+    outline: 2px solid rgba(255, 255, 255, 0.95);
+    outline-offset: 2px;
+}
+
+.tile.is-selected:has(.tile-face) {
+    outline: none;
+}
+
+.tile.is-selected .tile-face {
+    outline: 2px solid rgba(255, 255, 255, 0.95);
+    outline-offset: 2px;
+}
+
+.tile.is-face-down .tile-face {
+    color: transparent;
+    background: var(--theme-color, #3b82f6);
+    border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 70%, #000);
+    box-shadow: none;
+}

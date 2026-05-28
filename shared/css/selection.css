@@ -1,0 +1,26 @@
+.selection-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+    overflow: hidden;
+}
+
+.selection-overlay.is-selecting {
+    pointer-events: auto;
+}
+
+.selection-marquee {
+    display: none;
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid rgba(96, 165, 250, 0.95);
+    background: rgba(59, 130, 246, 0.18);
+    pointer-events: none;
+}
+
+.tile.is-selected .tile-face,
+.piece.is-selected {
+    outline: 2px solid rgba(255, 255, 255, 0.95);
+    outline-offset: 2px;
+}

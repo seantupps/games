@@ -73,7 +73,12 @@
 
         function setUserColor(color) {
             ctx.userColor = color;
-            sessionStorage.setItem('userColor', color);
+            if (global.DeviceStorage) {
+                global.DeviceStorage.write('userColor', color);
+            } else {
+                try { localStorage.setItem('userColor', color); } catch (_) { /* ignore */ }
+                sessionStorage.setItem('userColor', color);
+            }
             document.documentElement.style.setProperty('--theme-color', color);
             const rgb = hexToRgbValues(color);
             document.documentElement.style.setProperty('--theme-color-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);

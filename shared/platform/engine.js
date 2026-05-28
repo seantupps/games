@@ -5,7 +5,8 @@ class BaseGame {
         this.winner = null;
         this.zoom = 1.0;
         this.targetZoom = 1.0;
-        this.zoomVelocity = 0.4;
+        this.zoomVelocity = 0.12;
+        this._pointerDragging = false;
         this.lastResetCount = 0;
 
         this.devMode = localStorage.getItem('game_devMode') === 'true';
@@ -42,7 +43,7 @@ class BaseGame {
         // Rendering Boilerplate
         this.renderPending = false;
         this.mousePos = { x: 0, y: 0 };
-        this.uid = sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid'); // Fallback
+        this.uid = localStorage.getItem('game_uid') || sessionStorage.getItem('game_uid');
         this.localSize = 1000; // Default world-to-local scale (0-1000 world)
 
         this.gameEvents = [];
@@ -60,12 +61,15 @@ class BaseGame {
         this.initNetworkListeners();
         this.initColorPicker();
         this.initGlobalEvents();
+        this.initDevCommands();
         this.initZoom();
         if (typeof GameAdapter !== 'undefined') GameAdapter.attachGameAdapter(this);
+        if (typeof GameSync !== 'undefined') GameSync.attachGameSync(this);
         setTimeout(() => this.updateTurnIndicator(), 0); // Init UI
         setTimeout(() => {
             window.parent.postMessage({ type: 'iframe-ready' }, '*');
         }, 50);
+        if (typeof GameDevOverlay !== 'undefined') GameDevOverlay.sync(this);
     }
 
     requestRender() {
@@ -78,8 +82,29 @@ class BaseGame {
         });
     }
 
+    initDevCommands() {
+        window.addEventListener('message', (e) => {
+            if (!e.data || e.data.type !== 'dev-win') return;
+            this.debugTriggerWin();
+        });
+    }
+
+    /** Hub chat `/win` — games override for full victory flow (e.g. Bananagrams review). */
+    debugTriggerWin() {
+        if (this.isOver) return;
+        const role = this.playerRole || 'P1';
+        if (typeof this.setGameOver === 'function') {
+            this.setGameOver(role);
+            return;
+        }
+        console.warn('[DEV] /win: setGameOver not available for', this.gameName);
+    }
+
     initGlobalEvents() {
         window.addEventListener('resize', () => {
+            if (this._usesPanZoomBoard() && typeof GameViewport !== 'undefined') {
+                GameViewport.reflowOnResize(this);
+            }
             if (this.isMobileViewport?.() && !this._usesFitSquareMobileLayout()) {
                 if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
                 else this.refreshMobileLayout();
@@ -111,7 +136,6 @@ class BaseGame {
         });
 
         this.initLongPressEndTurn();
-        this.initMobileSettingsEdgeSwipe();
     }
 
     /**
@@ -119,6 +143,7 @@ class BaseGame {
      */
     initMobileSettingsEdgeSwipe() {
         if (!this.isMobileViewport() || window.parent === window) return;
+        if (this.hasCap && !this.hasCap('supportsSettingsEdgeSwipe')) return;
 
         const EDGE_INSET_PX = 44;
         const MIN_SWIPE_PX = 52;
@@ -327,19 +352,37 @@ class BaseGame {
     }
 
     _mobileLayoutPolicy() {
-        return this.capabilities?.mobileLayoutPolicy || 'none';
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.policy(this)
+            : (this.capabilities?.mobileLayoutPolicy || 'none');
     }
 
     _usesFitSquareMobileLayout() {
-        return this._mobileLayoutPolicy() === 'fit-square';
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesFitSquare(this)
+            : this._mobileLayoutPolicy() === 'fit-square';
+    }
+
+    _usesPanZoomBoard() {
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesPanZoomBoard(this)
+            : this._mobileLayoutPolicy() === 'pan-zoom-board';
     }
 
     _usesFixedSpiralMobileAnchor() {
-        return this._mobileLayoutPolicy() === 'fixed-spiral-anchor';
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.usesFixedSpiralAnchor(this)
+            : this._mobileLayoutPolicy() === 'fixed-spiral-anchor';
     }
 
     _isPilesBoard() {
-        return (this.capabilities?.boardKind || 'generic') === 'piles';
+        return typeof MobileLayoutPolicy !== 'undefined'
+            ? MobileLayoutPolicy.isPilesBoard(this)
+            : (this.capabilities?.boardKind || 'generic') === 'piles';
+    }
+
+    initViewportPan() {
+        if (typeof GameViewport !== 'undefined') GameViewport.initPan(this);
     }
 
     /** Current rematch generation (defaults legacy events without field to round 1). */
@@ -414,6 +457,10 @@ class BaseGame {
                     if (this.roomData.global?.mode) {
                         this.mode = this.roomData.global.mode;
                     }
+                }
+                if (this.gameName === 'bananagrams' && this.isMultiplayer && this.roomId !== 'lobby') {
+                    this.mode = 'multiplayer';
+                    if (typeof GameAdapter !== 'undefined') GameAdapter.refreshCapabilities(this);
                 }
 
                 if (this.hasCap('supportsPileColors') && this.mode === 'freestyle' && this.applyServerPileColors) {
@@ -515,42 +562,42 @@ class BaseGame {
             if (e.data.type === 'network-update' && e.data.payload) {
                 if (this.roomId === 'lobby' || !this.isMultiplayer) return;
                 const data = e.data.payload;
-                this.roomData = data; // Cache for reset counts etc
+                this.roomData = this._mergeRoomSnapshot(this.roomData, data);
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneNetwork === 'function') {
+                    this._traceDoneNetwork(data, 'engine-network-update');
+                }
                 if (data.global && data.global.firstPlayer) {
                     this.firstPlayer = data.global.firstPlayer;
                 }
 
-                // Detect Reset Signal (resetCount increased)
-                const currentResetCount = data.global?.resetCount || 0;
+                // Detect Reset Signal (resetCount increased). Skip 0→N on first room sync — not a rematch.
+                const currentResetCount = typeof RtdbSchema !== 'undefined'
+                    ? RtdbSchema.readResetCount(this.roomData)
+                    : (this.roomData?.global?.resetCount ?? this.roomData?.meta?.resetCount ?? 0);
                 if (currentResetCount > this.lastResetCount) {
-                    const who = this.isHost() ? 'Host' : 'Guest';
-                    console.log(`[ENGINE] ${who} received reset signal (resetCount: ${currentResetCount})`);
-                    this.lastResetCount = currentResetCount;
-                    this._resetAcknowledgedCount = currentResetCount;
-                    this._resetAcknowledgedAt = Date.now();
-
-                    this.clearAutoReset();
-                    this._victoryRegistered = false;
-                    this._winBannerSent = false;
-                    this.isOver = false;
-                    this.winner = null;
-                    this.clearWinOverlay();
-                    this.selection = { pk: null, ids: [] };
-                    this.opponentSelection = null;
-                    this.gameEvents = [];
-                    this._eventsSyncedAtResetCount = currentResetCount;
-                    this._lastTurnSyncedEventCount = -1;
-                    window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
-
-                    if (data.global?.firstPlayer) this.firstPlayer = data.global.firstPlayer;
-                    if (data.global?.turn) this.turn = data.global.turn;
-                    if (data.global?.mode) {
-                        this.mode = data.global.mode;
+                    if (this.lastResetCount > 0) {
+                        const who = this.isHost() ? 'Host' : 'Guest';
+                        console.log(`[ENGINE] ${who} received reset signal (resetCount: ${currentResetCount})`);
+                        if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                            this._traceDoneFlags('before-remote-reset');
+                        }
+                        this._applyRemoteResetSignal(data);
                     }
-                    if (this.onGameReset) this.onGameReset();
+                    this.lastResetCount = currentResetCount;
                 }
 
+                // Game hooks (e.g. banana interactions) before replaying board from room snapshot.
+                if (this.onNetworkUpdate) {
+                    this.onNetworkUpdate(data);
+                }
+
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('before-rebuildState');
+                }
                 this.rebuildState();
+                if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('after-rebuildState');
+                }
 
                 // Handle Global Reset Signal (Legacy, but keeping metadata sync)
                 if (data.global && data.global.colors) {
@@ -695,10 +742,6 @@ class BaseGame {
                     }
                 }
 
-                // Hook for game-specific logic
-                if (this.onNetworkUpdate) {
-                    this.onNetworkUpdate(data);
-                }
             }
 
             if (e.data.type === 'keydown') {
@@ -716,6 +759,22 @@ class BaseGame {
             // Authority: Sync scores from Firebase
             const scoresObj = this.roomData.global.scores?.[this.gameName]?.[this.mode];
             this.scores = scoresObj ? { ...scoresObj } : { P1: 0, P2: 0 };
+
+            // Bananagrams MP: global/board is authoritative; event log must not drive isOver/applyState.
+            if (this.gameName === 'bananagrams' && this.isMultiplayer) {
+                const mpBoard = typeof RtdbSchema !== 'undefined' && RtdbSchema.readBoardFromRoom
+                    ? RtdbSchema.readBoardFromRoom(this.roomData)
+                    : this.roomData?.global?.board;
+                const g = this.roomData.global;
+                this.turn = g.turn || g.firstPlayer || this.turn;
+                if (typeof this._traceDoneFlags === 'function') {
+                    this._traceDoneFlags('rebuildState-banana-board-only');
+                }
+                this.updateTurnIndicator();
+                this.renderScoreboard();
+                this.safeRender();
+                return;
+            }
         }
         const config = {
             mode: this.mode,
@@ -747,21 +806,41 @@ class BaseGame {
                     this.turn = state.turn;
                 }
 
-                if (this.isMultiplayer && replayEvents.length === 0) {
+                const mpBoard = typeof RtdbSchema !== 'undefined' && RtdbSchema.readBoardFromRoom
+                    ? RtdbSchema.readBoardFromRoom(this.roomData)
+                    : this.roomData?.global?.board;
+                const boardInReview = this.gameName === 'bananagrams'
+                    && (mpBoard?.phase === 'review' || mpBoard?.reviewPhase === true);
+                const bananaBoardAuthoritative = this.gameName === 'bananagrams'
+                    && this.isMultiplayer
+                    && mpBoard?.version >= 2;
+
+                if (this.isMultiplayer && replayEvents.length === 0 && !boardInReview) {
                     this.isOver = false;
                     this.winner = null;
                 } else {
                     this.isOver = state.isOver;
                     this.winner = state.winner;
                 }
+                if (boardInReview) {
+                    this.isOver = true;
+                    if (mpBoard?.winnerUid) {
+                        this._winnerUid = mpBoard.winnerUid;
+                    }
+                }
 
                 // After host reset, RTDB may still replay the previous game's finished log.
+                const resetCountStale =
+                    (this.roomData?.global?.resetCount || 0) > (this._eventsSyncedAtResetCount ?? 0);
+                const replayStale = replayEvents.length < this.gameEvents.length;
+                // Bananagrams MP: winner lives on global/board, not the move event log.
                 const staleVictory =
                     this.isMultiplayer
                     && state.isOver
+                    && !boardInReview
                     && (
-                        replayEvents.length < this.gameEvents.length
-                        || (this.roomData?.global?.resetCount || 0) > (this._eventsSyncedAtResetCount ?? 0)
+                        resetCountStale
+                        || (this.gameName !== 'bananagrams' && replayStale)
                     );
 
                 if (staleVictory) {
@@ -772,8 +851,22 @@ class BaseGame {
                     this.clearWinOverlay();
                     window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
                     this._applyFreshBoardFromRoom();
+                } else if (bananaBoardAuthoritative) {
+                    if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                        this._traceDoneFlags('rebuildState-skip-banana-applyState');
+                    }
                 } else {
-                    if (this.applyState) this.applyState(state);
+                    const skipBananaApply = this.gameName === 'bananagrams'
+                        && boardInReview
+                        && this._victoryRegistered;
+                    if (this.applyState && !skipBananaApply) {
+                        if (this.gameName === 'bananagrams' && typeof this._traceDoneFlags === 'function') {
+                            this._traceDoneFlags('rebuildState-before-applyState');
+                        }
+                        this.applyState(state);
+                    } else if (this.gameName === 'bananagrams' && skipBananaApply && typeof this._traceDoneFlags === 'function') {
+                        this._traceDoneFlags('rebuildState-skip-applyState');
+                    }
                     if (this.isOver) {
                         this.setGameOver(this.winner);
                     } else if (!this._victoryRegistered) {
@@ -781,6 +874,12 @@ class BaseGame {
                         this._victoryRegistered = false;
                         this.clearWinOverlay();
                         window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+                    }
+                }
+                if (boardInReview) {
+                    this.isOver = true;
+                    if (mpBoard?.winnerUid) {
+                        this._winnerUid = mpBoard.winnerUid;
                     }
                 }
 
@@ -811,19 +910,132 @@ class BaseGame {
         return Object.keys(pd).filter((id) => pd[id] != null && typeof pd[id] === 'object').length;
     }
 
-    /** Rebuild visible board from host reset payload (not from stale event log). */
-    _applyFreshBoardFromRoom() {
-        if (this.onGameReset) this.onGameReset();
-        if (!window.GameLogic || !this.roomData?.global) return;
-        const g = this.roomData.global;
+    /** Merge partial RTDB payloads; board uses resetCount epoch + board.seq (see RtdbSchema.mergeRoomBoard). */
+    _mergeRoomSnapshot(prev, incoming) {
+        if (this.sync?.mergeRoomSnapshot) {
+            return this.sync.mergeRoomSnapshot(prev, incoming);
+        }
+        if (!incoming || typeof incoming !== 'object') return prev;
+        if (!prev || typeof prev !== 'object') return incoming;
+        const hasPayload = incoming.global || incoming.state || incoming.meta
+            || incoming.playerData || incoming.interactions || incoming.previews;
+        if (!hasPayload) return incoming;
+
+        const merged = { ...prev, ...incoming };
+        if (prev.meta || incoming.meta) {
+            merged.meta = { ...(prev.meta || {}), ...(incoming.meta || {}) };
+        }
+        if (prev.global || incoming.global) {
+            merged.global = { ...(prev.global || {}), ...(incoming.global || {}) };
+        }
+        if (prev.state || incoming.state) {
+            merged.state = { ...(prev.state || {}), ...(incoming.state || {}) };
+        }
+        if (incoming.playerData != null) {
+            merged.playerData = { ...incoming.playerData };
+        } else if (prev.playerData) {
+            merged.playerData = { ...prev.playerData };
+        }
+        if (prev.interactions || incoming.interactions) {
+            merged.interactions = { ...(prev.interactions || {}), ...(incoming.interactions || {}) };
+        }
+        if (incoming.interactions === null) merged.interactions = null;
+        if (incoming.previews === null) merged.previews = null;
+        else if (prev.previews || incoming.previews) {
+            merged.previews = { ...(prev.previews || {}), ...(incoming.previews || {}) };
+        }
+
+        const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
+        if (S?.mergeRoomBoard) {
+            const picked = S.mergeRoomBoard(prev, incoming);
+            if (picked !== undefined) {
+                merged.global = merged.global || {};
+                merged.global.board = picked;
+                merged.state = merged.state || {};
+                merged.state.board = picked;
+            }
+        }
+
+        return S?.normalizeRoomSnapshot ? S.normalizeRoomSnapshot(merged) : merged;
+    }
+
+    /** Shared transient cleanup when resetCount advances (host or guest). */
+    _clearResetTransientState() {
+        this.clearAutoReset();
+        this._victoryRegistered = false;
+        this._winBannerSent = false;
+        this.isOver = false;
+        this.winner = null;
+        this.clearWinOverlay();
+        this.selection = { pk: null, ids: [] };
+        this.opponentSelection = null;
+        this.gameEvents = [];
+        this._lastTurnSyncedEventCount = -1;
+        window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
+    }
+
+    /**
+     * Host: regenerate via onGameReset (then pushes global/board).
+     * Guest: apply global/board from the same RTDB payload — do not wipe locally first.
+     */
+    _applyRemoteResetSignal(data) {
+        const snap = this.roomData || data;
+        const g = snap?.global;
+        if (!g) return;
+
+        const currentResetCount = g.resetCount || 0;
+        this.lastResetCount = currentResetCount;
+        this._resetAcknowledgedCount = currentResetCount;
+        this._resetAcknowledgedAt = Date.now();
+        this._eventsSyncedAtResetCount = currentResetCount;
+
+        this._clearResetTransientState();
+
+        if (g.firstPlayer) this.firstPlayer = g.firstPlayer;
+        if (g.turn) this.turn = g.turn;
+        if (g.mode) this.mode = g.mode;
+
+        if (this.isHost()) {
+            if (this.onGameReset) this.onGameReset();
+            return;
+        }
+
+        let board = g.board;
+        if (typeof RtdbSchema !== 'undefined' && RtdbSchema.normalizeRoomSnapshot) {
+            board = RtdbSchema.normalizeRoomSnapshot(snap).global?.board ?? board;
+        }
+        if (board != null && typeof this.applyBoard === 'function') {
+            if (typeof this.onRemoteReset === 'function') {
+                this.onRemoteReset();
+            }
+            this.applyBoard(board, { force: true });
+            this.updateTurnIndicator();
+            this.renderScoreboard();
+            this.safeRender();
+            if (typeof this._syncViewportAfterLayout === 'function') {
+                this._syncViewportAfterLayout();
+            }
+            return;
+        }
+
+        if (!window.GameLogic || !this.applyState) {
+            if (this.onGameReset) this.onGameReset();
+            return;
+        }
         const fresh = GameLogic.computeState(this.gameName, [], {
             mode: this.mode,
-            createdAt: this.roomData.createdAt || Date.now(),
-            board: g.board || null,
+            createdAt: this.roomData?.createdAt || Date.now(),
+            board: board || null,
             firstPlayer: g.firstPlayer || 'P1'
         });
-        if (fresh && this.applyState) this.applyState(fresh);
+        if (fresh) this.applyState(fresh);
         if (g.turn) this.turn = g.turn;
+    }
+
+    /** Rebuild visible board from host reset payload (not from stale event log). */
+    _applyFreshBoardFromRoom() {
+        if (!this.roomData?.global) return;
+        this._applyRemoteResetSignal({ global: this.roomData.global });
     }
 
     notifyGameRendered() {
@@ -888,7 +1100,8 @@ class BaseGame {
     }
 
     broadcast(path, payload) {
-        window.parent.postMessage({ type: 'network-send', path, payload }, '*');
+        if (this.sync?.send) this.sync.send(path, payload);
+        else window.parent.postMessage({ type: 'network-send', path, payload }, '*');
     }
 
     broadcastTurn(nextTurn) {
@@ -897,7 +1110,8 @@ class BaseGame {
 
     // Atomic room update
     updateMetadata(updates) {
-        window.parent.postMessage({ type: 'network-update-room', updates }, '*');
+        if (this.sync?.updateRoom) this.sync.updateRoom(updates);
+        else window.parent.postMessage({ type: 'network-update-room', updates }, '*');
     }
 
     /**
@@ -910,14 +1124,13 @@ class BaseGame {
         // In multiplayer, we just send the event. Replay will update local state.
         if (this.isMultiplayer) {
             // Client local turn = visual prediction only (optimistic swap removed for server authority)
-            window.parent.postMessage({
-                type: 'network-send-event',
-                event: {
-                    type: 'move',
-                    payload: movePayload,
-                    resetCount: this._currentResetRound()
-                }
-            }, '*');
+            const event = {
+                type: 'move',
+                payload: movePayload,
+                resetCount: this._currentResetRound()
+            };
+            if (this.sync?.sendEvent) this.sync.sendEvent(event);
+            else window.parent.postMessage({ type: 'network-send-event', event }, '*');
 
             // Optimistic Update (Optional, let's keep it robust for now)
             // Still clear selection immediately
@@ -994,40 +1207,31 @@ class BaseGame {
         }
 
         if (this.isMultiplayer && this.playerRole === 'P1') {
-            if (wasOver) {
-                const prevFirstPlayer = this.firstPlayer || 'P1';
-                this.firstPlayer = prevFirstPlayer === 'P1' ? 'P2' : 'P1';
-                console.log(`HOST: Alternating first player for the next game. Prev: ${prevFirstPlayer}, Next: ${this.firstPlayer}`);
-            } else {
-                if (!this.firstPlayer) this.firstPlayer = 'P1';
-            }
-
-            const startTurn = this.firstPlayer;
-            this.turn = startTurn;
-            const updates = {};
-            updates['status'] = 'playing';
-            updates['winner'] = null;
-            updates['global/firstPlayer'] = this.firstPlayer;
-            updates['global/turn'] = startTurn;
-            updates['global/resetCount'] = (this.roomData?.global?.resetCount || 0) + 1;
-            this.lastResetCount = updates['global/resetCount'];
-            this._resetAcknowledgedCount = updates['global/resetCount'];
-            this._resetAcknowledgedAt = Date.now();
-
-            const board = typeof this.serializeBoard === 'function' ? this.serializeBoard() : null;
-            updates['global/board'] = this.capabilities?.hasBoardState !== false ? board : null;
-
-            const reg = typeof GameRegistry !== 'undefined' ? GameRegistry.get(this.gameName) : null;
-            (reg?.globalResetKeys || ['piecePositions', 'colors', 'pileColors']).forEach((key) => {
-                if (key === 'board') return;
-                updates[`global/${key}`] = null;
-            });
-
-            const extra = typeof this.getExtraGlobalReset === 'function' ? this.getExtraGlobalReset() : {};
-            Object.assign(updates, extra);
-
-            updates['lastMove'] = null;
-            updates['interactions'] = null;
+            const updates = this.sync?.buildHostResetUpdates
+                ? this.sync.buildHostResetUpdates({ wasOver })
+                : (() => {
+                    if (wasOver) {
+                        const prevFirstPlayer = this.firstPlayer || 'P1';
+                        this.firstPlayer = prevFirstPlayer === 'P1' ? 'P2' : 'P1';
+                        console.log(`HOST: Alternating first player for the next game. Prev: ${prevFirstPlayer}, Next: ${this.firstPlayer}`);
+                    } else if (!this.firstPlayer) {
+                        this.firstPlayer = 'P1';
+                    }
+                    const startTurn = this.firstPlayer;
+                    this.turn = startTurn;
+                    return {
+                        status: 'playing',
+                        winner: null,
+                        'global/firstPlayer': this.firstPlayer,
+                        'global/turn': startTurn,
+                        'global/resetCount': (this.roomData?.global?.resetCount || 0) + 1,
+                        'global/board': this.capabilities?.hasBoardState !== false && typeof this.serializeBoard === 'function'
+                            ? this.serializeBoard()
+                            : null,
+                        lastMove: null,
+                        interactions: null
+                    };
+                })();
             this.updateMetadata(updates);
         } else if (!this.isMultiplayer) {
             this.turn = 'P1';
@@ -1297,6 +1501,10 @@ class BaseGame {
         const ls = this.localSize || 800;
         const fallback = { w: ls, h: ls, cx: ls / 2, cy: ls / 2 };
 
+        if (this._usesPanZoomBoard()) {
+            return this.getPanZoomWorldVisualBounds();
+        }
+
         if (this._isPilesBoard() || this._usesFixedSpiralMobileAnchor() || this._mobileLayoutPolicy() === 'piles-dynamic') {
             return this.getPilesStableVisualBounds();
         }
@@ -1342,11 +1550,95 @@ class BaseGame {
         return fallback;
     }
 
+    /** World-space bounds for pan-zoom-board games (tile rack / spread). */
+    getPanZoomWorldVisualBounds() {
+        const pad = 56;
+        const size = 40;
+        const gap = 40;
+        const center = typeof this.getViewportContentCenter === 'function'
+            ? this.getViewportContentCenter()
+            : { x: 2400, y: 2400 };
+        const tiles = this.tiles;
+        if (!tiles?.length) {
+            const cols = 7;
+            const rows = 3;
+            const w = (cols - 1) * gap + size + pad * 2;
+            const h = (rows - 1) * gap + size + pad * 2;
+            return { w, h, cx: center.x, cy: center.y };
+        }
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const t of tiles) {
+            if (t.x == null || t.y == null) continue;
+            minX = Math.min(minX, t.x);
+            maxX = Math.max(maxX, t.x + size);
+            minY = Math.min(minY, t.y);
+            maxY = Math.max(maxY, t.y + size);
+        }
+        if (!Number.isFinite(minX)) {
+            const w = 7 * gap + size + pad * 2;
+            const h = 3 * gap + size + pad * 2;
+            return { w, h, cx: center.x, cy: center.y };
+        }
+        minX -= pad;
+        minY -= pad;
+        maxX += pad;
+        maxY += pad;
+        return {
+            w: maxX - minX,
+            h: maxY - minY,
+            cx: (minX + maxX) / 2,
+            cy: (minY + maxY) / 2
+        };
+    }
+
+    _fitPanZoomMobileViewport() {
+        const bounds = this.getPanZoomWorldVisualBounds();
+        this._mobileContentBounds = bounds;
+        const { width: vw, height: vh } = this.getVisibleViewportSize();
+        const margin = 24;
+        const scaleX = (vw - margin * 2) / Math.max(bounds.w, 1);
+        const scaleY = (vh - margin * 2) / Math.max(bounds.h, 1);
+        const fit = Math.min(Math.max(Math.min(scaleX, scaleY), 0.2), 5);
+        if (!this._fitZoomInitialized) {
+            this.targetZoom = fit;
+            this.zoom = fit;
+            this._mobileBaseFit = fit;
+            this._fitZoomInitialized = true;
+            this._mobileLayoutAnchorLocked = true;
+            if (typeof GameViewport !== 'undefined') {
+                const focal = typeof this.getViewportContentCenter === 'function'
+                    ? this.getViewportContentCenter()
+                    : { x: bounds.cx, y: bounds.cy };
+                GameViewport.centerWorldPoint(this, focal.x, focal.y);
+            }
+        } else if ((this.zoom || 1) < fit * 0.98) {
+            this.targetZoom = fit;
+            this.zoom = fit;
+            this._mobileBaseFit = fit;
+            if (typeof GameViewport !== 'undefined') {
+                const focal = typeof this.getViewportContentCenter === 'function'
+                    ? this.getViewportContentCenter()
+                    : { x: bounds.cx, y: bounds.cy };
+                GameViewport.centerWorldPoint(this, focal.x, focal.y);
+            }
+        } else if (typeof GameViewport !== 'undefined') {
+            GameViewport.reflowOnResize(this);
+        }
+        this.applyZoom();
+    }
+
     /** Recompute mobile zoom anchor once (not per render) — line fits board; piles use stable center. */
     refreshMobileLayout() {
         if (!this.isMobileViewport()) return;
         if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
             this.fitBoardToViewport();
+            return;
+        }
+        if (this._usesPanZoomBoard()) {
+            this._fitPanZoomMobileViewport();
             return;
         }
         if (this._shouldLockFreestyleMobileLayout()) {
@@ -1365,6 +1657,13 @@ class BaseGame {
         if (!this.isMobileViewport()) return;
         if (this._usesFitSquareMobileLayout() && this.fitBoardToViewport) {
             this.fitBoardToViewport();
+            return;
+        }
+        if (this._usesPanZoomBoard()) {
+            if (typeof GameViewport !== 'undefined') {
+                GameViewport.reflowOnResize(this);
+            }
+            this.applyZoom();
             return;
         }
         if (!this._mobileLayoutAnchorLocked || !this._mobileContentBounds) {
@@ -1396,9 +1695,15 @@ class BaseGame {
         if (!this.gameName || this.gameName === 'unknown') return;
         const raw = localStorage.getItem(this.getZoomStorageKey());
         const saved = raw != null ? parseFloat(raw) : NaN;
+        const mobilePanZoom = this.isMobileViewport?.() && this._usesPanZoomBoard?.();
         if (Number.isFinite(saved)) {
-            this.targetZoom = Math.min(Math.max(saved, 0.2), 5);
-            this.zoom = this.targetZoom;
+            let zoom = Math.min(Math.max(saved, 0.2), 5);
+            if (mobilePanZoom) {
+                const fit = this.getDefaultZoomForViewport();
+                if (Number.isFinite(fit) && zoom < fit) zoom = fit;
+            }
+            this.targetZoom = zoom;
+            this.zoom = zoom;
             this._fitZoomInitialized = true;
             return;
         }
@@ -1489,8 +1794,8 @@ class BaseGame {
         this.roomId = urlParams.get('room');
         this.isMultiplayer = !!(this.roomId && this.roomId !== 'lobby');
         this.playerRole = urlParams.get('role') || 'P1';
-        this.uid = this.uid || sessionStorage.getItem('game_uid') || localStorage.getItem('game_uid');
-        this.username = sessionStorage.getItem('username') || localStorage.getItem('username') || 'Guest';
+        this.uid = this.uid || localStorage.getItem('game_uid') || sessionStorage.getItem('game_uid');
+        this.username = localStorage.getItem('username') || sessionStorage.getItem('username') || 'Guest';
         this.opponentName = "Opponent";
 
         this.loadScores();
@@ -1549,7 +1854,8 @@ class BaseGame {
         this.startZoomLoop();
         window.addEventListener('wheel', (e) => {
             e.preventDefault();
-            this.handleZoom(e.deltaY);
+            if (typeof GameZoom !== 'undefined' && !GameZoom.canZoom(this)) return;
+            this.handleZoom(e.deltaY, e.clientX, e.clientY);
         }, { passive: false });
 
         window.addEventListener('message', (e) => {
@@ -1560,6 +1866,9 @@ class BaseGame {
                     height: e.data.height,
                     offsetTop: e.data.offsetTop
                 };
+                if (this._usesPanZoomBoard() && typeof GameViewport !== 'undefined') {
+                    GameViewport.reflowOnResize(this);
+                }
                 if (this.isMobileViewport()) {
                     if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
                     else this.refreshMobileLayout();
@@ -1568,14 +1877,12 @@ class BaseGame {
                 }
                 return;
             }
-            if (e.data.type === 'wheel') this.handleZoom(e.data.deltaY);
+            if (e.data.type === 'wheel') this.handleZoom(e.data.deltaY, e.data.clientX, e.data.clientY);
             if (e.data.type === 'pinch-zoom-get') {
                 window.parent.postMessage({ type: 'pinch-zoom-current', zoom: this.targetZoom }, '*');
             }
             if (e.data.type === 'pinch-zoom-set' && typeof e.data.zoom === 'number') {
                 this.targetZoom = Math.min(Math.max(e.data.zoom, 0.2), 5.0);
-                this.zoom = this.targetZoom;
-                this.applyZoom();
                 this.scheduleSavePersistedZoom();
             }
             if (e.data.type === 'pinch-zoom' && typeof e.data.scale === 'number') {
@@ -1586,6 +1893,7 @@ class BaseGame {
         });
 
         this.initPinchZoom(container);
+        if (this._usesPanZoomBoard()) this.initViewportPan();
 
         this.renderScoreboard();
     }
@@ -1804,31 +2112,42 @@ class BaseGame {
         this.devMode = !this.devMode;
         localStorage.setItem('game_devMode', this.devMode);
 
-        const dot = document.getElementById('center-dot');
-        if (dot) {
-            dot.style.display = this.devMode ? 'block' : 'none';
-            dot.style.zIndex = '99999';
+        if (typeof GameDevOverlay !== 'undefined') {
+            GameDevOverlay.sync(this);
+        } else {
+            const dot = document.getElementById('center-dot');
+            if (dot) {
+                dot.style.display = this.devMode ? 'block' : 'none';
+                dot.style.zIndex = '99999';
+            }
+            const debugInfo = document.getElementById('debug-info');
+            if (debugInfo) debugInfo.style.display = this.devMode ? 'block' : 'none';
         }
-
-        const debugInfo = document.getElementById('debug-info');
-        if (debugInfo) debugInfo.style.display = this.devMode ? 'block' : 'none';
 
         this.applyZoom();
     }
 
-    handleZoom(deltaY) {
-        const factor = deltaY > 0 ? 0.9 : 1.1;
-        this.targetZoom = Math.min(Math.max(this.targetZoom * factor, 0.2), 5.0);
-        if (!this.isMobileViewport()) {
-            this.zoom = this.targetZoom;
-            this.applyZoom();
+    handleZoom(deltaY, clientX, clientY) {
+        if (typeof GameZoom !== 'undefined' && !GameZoom.canZoom(this)) return;
+        if (this._usesPanZoomBoard() && typeof GameViewport !== 'undefined') {
+            GameViewport.handleWheelZoom(this, deltaY, clientX, clientY);
+            this.scheduleSavePersistedZoom();
+            return;
+        }
+        if (typeof GameZoom !== 'undefined') {
+            GameZoom.applyWheelDelta(this, deltaY);
+        } else {
+            const factor = deltaY > 0 ? 0.9 : 1.1;
+            this.targetZoom = Math.min(Math.max(this.targetZoom * factor, 0.2), 5.0);
         }
         this.scheduleSavePersistedZoom();
     }
 
     startZoomLoop() {
         const loop = () => {
-            if (Math.abs(this.zoom - this.targetZoom) > 0.001) {
+            if (typeof GameZoom !== 'undefined') {
+                GameZoom.tick(this);
+            } else if (Math.abs(this.zoom - this.targetZoom) > 0.001) {
                 this.zoom += (this.targetZoom - this.zoom) * this.zoomVelocity;
                 this.applyZoom();
             }
@@ -1840,6 +2159,9 @@ class BaseGame {
 
     applyZoom() {
         const target = document.getElementById('game-container') || document.body;
+        if (this._usesPanZoomBoard() && typeof GameViewport !== 'undefined' && GameViewport.applyPanZoom(this)) {
+            return;
+        }
         if (this.isMobileViewport() && this._usesFitSquareMobileLayout() && this._mobileContentBounds) {
             const { width: vw, height: vh } = this.getVisibleViewportSize();
             const b = this._mobileContentBounds;
@@ -1876,14 +2198,9 @@ class BaseGame {
         }
 
         let debug = document.getElementById('debug-info');
-        if (!debug && this.devMode) {
-            debug = document.createElement('div');
-            debug.id = 'debug-info';
-            debug.style.cssText = `position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; font-family: monospace; z-index: 9999; pointer-events: none; color: #22c55e; font-size: 12px; border: 1px solid #22c55e;`;
-            document.body.appendChild(debug);
-        }
-
-        if (debug) {
+        if (typeof GameDevOverlay !== 'undefined') {
+            GameDevOverlay.sync(this);
+        } else if (debug) {
             debug.innerText = `Click board to focus | Zoom: ${this.zoom.toFixed(2)} | Dev: ${this.devMode ? 'ON' : 'OFF'}`;
             debug.style.display = this.devMode ? 'block' : 'none';
         }
@@ -1898,7 +2215,7 @@ class BaseGame {
         }
     }
 
-    setGameOver(winner) {
+    setGameOver(winner, options = {}) {
         if (this._victoryRegistered) return;
         this._victoryRegistered = true;
 
@@ -1907,6 +2224,7 @@ class BaseGame {
 
         if (this.isMultiplayer && this.isHost()) {
             const updates = { winner };
+            if (options.winnerUid) updates.winnerUid = options.winnerUid;
             if (this._partyMemberCount() >= 2) {
                 updates.status = 'playing';
             }
@@ -1921,25 +2239,30 @@ class BaseGame {
             this.renderScoreboard();
         }
 
-        // Win Banner Trigger
-        window.parent.postMessage({
-            type: 'update-win-banner',
-            winner: winner,
-            visible: true
-        }, '*');
+        // Hub win banner + legacy overlay (games like Bananagrams use in-game BANANAS! only)
+        if (this.hasCap('supportsWinBanner')) {
+            window.parent.postMessage({
+                type: 'update-win-banner',
+                winner: winner,
+                winnerUid: options.winnerUid || undefined,
+                visible: true
+            }, '*');
+            const overlay = document.querySelector('.win-overlay');
+            if (overlay) {
+                overlay.innerHTML = `<div style="font-size: 0.2em; opacity: 0.7; margin-top: 15vh;">PRESS 'R' TO REMATCH</div>`;
+                overlay.classList.add('show');
+            }
+        }
 
         // Update turn indicator (BaseGame will handle "Game Over" text)
         this.updateTurnIndicator();
 
-        // Legacy Overlay (Keep for R key prompt but simplify)
-        const overlay = document.querySelector('.win-overlay');
-        if (overlay) {
-            overlay.innerHTML = `<div style="font-size: 0.2em; opacity: 0.7; margin-top: 15vh;">PRESS 'R' TO REMATCH</div>`;
-            overlay.classList.add('show');
-        }
-
         // Auto-Restart Timer (host / P1 only — guest waits for resetCount from host)
-        if (this.isMultiplayer && !this.isHost()) {
+        const victoryAutoReset = typeof this.hasCap === 'function'
+            && this.hasCap('supportsVictoryAutoReset');
+        if (!victoryAutoReset) {
+            console.log('[ENGINE] Victory auto-reset disabled for this game');
+        } else if (this.isMultiplayer && !this.isHost()) {
             console.log('[ENGINE] Guest waiting for host auto-reset');
         } else if (this.isHost()) {
             const isTest = this.roomId && this.roomId.startsWith('MP_AUDIT');
@@ -1979,6 +2302,11 @@ class BaseGame {
 
     renderScoreboard() {
         this.updateTurnIndicator();
+        if (typeof GameAdapter !== 'undefined' && !GameAdapter.cap(this, 'supportsScoreboard')) {
+            const hidden = document.querySelector('.scoreboard');
+            if (hidden) hidden.classList.remove('show');
+            return;
+        }
         let sb = document.querySelector('.scoreboard');
         if (!sb) {
             sb = document.createElement('div');
@@ -1995,10 +2323,11 @@ class BaseGame {
     }
 
     updateTurnIndicator() {
+        const turnMsg = typeof HubProtocol !== 'undefined' ? HubProtocol.MSG.UPDATE_TURN : 'update-turn';
         if (typeof GameAdapter !== 'undefined' && !GameAdapter.cap(this, 'supportsTurnIndicator')) {
+            window.parent.postMessage({ type: turnMsg, text: '', color: 'white' }, '*');
             return;
         }
-        const turnMsg = typeof HubProtocol !== 'undefined' ? HubProtocol.MSG.UPDATE_TURN : 'update-turn';
         let text = "";
         let color = "white";
 
@@ -2034,72 +2363,9 @@ class BaseGame {
         return typeof GameAdapter !== 'undefined' ? GameAdapter.cap(this, name) : true;
     }
 
-    static setupDragging(el, onDragEnd, context, onDragStart, onDrag) {
-        let startX, startY, isDragging = false;
-        const threshold = 5;
-        el.style.touchAction = 'none';
-
-        const onPointerDown = (e) => {
-            if (e.button !== undefined && e.button !== 0) return;
-            if (context && context.isMultiplayer && context.turn !== context.playerRole) return;
-            if (context && !context.isMultiplayer && (context.turn !== 'P1' || context.isOver)) return;
-            if (onDragStart && onDragStart(el) === false) return;
-
-            startX = e.clientX;
-            startY = e.clientY;
-            const zoom = (context && context.zoom) || 1.0;
-            const rect = el.getBoundingClientRect();
-            const parentRect = el.parentElement.getBoundingClientRect();
-            const initialLeft = (rect.left - parentRect.left) / zoom;
-            const initialTop = (rect.top - parentRect.top) / zoom;
-
-            el.style.transition = 'none';
-            let movePending = false;
-            let latestMe = null;
-
-            try {
-                if (e.pointerId != null) el.setPointerCapture(e.pointerId);
-            } catch (_) { /* ignore */ }
-
-            const onPointerMove = (me) => {
-                latestMe = me;
-                if (!isDragging && (Math.abs(me.clientX - startX) > threshold || Math.abs(me.clientY - startY) > threshold)) {
-                    isDragging = true;
-                }
-                if (isDragging && !movePending) {
-                    movePending = true;
-                    requestAnimationFrame(() => {
-                        if (!isDragging || !latestMe) { movePending = false; return; }
-                        const dx = (latestMe.clientX - startX) / zoom;
-                        const dy = (latestMe.clientY - startY) / zoom;
-                        const nextLeft = Math.max(0, Math.min(initialLeft + dx, (parentRect.width - rect.width) / zoom));
-                        const nextTop = Math.max(0, Math.min(initialTop + dy, (parentRect.height - rect.height) / zoom));
-                        el.style.left = `${nextLeft}px`;
-                        el.style.top = `${nextTop}px`;
-                        if (onDrag) onDrag(nextLeft, nextTop);
-                        movePending = false;
-                    });
-                }
-            };
-
-            const onPointerUp = (ue) => {
-                document.removeEventListener('pointermove', onPointerMove);
-                document.removeEventListener('pointerup', onPointerUp);
-                document.removeEventListener('pointercancel', onPointerUp);
-                try {
-                    if (ue.pointerId != null) el.releasePointerCapture(ue.pointerId);
-                } catch (_) { /* ignore */ }
-                if (onDragEnd) onDragEnd(isDragging, el, ue);
-                isDragging = false;
-                el.style.transition = '';
-            };
-
-            document.addEventListener('pointermove', onPointerMove);
-            document.addEventListener('pointerup', onPointerUp);
-            document.addEventListener('pointercancel', onPointerUp);
-        };
-
-        el.addEventListener('pointerdown', onPointerDown);
+    static setupDragging(el, onDragEnd, context, onDragStart, onDrag, options) {
+        const drag = typeof GameDrag !== 'undefined' ? GameDrag : null;
+        if (drag) return drag.setupDragging(el, onDragEnd, context, onDragStart, onDrag, options);
     }
 
     startRepairWatchdog() {

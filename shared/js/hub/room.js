@@ -2,11 +2,39 @@
     function attach(ctx, hubGames) {
         let dissolvingParty = false;
         let lastPartyMemberCount = null;
+        /** Room prepared from lobby while host waits for first accept — reuse for later invites. */
+        let pendingInviteRoomId = null;
+
+        function partyDbg(tag, detail = {}) {
+            try {
+                if (localStorage.getItem('five_party_dbg') !== '1'
+                    && !new URLSearchParams(window.location.search).has('partyDbg')) {
+                    return;
+                }
+            } catch (_) { return; }
+            const ne = global.NetworkEngine;
+            console.log('[PARTY-DBG]', tag, {
+                ctxRoom: ctx.roomId,
+                neRoom: ne?.roomId,
+                uid: ne?.uid,
+                role: ne?.playerRole,
+                dissolving: dissolvingParty,
+                status: ne?.roomData?.status ?? null,
+                host: ne?.roomData?.host ?? null,
+                ...detail
+            });
+        }
 
         function returnToLobbyCore(systemMessage) {
+            partyDbg('returnToLobbyCore', { message: systemMessage });
+            ctx._lastHubWinBannerUid = null;
+            if (typeof ctx.showWinBanner === 'function') {
+                ctx.showWinBanner({ visible: false });
+            }
             const leaveBtn = document.getElementById('btn-leave-party');
             if (leaveBtn) leaveBtn.style.display = 'none';
             ctx.roomId = 'lobby';
+            pendingInviteRoomId = null;
             const url = new URL(window.location);
             url.searchParams.set('room', 'lobby');
             url.searchParams.delete('role');
@@ -24,15 +52,24 @@
             }
         }
 
-        function dissolvePartyAndReturnToLobby(message) {
-            if (dissolvingParty || !ctx.roomId || ctx.roomId === 'lobby') return;
+        function dissolvePartyAndReturnToLobby(message, options = {}) {
+            if (dissolvingParty || !ctx.roomId || ctx.roomId === 'lobby') {
+                partyDbg('dissolveParty skipped', {
+                    message,
+                    reason: dissolvingParty ? 'dissolving' : (!ctx.roomId ? 'no-ctx-room' : 'already-lobby')
+                });
+                return;
+            }
             dissolvingParty = true;
             const roomId = ctx.roomId;
-            global.NetworkEngine.terminatePartyRoom(roomId).finally(() => {
-                returnToLobbyCore(message);
-                dissolvingParty = false;
-                lastPartyMemberCount = null;
-            });
+            partyDbg('dissolveParty start', { message, roomId, skipTerminate: !!options.skipTerminate });
+            if (!options.skipTerminate) {
+                global.NetworkEngine.terminatePartyRoom(roomId);
+            }
+            returnToLobbyCore(message);
+            dissolvingParty = false;
+            lastPartyMemberCount = null;
+            partyDbg('dissolveParty done', { neRoom: global.NetworkEngine?.roomId });
         }
 
         let partnerLeftHandled = false;
@@ -68,14 +105,19 @@
         ctx.syncRoomStateOnGameOrModeChange = syncRoomStateOnGameOrModeChange;
 
         /** Join party room in RTDB + hub UI (after invite accepted). */
+        function partyGameMode(gameId, mode) {
+            if (gameId === 'bananagrams') return 'multiplayer';
+            return mode || ctx.gameMode;
+        }
+
         async function enterPartyRoom(roomId, options = {}) {
             const { role = 'P1', game, mode, skipJoin = false } = options;
+            pendingInviteRoomId = null;
             ctx.roomId = roomId;
             if (game) ctx.currentGame = game;
-            if (mode) {
-                ctx.gameMode = mode;
-                localStorage.setItem(`${ctx.currentGame}_mode`, ctx.gameMode);
-            }
+            const resolvedMode = partyGameMode(ctx.currentGame, mode);
+            ctx.gameMode = resolvedMode;
+            localStorage.setItem(`${ctx.currentGame}_mode`, ctx.gameMode);
             global.NetworkEngine.playerRole = role;
 
             const url = new URL(window.location);
@@ -107,15 +149,15 @@
 
             const memberCount = await global.NetworkEngine.fetchRoomMemberCount(roomId);
             lastPartyMemberCount = memberCount;
-            if (memberCount >= global.NetworkEngine.ROOM_MAX_PLAYERS) {
+            if (memberCount >= 2) {
                 await global.NetworkEngine.db.ref(`${S.paths.room(roomId)}/status`).set('playing');
             }
+            if (typeof ctx.setPartyMemberCount === 'function') ctx.setPartyMemberCount(memberCount);
 
             hubGames.updateFrame(document.getElementById('game-frame'), ctx.lastFrameGameRef);
             ctx.startRoomHeartbeat();
             ctx.updateUI();
-            const leaveBtn = document.getElementById('btn-leave-party');
-            if (leaveBtn) leaveBtn.style.display = 'block';
+            if (hubGames.syncLeavePartyButton) hubGames.syncLeavePartyButton();
             ctx.setUserColor(ctx.userColor);
             return true;
         }
@@ -144,10 +186,12 @@
         }
 
         function rejectRoomJoin(check) {
-            const msg = (check && check.reason) || 'This room is full (2 players max).';
+            const max = global.NetworkEngine.ROOM_MAX_PLAYERS;
+            const msg = (check && check.reason) || `This room is full (${max} players max).`;
             console.warn('[HUB]', msg);
             alert(msg);
             ctx.roomId = 'lobby';
+            pendingInviteRoomId = null;
             const url = new URL(window.location);
             url.searchParams.set('room', 'lobby');
             url.searchParams.delete('role');
@@ -157,6 +201,7 @@
             ctx.applySoloOpponentColor();
             hubGames.updateFrame(document.getElementById('game-frame'), ctx.lastFrameGameRef);
             ctx.updateUI();
+            if (hubGames.syncLeavePartyButton) hubGames.syncLeavePartyButton();
             startRoomHeartbeat();
         }
 
@@ -167,6 +212,28 @@
             }
             const leavingRoom = ctx.roomId;
             const uid = global.NetworkEngine.uid;
+            const hostUid = global.NetworkEngine.roomData?.host || '';
+            const isHost = uid && (uid === hostUid || global.NetworkEngine.playerRole === 'P1');
+            partyDbg('leaveParty', { leavingRoom, uid, hostUid, isHost, role: global.NetworkEngine.playerRole });
+
+            if (isHost) {
+                const S = global.RtdbSchema;
+                const updates = {
+                    [`${S.paths.room(leavingRoom)}/status`]: 'dissolved'
+                };
+                if (uid) {
+                    updates[S.paths.playerData(leavingRoom, uid)] = null;
+                    updates[S.paths.users(leavingRoom, uid)] = null;
+                }
+                partyDbg('host leave RTDB update', { updates: Object.keys(updates) });
+                global.NetworkEngine.db.ref().update(updates).catch((err) => {
+                    console.warn('[HUB] host leave dissolve update failed', err);
+                    partyDbg('host leave RTDB update failed', { err: String(err) });
+                });
+                dissolvePartyAndReturnToLobby('The host left the party.', { skipTerminate: true });
+                return;
+            }
+
             const S = global.RtdbSchema;
             if (global.NetworkEngine.isInitialized && uid) {
                 global.NetworkEngine.db.ref(S.paths.playerData(leavingRoom, uid)).remove();
@@ -180,24 +247,36 @@
             const launch = async () => {
                 let partyRoomId = ctx.roomId;
                 const creatingFromLobby = !partyRoomId || partyRoomId === 'lobby';
+                const inviteMode = partyGameMode(ctx.currentGame, ctx.gameMode);
 
                 if (creatingFromLobby) {
-                    partyRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-                    const prepared = await global.NetworkEngine.prepareInviteRoom(
-                        partyRoomId, ctx.currentGame, ctx.gameMode
-                    );
-                    if (!prepared) return;
-                    // Stay in lobby until the invitee accepts — no URL change or join yet.
+                    // Host can invite multiple people before anyone accepts — one room only.
+                    if (pendingInviteRoomId) {
+                        partyRoomId = pendingInviteRoomId;
+                    } else {
+                        partyRoomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+                        // Reserve immediately so a second invite while prepare is in-flight reuses this room.
+                        pendingInviteRoomId = partyRoomId;
+                        const prepared = await global.NetworkEngine.prepareInviteRoom(
+                            partyRoomId, ctx.currentGame, inviteMode
+                        );
+                        if (!prepared) {
+                            pendingInviteRoomId = null;
+                            return;
+                        }
+                    }
+                    // Stay in lobby until the first invitee accepts — no URL change or join yet.
                 }
 
                 global.NetworkEngine.sendInvite(
                     uid,
-                    { game: ctx.currentGame, mode: ctx.gameMode, roomId: partyRoomId },
+                    { game: ctx.currentGame, mode: inviteMode, roomId: partyRoomId },
                     async (acceptedRoomId) => {
+                        pendingInviteRoomId = null;
                         await enterPartyRoom(acceptedRoomId, {
                             role: 'P1',
                             game: ctx.currentGame,
-                            mode: ctx.gameMode,
+                            mode: inviteMode,
                             skipJoin: true
                         });
                     }
@@ -211,7 +290,7 @@
 
             global.NetworkEngine.fetchRoomMemberCount(ctx.roomId).then((count) => {
                 if (count >= global.NetworkEngine.ROOM_MAX_PLAYERS) {
-                    alert('Your party is full (2 players max).');
+                    alert(`Your party is full (${global.NetworkEngine.ROOM_MAX_PLAYERS} players max).`);
                     return;
                 }
                 launch();
@@ -225,8 +304,11 @@
             if (!ctx.roomId || ctx.roomId === 'lobby') {
                 ctx.applySoloOpponentColor();
                 ctx.updateUI();
+                if (hubGames.syncLeavePartyButton) hubGames.syncLeavePartyButton();
                 return;
             }
+
+            if (hubGames.syncLeavePartyButton) hubGames.syncLeavePartyButton();
 
             const H = global.HubProtocol?.MSG || {};
             global.NetworkEngine.on('global', (data) => {
@@ -283,14 +365,35 @@
             });
 
             global.NetworkEngine.on('', (data) => {
-                if (data) global.NetworkEngine.roomData = data;
-                const count = data ? global.NetworkEngine.countRoomMembers(data) : 0;
-                if (data && count === 0 && ctx.roomId && ctx.roomId !== 'lobby') {
-                    dissolvePartyAndReturnToLobby('Party room closed.');
-                    return;
+                const S = global.RtdbSchema;
+                const room = data && S ? S.normalizeRoomSnapshot(data) : data;
+                if (room) global.NetworkEngine.roomData = room;
+                const count = room ? global.NetworkEngine.countRoomMembers(room) : 0;
+                const hostUid = room?.host || '';
+                const hostPresent = hostUid && room?.playerData?.[hostUid];
+                if (ctx.roomId && ctx.roomId !== 'lobby' && !dissolvingParty) {
+                    if (room?.status === 'dissolved') {
+                        partyDbg('room listener: dissolved status');
+                        dissolvePartyAndReturnToLobby('Party room closed.');
+                        return;
+                    }
+                    if (!room || count === 0) {
+                        if (lastPartyMemberCount == null) {
+                            partyDbg('room listener: empty room during bootstrap', { count, hasRoom: !!room });
+                            return;
+                        }
+                        partyDbg('room listener: empty room', { count, hasRoom: !!room });
+                        dissolvePartyAndReturnToLobby('Party room closed.');
+                        return;
+                    }
+                    if (hostUid && !hostPresent) {
+                        partyDbg('room listener: host absent', { hostUid, hostPresent: !!hostPresent });
+                        dissolvePartyAndReturnToLobby('The host left the party.');
+                        return;
+                    }
                 }
                 if (
-                    data
+                    room
                     && ctx.roomId
                     && ctx.roomId !== 'lobby'
                     && lastPartyMemberCount != null
@@ -299,19 +402,38 @@
                 ) {
                     onPartnerLeftParty();
                 }
-                if (data) lastPartyMemberCount = count;
+                if (room) lastPartyMemberCount = count;
+                if (typeof ctx.setPartyMemberCount === 'function') ctx.setPartyMemberCount(count);
                 const frame = document.getElementById('game-frame');
                 if (frame?.contentWindow) {
                     frame.contentWindow.postMessage({
                         type: H.NETWORK_UPDATE || 'network-update',
-                        payload: data
+                        payload: room
                     }, '*');
                 }
-                ctx.syncOpponentFromRoom(data);
+                ctx.syncOpponentFromRoom(room);
             });
         }
 
         async function joinBootstrap() {
+            window.onPartyRoomClosed = (closedId) => {
+                partyDbg('onPartyRoomClosed', { closedId });
+                if (dissolvingParty || !ctx.roomId || ctx.roomId === 'lobby') {
+                    partyDbg('onPartyRoomClosed ignored', {
+                        dissolvingParty,
+                        ctxRoom: ctx.roomId,
+                        reason: dissolvingParty ? 'dissolving' : (!ctx.roomId ? 'no-ctx' : 'lobby')
+                    });
+                    return;
+                }
+                if (closedId === ctx.roomId) {
+                    partyDbg('onPartyRoomClosed -> dissolve');
+                    dissolvePartyAndReturnToLobby('Party room closed.');
+                } else {
+                    partyDbg('onPartyRoomClosed id mismatch', { closedId, ctxRoom: ctx.roomId });
+                }
+            };
+
             if (ctx.roomId && ctx.roomId !== 'lobby') {
                 const result = await global.NetworkEngine.tryJoinRoom(ctx.roomId);
                 if (!result.ok) {
@@ -323,14 +445,11 @@
                 const room = S.normalizeRoomSnapshot(snap.val());
                 const g = room?.global || room?.meta || {};
                 if (g.game) ctx.currentGame = g.game;
-                if (g.mode) {
-                    ctx.gameMode = g.mode;
-                    localStorage.setItem(`${ctx.currentGame}_mode`, ctx.gameMode);
-                }
+                ctx.gameMode = partyGameMode(ctx.currentGame, g.mode);
+                localStorage.setItem(`${ctx.currentGame}_mode`, ctx.gameMode);
                 if (room) {
                     global.NetworkEngine.roomData = room;
                     ctx.syncOpponentFromRoom(room);
-                    const g = room.global || room.meta || {};
                     ctx.lastPartyResetCount = g.resetCount || 0;
                 }
             } else {
@@ -350,6 +469,7 @@
             ctx.setUserColor(ctx.userColor);
             hubGames.updateFrame(document.getElementById('game-frame'), ctx.lastFrameGameRef);
             ctx.updateUI();
+            if (hubGames.syncLeavePartyButton) hubGames.syncLeavePartyButton();
 
             if (localStorage.getItem('settingsOpen') === 'true') {
                 ctx.toggleSidebar(true);

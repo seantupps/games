@@ -12,6 +12,22 @@
         return document.documentElement.classList.contains('five-mobile');
     }
 
+    function settingsEdgeSwipeEnabled() {
+        if (!isMobileHub()) return false;
+        const Registry = global.GameRegistry;
+        if (!Registry) return true;
+        const game = global.FiveHubCtx?.currentGame
+            || localStorage.getItem('lastGame')
+            || 'piles';
+        let mode = global.FiveHubCtx?.gameMode || localStorage.getItem(`${game}_mode`);
+        if (game === 'bananagrams') {
+            const room = global.FiveHubCtx?.roomId || null;
+            mode = !room || room === 'lobby' ? 'solo' : 'multiplayer';
+        }
+        const caps = Registry.getCapabilities(game, mode);
+        return caps.supportsSettingsEdgeSwipe !== false;
+    }
+
     function openSettings() {
         if (typeof window.toggleSidebar === 'function') {
             window.toggleSidebar(true);
@@ -35,7 +51,7 @@
         };
 
         const onStart = (clientX, clientY) => {
-            if (!isMobileHub()) return;
+            if (!settingsEdgeSwipeEnabled()) return;
             if (!inLeftEdge(clientX)) return;
             active = { x0: clientX, y0: clientY, t0: Date.now() };
         };
@@ -114,9 +130,10 @@
     function syncEdgeVisibility() {
         const edge = document.getElementById('mobile-settings-edge');
         if (!edge) return;
-        const on = isMobileHub();
+        const on = settingsEdgeSwipeEnabled();
         edge.style.display = on ? 'block' : 'none';
         edge.setAttribute('aria-hidden', on ? 'false' : 'true');
+        edge.style.pointerEvents = on ? 'auto' : 'none';
     }
 
     function init() {
@@ -125,6 +142,7 @@
 
         window.addEventListener('message', (e) => {
             if (e.data?.type === 'open-settings-edge-swipe') {
+                if (!settingsEdgeSwipeEnabled()) return;
                 openSettings();
             }
         });
@@ -132,6 +150,7 @@
         const obs = new MutationObserver(syncEdgeVisibility);
         obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         window.addEventListener('resize', syncEdgeVisibility);
+        window.addEventListener('five-settings-edge-sync', syncEdgeVisibility);
         syncEdgeVisibility();
     }
 

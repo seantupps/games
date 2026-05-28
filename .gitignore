@@ -11,7 +11,7 @@ instructions.md
 
 # Python (legacy analysis scripts)
 __pycache__/
-tests/
+build/
 backups/
 
 # Local dev & Playwright (never publish)
@@ -36,3 +36,4 @@ ui-debug.log
 functions/lib/
 
 /notes
+/docs

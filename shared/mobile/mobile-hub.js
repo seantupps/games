@@ -116,8 +116,13 @@
         const win = frame.contentWindow;
         const run = () => {
             const g = win.game;
-            if (g?.refreshMobileLayout) g.refreshMobileLayout();
-            else if (g?.fitBoardToViewport) g.fitBoardToViewport();
+            if (g?._mobileLayoutAnchorLocked && g?.refreshMobileLayoutViewportOnly) {
+                g.refreshMobileLayoutViewportOnly();
+            } else if (g?.refreshMobileLayout) {
+                g.refreshMobileLayout();
+            } else if (g?.fitBoardToViewport) {
+                g.fitBoardToViewport();
+            }
             if (g?.requestRender) g.requestRender();
             try {
                 win.dispatchEvent(new Event('resize'));
@@ -212,6 +217,8 @@
         initHubPinchZoom();
         initFullscreenButton();
     }
+
+    window.FiveHubLayout = { notifyGameFrameLayout };
 
     window.addEventListener('five-mobile-ready', init);
     if (document.readyState === 'loading') {

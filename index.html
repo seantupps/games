@@ -287,30 +287,6 @@
             box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
 
-        #global-win-banner {
-            position: fixed;
-            top: 15%;
-            left: 50%;
-            transform: translateX(-50%) translateY(-20px);
-            z-index: 10030;
-            font-size: 3.5rem;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: white;
-            /*text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);*/
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1), transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
-            font-family: 'Inter', sans-serif;
-            white-space: nowrap;
-        }
-
-        #global-win-banner.visible {
-            opacity: 1;
-            transform: translateX(-50%) translateY(0);
-        }
-
         #hub-loading {
             position: fixed;
             inset: 0;
@@ -475,6 +451,7 @@
             setBootStatus('Firebase loaded, starting network…');
         }
     </script>
+    <script src="shared/js/device-storage.js"></script>
     <script src="shared/network/firebase-env.js"></script>
     <script src="shared/network/network.js"></script>
     <script src="shared/network/rtdb-schema.js"></script>

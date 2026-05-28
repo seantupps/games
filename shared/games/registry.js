@@ -7,9 +7,9 @@
  */
 (function (global) {
     /** @typedef {'event-log'|'snapshot'|'hybrid'} SyncStyle */
-    /** @typedef {'generic'|'piles'|'line'} BoardKind */
+    /** @typedef {'generic'|'piles'|'line'|'crossword'} BoardKind */
     /**
-     * @typedef {'none'|'fit-square'|'piles-dynamic'|'fixed-spiral-anchor'} MobileLayoutPolicy
+     * @typedef {'none'|'fit-square'|'piles-dynamic'|'fixed-spiral-anchor'|'pan-zoom-board'} MobileLayoutPolicy
      */
 
     /**
@@ -18,16 +18,22 @@
      * @property {BoardKind} [boardKind]
      * @property {MobileLayoutPolicy} [mobileLayoutPolicy]
      * @property {boolean} supportsTurnIndicator
+     * @property {boolean} [supportsGameTimer] — elapsed clock in iframe HUD (off for simultaneous games)
      * @property {boolean} supportsScoreboard
      * @property {boolean} supportsWinBanner
      * @property {boolean} supportsModes
      * @property {boolean} supportsDragging
+     * @property {boolean} [unboundedDrag]
      * @property {boolean} supportsZoom
      * @property {boolean} supportsLongPressEndTurn
+     * @property {boolean} [supportsSettingsEdgeSwipe]
+     * @property {boolean} [supportsVictoryAutoReset]
      * @property {boolean} supportsRealtimePreviews
      * @property {boolean} supportsPileColors
      * @property {boolean} hasBoardState
      * @property {SyncStyle} syncStyle
+     * Guest MP reset: engine calls optional onRemoteReset() then applyBoard(global/board).
+     * Host reset: onGameReset() then host pushes global/board via resetGame().
      */
 
     /** @type {GameCapabilities} */
@@ -41,6 +47,8 @@
         supportsDragging: false,
         supportsZoom: true,
         supportsLongPressEndTurn: false,
+        supportsSettingsEdgeSwipe: true,
+        supportsVictoryAutoReset: true,
         supportsRealtimePreviews: false,
         supportsPileColors: false,
         hasBoardState: true,
@@ -62,7 +70,11 @@
      * @property {string} [auditConfig] — default SP audit dir when single mode
      * @property {Record<string, string>} [mpAuditByMode] — MP audit config dir per mode
      * @property {string} [mpAuditConfig] — default MP audit dir when single mode
+     * @property {number} [maxPartyPlayers] — max party size for this game (default 8)
+     * @property {boolean} [hideWhenPartyAtLeast] — hide in hub picker when party has this many+ members
      */
+
+    const DEFAULT_MAX_PARTY = 8;
 
     /** @type {GameDefinition[]} */
     const GAMES = [
@@ -70,6 +82,8 @@
             id: 'piles',
             label: 'Piles',
             logicKey: 'piles',
+            maxPartyPlayers: 2,
+            hideWhenPartyAtLeast: 3,
             modes: ['classic', 'freestyle'],
             defaultMode: 'classic',
             capabilities: {
@@ -105,6 +119,8 @@
             id: 'line',
             label: 'Line',
             logicKey: 'line',
+            maxPartyPlayers: 2,
+            hideWhenPartyAtLeast: 3,
             modes: ['classic'],
             defaultMode: 'classic',
             capabilities: {
@@ -112,6 +128,8 @@
                 boardKind: 'line',
                 mobileLayoutPolicy: 'fit-square',
                 supportsDragging: false,
+                supportsSettingsEdgeSwipe: false,
+                supportsVictoryAutoReset: true,
                 supportsRealtimePreviews: true,
                 syncStyle: 'hybrid'
             },
@@ -119,8 +137,62 @@
             clearGameDataOnReset: true,
             auditConfig: 'ptests/desktop/singleplayer/line',
             mpAuditConfig: 'ptests/desktop/multiplayer/mp_line'
+        },
+        {
+            id: 'bananagrams',
+            label: 'Bananagrams',
+            logicKey: 'bananagrams',
+            modes: ['solo'],
+            defaultMode: 'solo',
+            maxPartyPlayers: 8,
+            capabilities: {
+                ...DEFAULT_CAPABILITIES,
+                boardKind: 'crossword',
+                mobileLayoutPolicy: 'pan-zoom-board',
+                viewportPanEnabled: true,
+                supportsSettingsEdgeSwipe: false,
+                supportsVictoryAutoReset: false,
+                supportsDragging: true,
+                unboundedDrag: true,
+                supportsTurnIndicator: false,
+                supportsGameTimer: true,
+                supportsScoreboard: true,
+                supportsWinBanner: false,
+                supportsModes: false,
+                supportsZoom: true,
+                hasBoardState: true,
+                syncStyle: 'event-log'
+            },
+            capabilitiesByMode: {
+                solo: { supportsWinBanner: false, supportsVictoryAutoReset: false },
+                multiplayer: { supportsWinBanner: true, supportsVictoryAutoReset: false }
+            },
+            globalResetKeys: ['board'],
+            clearGameDataOnReset: true,
+            auditConfig: 'ptests/desktop/singleplayer/bananagrams',
+            mobileAuditConfig: 'ptests/mobile/bananagrams_sp',
+            mpAuditConfig: 'ptests/desktop/multiplayer/mp_bananagrams',
+            mobileMpAuditConfig: 'ptests/mobile/bananagrams_mp'
         }
     ];
+
+    function maxPartyPlayers(id) {
+        return get(id)?.maxPartyPlayers ?? DEFAULT_MAX_PARTY;
+    }
+
+    /** Whether this game should appear in the hub picker for the current party size. */
+    function isAvailableForPartySize(id, partySize) {
+        const def = get(id);
+        if (!def) return false;
+        if (partySize > maxPartyPlayers(id)) return false;
+        if (def.hideWhenPartyAtLeast != null && partySize >= def.hideWhenPartyAtLeast) return false;
+        return true;
+    }
+
+    function defaultPartyGameId(partySize) {
+        if (partySize >= 3) return 'bananagrams';
+        return defaultId();
+    }
 
     const BY_ID = Object.fromEntries(GAMES.map((g) => [g.id, g]));
 
@@ -151,6 +223,7 @@
     function normalizeMode(id, mode) {
         const def = get(id);
         if (!def) return 'classic';
+        if (id === 'bananagrams' && mode === 'multiplayer') return 'multiplayer';
         if (def.modes.includes(mode)) return mode;
         return def.defaultMode;
     }
@@ -235,6 +308,7 @@
 
     const GameRegistry = {
         DEFAULT_CAPABILITIES,
+        DEFAULT_MAX_PARTY,
         list,
         listIds,
         get,
@@ -247,6 +321,9 @@
         getCapabilities,
         auditPathFor,
         mpAuditPathFor,
+        maxPartyPlayers,
+        isAvailableForPartySize,
+        defaultPartyGameId,
         buildHostGameSwitchUpdates
     };
 

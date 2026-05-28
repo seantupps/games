@@ -20,11 +20,30 @@
      * @param {{ updateFrame: Function, updateUI: Function, onHostSync?: Function }} hooks
      */
     function create(state, hooks) {
+        function isLobby() {
+            return !state.roomId || state.roomId === 'lobby';
+        }
+
+        /** Bananagrams uses solo in lobby and multiplayer in any party room. */
+        function effectiveGameMode() {
+            if (state.currentGame === 'bananagrams') {
+                return isLobby() ? 'solo' : 'multiplayer';
+            }
+            return Registry.normalizeMode(state.currentGame, state.gameMode);
+        }
+
         function ensureValidGame() {
             if (!Registry.has(state.currentGame)) {
                 state.currentGame = Registry.defaultId();
             }
-            state.gameMode = Registry.normalizeMode(state.currentGame, state.gameMode);
+            if (state.currentGame === 'bananagrams') {
+                state.gameMode = effectiveGameMode();
+                try {
+                    localStorage.setItem('bananagrams_mode', state.gameMode);
+                } catch (_) { /* ignore */ }
+            } else {
+                state.gameMode = Registry.normalizeMode(state.currentGame, state.gameMode);
+            }
         }
 
         function iframePath(gameId) {
@@ -39,7 +58,7 @@
                 ? state.resolveOpponentColorForIframe()
                 : state.getOpponentColor(state.userColor);
             if (opp) params.set('opp', opp);
-            params.set('mode', state.gameMode);
+            params.set('mode', effectiveGameMode());
             if (cacheBust) params.set('v', String(Date.now()));
             if (state.roomId && state.roomId !== 'lobby') {
                 params.set('room', state.roomId);
@@ -49,37 +68,91 @@
             return params;
         }
 
+        function syncHubGameAttribute() {
+            if (typeof document !== 'undefined' && document.body) {
+                document.body.dataset.hubGame = state.currentGame || '';
+            }
+        }
+
         function primeFrame(frame) {
             if (!frame) return;
             ensureValidGame();
+            syncHubGameAttribute();
             frame.src = `${iframePath(state.currentGame)}?${buildFrameParams(false).toString()}`;
         }
 
         function updateFrame(frame, lastFrameGameRef) {
             if (!frame) return;
             ensureValidGame();
+            state.gameMode = effectiveGameMode();
             if (lastFrameGameRef.mode == null) lastFrameGameRef.mode = state.gameMode;
             const gameChanged = lastFrameGameRef.current !== state.currentGame;
             const modeChanged = lastFrameGameRef.mode !== state.gameMode;
             if (gameChanged) lastFrameGameRef.current = state.currentGame;
             if (modeChanged) lastFrameGameRef.mode = state.gameMode;
+            if (gameChanged || modeChanged) {
+                const caps = Registry.getCapabilities(state.currentGame, state.gameMode);
+                if (!caps?.supportsTurnIndicator) clearGlobalTurnIndicator();
+            }
+            syncHubGameAttribute();
             frame.src = `${iframePath(state.currentGame)}?${buildFrameParams(gameChanged || modeChanged).toString()}`;
             localStorage.setItem('lastGame', state.currentGame);
+            notifySettingsEdgeSync();
+        }
+
+        function resetCurrentGame() {
+            const frame = document.getElementById('game-frame');
+            if (!frame) return;
+            const win = frame.contentWindow;
+            const g = win?.game;
+            const canResetInFrame = g && typeof g.resetGame === 'function'
+                && (isLobby() || global.NetworkEngine?.playerRole === 'P1');
+            if (canResetInFrame) {
+                g.resetGame();
+                hooks.updateUI();
+                return;
+            }
+            ensureValidGame();
+            frame.src = `${iframePath(state.currentGame)}?${buildFrameParams(true).toString()}`;
+            hooks.updateUI();
+        }
+
+        function postGameBlocksSwitch() {
+            const frame = document.getElementById('game-frame');
+            const g = frame?.contentWindow?.game;
+            return typeof g?.isPostGameBlocking === 'function' && g.isPostGameBlocking();
+        }
+
+        function notifySettingsEdgeSync() {
+            try {
+                window.dispatchEvent(new CustomEvent('five-settings-edge-sync'));
+            } catch (_) { /* ignore */ }
         }
 
         function setGame(gameId, sync = true) {
             if (!Registry.has(gameId)) return;
+            if (postGameBlocksSwitch()) return;
+            if (gameId === state.currentGame) {
+                resetCurrentGame();
+                return;
+            }
             state.currentGame = gameId;
-            state.gameMode = Registry.normalizeMode(
-                gameId,
-                localStorage.getItem(`${gameId}_mode`) || Registry.defaultModeFor(gameId)
-            );
+            syncHubGameAttribute();
+            let mode = localStorage.getItem(`${gameId}_mode`) || Registry.defaultModeFor(gameId);
+            if (gameId === 'bananagrams') {
+                mode = isLobby() ? 'solo' : 'multiplayer';
+                try {
+                    localStorage.setItem('bananagrams_mode', mode);
+                } catch (_) { /* ignore */ }
+            }
+            state.gameMode = Registry.normalizeMode(gameId, mode);
             hooks.updateFrame();
             hooks.updateUI();
             if (sync && hooks.onHostSync) hooks.onHostSync(state.currentGame, state.gameMode);
         }
 
         function setGameMode(mode, sync = true) {
+            if (postGameBlocksSwitch()) return;
             state.gameMode = Registry.normalizeMode(state.currentGame, mode);
             localStorage.setItem(`${state.currentGame}_mode`, state.gameMode);
             hooks.updateFrame();
@@ -97,13 +170,52 @@
             setGameMode(Registry.nextMode(state.currentGame, state.gameMode), true);
         }
 
+        function partyMemberCount() {
+            if (typeof state.getPartyMemberCount === 'function') {
+                return state.getPartyMemberCount();
+            }
+            const room = global.NetworkEngine?.roomData;
+            if (room && global.NetworkEngine?.countRoomMembers) {
+                return global.NetworkEngine.countRoomMembers(room);
+            }
+            return isLobby() ? 1 : 2;
+        }
+
+        function syncLeavePartyButton() {
+            const leaveBtn = document.getElementById('btn-leave-party');
+            if (!leaveBtn) return;
+            leaveBtn.style.display = isLobby() ? 'none' : 'block';
+        }
+
+        function clearGlobalTurnIndicator() {
+            const indicator = document.getElementById('global-turn-indicator');
+            const text = document.getElementById('turn-text');
+            if (!indicator || !text) return;
+            text.innerText = '';
+            indicator.classList.remove('visible');
+        }
+
         function updateGamePickerUI() {
-            const isLobby = !state.roomId || state.roomId === 'lobby';
-            const isHost = global.NetworkEngine?.playerRole === 'P1' || isLobby;
+            syncLeavePartyButton();
+            const lobby = isLobby();
+            const isHost = global.NetworkEngine?.playerRole === 'P1' || lobby;
             const def = Registry.get(state.currentGame);
+            const partySize = partyMemberCount();
+
+            if (!lobby && !Registry.isAvailableForPartySize(state.currentGame, partySize)) {
+                const fallback = Registry.defaultPartyGameId(partySize);
+                if (Registry.has(fallback) && isHost) {
+                    state.gameMode = fallback === 'bananagrams' ? 'multiplayer' : Registry.defaultModeFor(fallback);
+                    setGame(fallback, true);
+                    syncLeavePartyButton();
+                    return;
+                }
+            }
 
             document.querySelectorAll('.game-btn:not(#btn-leave-party)').forEach((btn) => {
-                btn.style.display = isHost ? 'block' : 'none';
+                const id = btn.id?.replace(/^btn-/, '');
+                const available = lobby || Registry.isAvailableForPartySize(id, partySize);
+                btn.style.display = (isHost && available) ? 'block' : 'none';
             });
 
             const modeGroup = document.getElementById('mode-settings-group');
@@ -128,8 +240,7 @@
                 global.HubGamePickerUI.syncModePicker(state.currentGame, state.gameMode);
             }
 
-            const leaveBtn = document.getElementById('btn-leave-party');
-            if (leaveBtn) leaveBtn.style.display = isLobby ? 'none' : 'block';
+            syncLeavePartyButton();
         }
 
         function initFromUrl(urlParams) {
@@ -141,6 +252,7 @@
                 state.currentGame,
                 urlParams.get('mode') || localStorage.getItem(`${state.currentGame}_mode`) || Registry.defaultModeFor(state.currentGame)
             );
+            syncHubGameAttribute();
         }
 
         return {
@@ -152,6 +264,8 @@
             cycleGame,
             cycleMode,
             updateGamePickerUI,
+            syncLeavePartyButton,
+            clearGlobalTurnIndicator,
             initFromUrl
         };
     }

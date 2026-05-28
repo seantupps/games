@@ -51,7 +51,8 @@
         PINCH_ZOOM_CURRENT: 'pinch-zoom-current',
 
         // tests / dev
-        TEST_FORCE_MOVE: 'test-force-move'
+        TEST_FORCE_MOVE: 'test-force-move',
+        DEV_WIN: 'dev-win'
     };
 
     const ALL_TYPES = new Set([

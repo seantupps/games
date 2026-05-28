@@ -6,7 +6,7 @@ window.NetworkEngine = {
     uid: null,
     playerRole: 'P1', // Default
     isInitialized: false,
-    ROOM_MAX_PLAYERS: 2,
+    ROOM_MAX_PLAYERS: 8,
     PRESENCE_HEARTBEAT_MS: 30000,
 
     _schema() {
@@ -21,6 +21,27 @@ window.NetworkEngine = {
     _normalizeRoom(raw) {
         const S = this._schema();
         return S ? S.normalizeRoomSnapshot(raw) : raw;
+    },
+
+    _partyRoleForUid(room, uid) {
+        if (!room || !uid) return 'P1';
+        if (room.host === uid) return 'P1';
+
+        const gameId = room?.global?.game || room?.meta?.game || '';
+        // Keep legacy 2P behavior for non-bananagrams games.
+        if (gameId !== 'bananagrams') return 'P2';
+
+        const pd = room.playerData || {};
+        const users = room.users || {};
+        const others = Object.keys(pd).filter((id) => id && id !== room.host);
+        others.sort((a, b) => {
+            const ta = typeof users[a] === 'number' ? users[a] : Number.MAX_SAFE_INTEGER;
+            const tb = typeof users[b] === 'number' ? users[b] : Number.MAX_SAFE_INTEGER;
+            if (ta !== tb) return ta - tb;
+            return a.localeCompare(b);
+        });
+        const idx = others.indexOf(uid);
+        return idx >= 0 ? `P${idx + 2}` : 'P2';
     },
 
     _presenceTiming() {
@@ -61,12 +82,7 @@ window.NetworkEngine = {
 
     terminatePartyRoom(roomId) {
         if (!this.init() || !roomId || roomId === 'lobby') return Promise.resolve();
-        return this.db.ref().update({
-            [`games/${roomId}`]: null,
-            [`gameData/${roomId}`]: null
-        }).catch((err) => {
-            console.warn('[Network] terminatePartyRoom failed', err);
-        });
+        return this.db.ref(`games/${roomId}/status`).set('dissolved');
     },
 
     async evaluateRoomLifecycleAfterLeave(roomId) {
@@ -118,7 +134,7 @@ window.NetworkEngine = {
         if (this.isRoomMember(room, this.uid)) return { ok: true };
 
         if (this.countRoomMembers(room) >= this.ROOM_MAX_PLAYERS) {
-            return { ok: false, reason: 'This room is full (2 players max).' };
+            return { ok: false, reason: `This room is full (${this.ROOM_MAX_PLAYERS} players max).` };
         }
         return { ok: true };
     },
@@ -170,11 +186,18 @@ window.NetworkEngine = {
             console.log(`[Network] Firebase RTDB: ${this.firebaseTarget} (${this.config.databaseURL})`);
         }
 
-        // Per-tab uid so multiple tabs on one machine show up as separate players in the lobby
-        this.uid = sessionStorage.getItem('game_uid');
-        if (!this.uid) {
-            this.uid = 'u' + Math.random().toString(36).substring(2, 9);
-            sessionStorage.setItem('game_uid', this.uid);
+        if (typeof DeviceStorage !== 'undefined') {
+            this.uid = DeviceStorage.getOrCreateUid();
+        } else {
+            this.uid = localStorage.getItem('game_uid') || sessionStorage.getItem('game_uid');
+            if (!this.uid) {
+                this.uid = 'u' + Math.random().toString(36).substring(2, 9);
+                try { localStorage.setItem('game_uid', this.uid); } catch (_) { /* ignore */ }
+                sessionStorage.setItem('game_uid', this.uid);
+            } else {
+                try { localStorage.setItem('game_uid', this.uid); } catch (_) { /* ignore */ }
+                sessionStorage.setItem('game_uid', this.uid);
+            }
         }
 
         this.isInitialized = true;
@@ -481,18 +504,26 @@ window.NetworkEngine = {
             const color = sessionStorage.getItem('userColor')
                 || localStorage.getItem('userColor')
                 || '#ef4444';
-            const updates = {};
-            updates[`games/${roomId}/host`] = senderUid;
-            updates[`games/${roomId}/status`] = 'waiting';
-            updates[`games/${roomId}/winner`] = null;
-            updates[`games/${roomId}/users/${this.uid}`] = firebase.database.ServerValue.TIMESTAMP;
-            updates[`games/${roomId}/playerData/${this.uid}`] = { name, color };
-            updates[`invites/${this.uid}/${senderUid}/status`] = 'accepted';
-            updates[`invites/${this.uid}/${senderUid}/roomId`] = roomId;
+            return this.db.ref(`games/${roomId}`).once('value').then((snap) => {
+                const room = snap.val();
+                const updates = {};
+                updates[`games/${roomId}/host`] = senderUid;
+                updates[`games/${roomId}/winner`] = null;
+                // Do not downgrade an in-progress party when a late guest accepts.
+                const keepPlaying = room?.status === 'playing'
+                    && this.countRoomMembers(room) >= 1;
+                if (!keepPlaying) {
+                    updates[`games/${roomId}/status`] = 'waiting';
+                }
+                updates[`games/${roomId}/users/${this.uid}`] = firebase.database.ServerValue.TIMESTAMP;
+                updates[`games/${roomId}/playerData/${this.uid}`] = { name, color };
+                updates[`invites/${this.uid}/${senderUid}/status`] = 'accepted';
+                updates[`invites/${this.uid}/${senderUid}/roomId`] = roomId;
 
-            return this.db.ref().update(updates).then(() => {
-                this.joinRoom(roomId);
-                return { ok: true };
+                return this.db.ref().update(updates).then(() => {
+                    this.joinRoom(roomId);
+                    return { ok: true };
+                });
             });
         });
     },
@@ -552,11 +583,13 @@ window.NetworkEngine = {
 
         const roomMetaRef = this.db.ref(this._roomPath(id));
         let lastInitIdentityDigest = null;
+        let hadRoomSnapshot = false;
         const metaCallback = (snap) => {
             const raw = snap.val();
             const game = this._normalizeRoom(raw);
             if (game) {
-                this.playerRole = (game.host === this.uid || id === 'lobby') ? 'P1' : 'P2';
+                hadRoomSnapshot = true;
+                this.playerRole = this._partyRoleForUid(game, this.uid);
                 window.NetworkEngine.roomData = game;
 
                 const g = game.global || {};
@@ -575,9 +608,62 @@ window.NetworkEngine = {
                 }
 
                 if (window.onNetworkUpdate) window.onNetworkUpdate(game);
+                const dissolved = raw?.status === 'dissolved' || game.status === 'dissolved';
+                if (dissolved) {
+                    try {
+                        if (localStorage.getItem('five_party_dbg') === '1'
+                            || new URLSearchParams(window.location.search).has('partyDbg')) {
+                            console.log('[PARTY-DBG] metaCallback dissolved', {
+                                id,
+                                neRoom: this.roomId,
+                                rawStatus: raw?.status,
+                                gameStatus: game.status,
+                                hasHandler: typeof window.onPartyRoomClosed === 'function'
+                            });
+                        }
+                    } catch (_) { /* ignore */ }
+                    if (typeof window.onPartyRoomClosed === 'function') {
+                        window.onPartyRoomClosed(id);
+                    }
+                }
+            } else if (id !== 'lobby') {
+                this.roomData = null;
+                if (hadRoomSnapshot && typeof window.onPartyRoomClosed === 'function') {
+                    try {
+                        if (localStorage.getItem('five_party_dbg') === '1') {
+                            console.log('[PARTY-DBG] metaCallback room deleted', { id, neRoom: this.roomId });
+                        }
+                    } catch (_) { /* ignore */ }
+                    window.onPartyRoomClosed(id);
+                }
+                hadRoomSnapshot = false;
+                if (window.onNetworkUpdate) window.onNetworkUpdate(null);
             }
         };
         this._trackRoomSubscription(roomMetaRef, 'value', metaCallback);
+
+        if (id !== 'lobby') {
+            const statusRef = this.db.ref(`${this._roomPath(id)}/status`);
+            const statusCallback = (snap) => {
+                const val = snap.val();
+                if (val === 'dissolved') {
+                    try {
+                        if (localStorage.getItem('five_party_dbg') === '1'
+                            || new URLSearchParams(window.location.search).has('partyDbg')) {
+                            console.log('[PARTY-DBG] status listener dissolved', {
+                                id,
+                                neRoom: this.roomId,
+                                hasHandler: typeof window.onPartyRoomClosed === 'function'
+                            });
+                        }
+                    } catch (_) { /* ignore */ }
+                    if (typeof window.onPartyRoomClosed === 'function') {
+                        window.onPartyRoomClosed(id);
+                    }
+                }
+            };
+            this._trackRoomSubscription(statusRef, 'value', statusCallback);
+        }
 
         const pushEventsToFrame = (val) => {
             const events = val ? Object.values(val) : [];

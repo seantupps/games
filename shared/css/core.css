@@ -20,7 +20,7 @@
     --hub-score-pad-inline: 20px;
     --hub-score-line: 1.15;
     --hub-turn-gap: 1px;
-    --hub-turn-indent: 4px;
+    --hub-turn-indent: 0px;
     --hub-turn-font: 0.8rem;
 }
 
@@ -351,4 +351,53 @@ body {
 .toast-actions button:not(#btn-accept-invite):hover {
     background: rgba(255, 255, 255, 0.1);
     color: white;
+}
+
+/* Hub victory banner (classic look; fitWinBanner may shrink font to stay in viewport) */
+#global-win-banner {
+    position: fixed;
+    top: 15%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    z-index: 10030;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(92vw, calc(100vw - 24px));
+    max-height: min(40vh, calc(100vh - 24px));
+    overflow: hidden;
+    font-size: 2.625rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: white;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1),
+        transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+}
+
+#global-win-banner.is-fitting {
+    opacity: 0 !important;
+    transition: none !important;
+    pointer-events: none;
+}
+
+#global-win-banner.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+#global-win-banner.visible:not(.is-fitting) {
+    transition: opacity 0.6s cubic-bezier(0.19, 1, 0.22, 1),
+        transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+/* Bananagrams: Done is fixed top-center in the game iframe — keep win text below it */
+body[data-hub-game="bananagrams"] #global-win-banner {
+    top: max(
+        15%,
+        calc(var(--hub-score-top, 28px) + 10px + 3.5rem + 18px)
+    );
 }

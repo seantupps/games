@@ -183,9 +183,43 @@ const LineLogic = {
     }
 };
 
+/** Simultaneous play — authoritative state lives in global/board (version 2). */
+const BananagramsLogic = {
+    initialState(mode) {
+        return {
+            mode: mode || 'solo',
+            phase: 'setup',
+            pool: [],
+            hands: {},
+            gameStarted: false,
+            isOver: false,
+            winner: null
+        };
+    },
+    isValidMove() {
+        return false;
+    },
+    applyMove(state) {
+        return state;
+    },
+    applyInitialBoard(state, board) {
+        if (!board) return state;
+        return {
+            ...state,
+            phase: board.gameStarted ? 'playing' : 'setup',
+            pool: board.pool || [],
+            hands: board.hands || {},
+            gameStarted: !!board.gameStarted,
+            isOver: !!board.winnerUid,
+            winner: board.winnerUid || null
+        };
+    }
+};
+
 const Logic = {
     piles: PilesLogic,
     line: LineLogic,
+    bananagrams: BananagramsLogic,
     computeState(gameType, events = [], initialConfig = {}) {
         const logic = this[gameType];
         if (!logic) return null;
