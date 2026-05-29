@@ -664,6 +664,14 @@ class BaseGame {
             localStorage.removeItem(`piecePositions_${this.gameName}_${this.mode}`);
         }
 
+        // rebuildState (MP host) can override viewport set in onGameReset — re-apply default framing.
+        if (typeof this._applyDefaultPlayingViewport === 'function') {
+            this._applyDefaultPlayingViewport();
+        }
+        if (typeof this._syncViewportAfterLayout === 'function') {
+            this._syncViewportAfterLayout();
+        }
+
         this.safeRender();
         if (!this.isMultiplayer && this.turn === 'P2') this.triggerAITurn();
     }
@@ -958,11 +966,18 @@ class BaseGame {
                     offsetTop: e.data.offsetTop
                 };
                 if (this._usesPanZoomBoard() && typeof GameViewport !== 'undefined') {
-                    GameViewport.reflowOnResize(this);
+                    const preservePlayViewport = !!(this.gameStarted && this._fitZoomInitialized);
+                    if (!preservePlayViewport) GameViewport.reflowOnResize(this);
                 }
                 if (this.isMobileViewport()) {
-                    if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
-                    else this.refreshMobileLayout();
+                    const startingHand = !!(this.started && !this.gameStarted);
+                    const preservePlayViewport = !!(this.gameStarted && this._fitZoomInitialized);
+                    if (startingHand && typeof this._applyDefaultPlayingViewport === 'function') {
+                        this._applyDefaultPlayingViewport();
+                    } else if (!preservePlayViewport) {
+                        if (this._mobileLayoutAnchorLocked) this.refreshMobileLayoutViewportOnly();
+                        else this.refreshMobileLayout();
+                    }
                 } else if (this.requestRender) {
                     this.requestRender();
                 }

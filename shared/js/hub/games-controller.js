@@ -110,6 +110,13 @@
             if (canResetInFrame) {
                 g.resetGame();
                 hooks.updateUI();
+                const notifyLayout = global.FiveHubLayout?.notifyGameFrameLayout;
+                if (notifyLayout) {
+                    requestAnimationFrame(() => {
+                        notifyLayout();
+                        requestAnimationFrame(notifyLayout);
+                    });
+                }
                 return;
             }
             ensureValidGame();

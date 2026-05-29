@@ -108,12 +108,21 @@
                 });
             },
 
+            _isStaleBananaInteraction(msg) {
+                const resetAt = this._resetAcknowledgedAt || 0;
+                return !!(resetAt && msg?.at && msg.at < resetAt);
+            },
+
             _processBananaInteractions(banana) {
                 if (!this.isHost()) return;
                 let ackedNew = false;
                 this._flattenBananaInteractions(banana).forEach(({ uid, msg, path }) => {
                     if (this._isBananaAcked(uid, msg)) {
                         if (path) this.broadcast(path, null);
+                        return;
+                    }
+                    if (this._isStaleBananaInteraction(msg)) {
+                        this._ackBananaInteraction(uid, msg, path);
                         return;
                     }
                     const result = this._hostHandleBananaInteraction(uid, msg);

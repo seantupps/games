@@ -38,8 +38,22 @@
                 const layoutMap = layout || {};
                 const runtimeById = {};
                 const dragging = this._isDraggingHand();
+                const handById = {};
+                (this._loadLocalHand?.() || []).forEach((h) => {
+                    handById[h.id] = h;
+                });
                 (runtimeTiles || []).forEach((t) => {
                     runtimeById[t.id] = t;
+                });
+
+                const tileFromOwnedAndRuntime = (o, rt, pos) => ({
+                    id: o.id,
+                    // Keep runtime letters when merging live tiles — stale board owned can
+                    // echo a redeal/shuffle with the same ids but different letters.
+                    letter: rt?.letter || o.letter,
+                    faceUp: !!(o.faceUp || rt?.faceUp),
+                    x: pos.x,
+                    y: pos.y
                 });
         
                 const placed = [];
@@ -47,13 +61,11 @@
                 (owned || []).forEach((o) => {
                     if (dragging && runtimeById[o.id]) {
                         const rt = runtimeById[o.id];
-                        placed.push({
-                            id: o.id,
-                            letter: o.letter,
-                            faceUp: !!o.faceUp,
-                            x: rt.x,
-                            y: rt.y
-                        });
+                        if (Number.isFinite(rt.x) && Number.isFinite(rt.y)) {
+                            placed.push(tileFromOwnedAndRuntime(o, rt, rt));
+                        } else {
+                            needSpawn.push(o);
+                        }
                         return;
                     }
                     // Prefer current in-memory tile positions over cached layout snapshots.
@@ -61,18 +73,21 @@
                     // live drag/snap state during peel/dump inventory updates.
                     if (runtimeById[o.id]) {
                         const rt = runtimeById[o.id];
-                        placed.push({
-                            id: o.id,
-                            letter: o.letter,
-                            faceUp: !!o.faceUp,
-                            x: rt.x,
-                            y: rt.y
-                        });
+                        if (Number.isFinite(rt.x) && Number.isFinite(rt.y)) {
+                            placed.push(tileFromOwnedAndRuntime(o, rt, rt));
+                        } else if (layoutMap[o.id]
+                            && Number.isFinite(layoutMap[o.id].x)
+                            && Number.isFinite(layoutMap[o.id].y)) {
+                            placed.push(tileFromOwnedAndRuntime(o, rt, layoutMap[o.id]));
+                        } else {
+                            needSpawn.push(o);
+                        }
                     } else if (layoutMap[o.id]) {
+                        const hand = handById[o.id];
                         placed.push({
                             id: o.id,
-                            letter: o.letter,
-                            faceUp: !!o.faceUp,
+                            letter: hand?.letter || o.letter,
+                            faceUp: !!(hand?.faceUp ?? o.faceUp),
                             x: layoutMap[o.id].x,
                             y: layoutMap[o.id].y
                         });
@@ -262,9 +277,24 @@
                 return this.isDragging || Date.now() < this._localDragUntil;
             },
 
+            _shouldKeepRuntimeTiles(board, owned) {
+                if (board?.gameStarted || this.gameStarted) {
+                    return !!(this.tiles?.length);
+                }
+                const ownedIds = new Set((owned || []).map((o) => o.id));
+                if (!ownedIds.size || !this.tiles?.length) return false;
+                if (this.tiles.length !== ownedIds.size) return false;
+                return this.tiles.every((t) => ownedIds.has(t.id)
+                    && Number.isFinite(t.x) && Number.isFinite(t.y));
+            },
+
             _flushDeferredBoardApply() {
                 const board = this._mpDeferredBoard;
                 if (!board || this._isDraggingHand()) return;
+                if (this.gameStarted && !board.gameStarted) {
+                    this._mpDeferredBoard = null;
+                    return;
+                }
                 this._mpDeferredBoard = null;
                 const uid = this._myUid();
                 const owned = board.tilesOwnedByPlayer?.[uid] || [];
@@ -291,8 +321,12 @@
                     || board.hands?.[uid]
                     || [];
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
-                if (!options.reset && inPlay && !owned.length && !this.isHost()) {
-                    const cached = this._loadLocalHand?.() || [];
+                if (!options.reset && !owned.length && !this.isHost()) {
+                    const cachedRec = this._loadLocalHandRecord?.() || { resetCount: null, hand: [] };
+                    const epoch = this._layoutEpoch?.() ?? 0;
+                    const cached = (cachedRec.resetCount != null && epoch > 0 && cachedRec.resetCount !== epoch)
+                        ? []
+                        : (cachedRec.hand || []);
                     if (cached.length) {
                         this.tiles = cached.map((t) => ({
                             id: t.id,
@@ -311,11 +345,15 @@
                 }
                 if (options.reset) this._clearLocalLayout();
                 const layout = this._layoutMapForPlayer(board, uid, owned);
-                const runtime = options.keepRuntime ? this.tiles : null;
+                const runtime = (options.keepRuntime || this._shouldKeepRuntimeTiles(board, owned))
+                    ? this.tiles
+                    : null;
                 this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
                 this.started = this.tiles.length > 0;
                 this._localInventorySeq = this._boardInventorySeq(board, uid);
-                this._persistMpLayout();
+                if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
+                    this._persistMpLayout();
+                }
                 return true;
             },
 
@@ -378,14 +416,19 @@
                     || owned.some((o) => !runtimeIds.has(o.id));
                 if (remote <= (this._localInventorySeq || 0) && !ownedChanged) return false;
                 const layout = this._layoutMapForPlayer(board, uid, owned);
-                const runtime = board?.gameStarted ? this.tiles : null;
+                const runtime = this._shouldKeepRuntimeTiles(board, owned) ? this.tiles : null;
                 this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
                 this._localInventorySeq = remote;
-                this._persistMpLayout();
+                if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
+                    this._persistMpLayout();
+                }
                 return true;
             },
 
             _applyMpInventoryFromBoard(board, uid, options = {}) {
+                if (this._mpAwaitReset && board && !this._isFreshPostResetBoard?.(board)) {
+                    return false;
+                }
                 if (!options.force && !options.reset && this._isDraggingHand()) {
                     const incomingPeel = board?.peelSeq || 0;
                     const incomingDump = board?.dumpSeq || 0;
@@ -394,10 +437,29 @@
                     if (urgentInventoryEvent) {
                         // Peel/dump spawns should feel instant on observers even during short
                         // drag debounce windows; apply now instead of deferring ~500ms.
+                    } else if (this.gameStarted && board && !board.gameStarted) {
+                        return false;
                     } else {
                     this._mpDeferredBoard = board;
                     return false;
                     }
+                }
+                if (!options.force && !options.reset && this.gameStarted && board && !board.gameStarted) {
+                    return false;
+                }
+                // Guest: ignore duplicate reset-class applies once a hand is visible.
+                if (options.reset && !this.isHost?.() && (this.tiles?.length || 0) > 0) {
+                    const ownedCheck = board.tilesOwnedByPlayer?.[uid]
+                        || board.hands?.[uid]
+                        || [];
+                    const lettersWouldShuffle = ownedCheck.some((o) => {
+                        const rt = this.tiles.find((t) => t.id === o.id);
+                        return rt && rt.letter !== o.letter;
+                    });
+                    if (this.gameStarted || board?.gameStarted || lettersWouldShuffle) {
+                        return false;
+                    }
+                    options = { ...options, reset: false, force: false };
                 }
                 let layoutChanged = false;
                 if (options.reset || options.force) {
@@ -413,15 +475,19 @@
                     if (this._rebuildHandFromBoard(board, {
                         ...options,
                         reset: options.reset,
-                        // Force-applies during active play should preserve live runtime positions
+                        // Force-applies during active play should preserve live runtime tiles
                         // to prevent full-board translations on peel/dump sync.
-                        keepRuntime: !options.reset && !!board?.gameStarted
+                        keepRuntime: !options.reset && this._shouldKeepRuntimeTiles(board, ownedForce)
                     })) {
                         layoutChanged = true;
                         this._mpAwaitReset = false;
-                        // Recenter only on true resets/first materialization, not routine force syncs.
+                        // Default rack framing on true resets (same as refresh / hub re-click).
                         if (options.reset || (options.force && !hadTiles && (this.tiles?.length || 0) > 0)) {
-                            this.centerViewOnOrigin();
+                            if (typeof this._applyDefaultPlayingViewport === 'function') {
+                                this._applyDefaultPlayingViewport();
+                            } else {
+                                this.centerViewOnOrigin();
+                            }
                         }
                     }
                 } else {
@@ -437,15 +503,27 @@
                     const runtimeIds = new Set((this.tiles || []).map((t) => t.id));
                     const ownedChanged = owned.length !== (this.tiles?.length || 0)
                         || owned.some((o) => !runtimeIds.has(o.id));
+                    const ownedLettersChanged = !ownedChanged && (this.tiles || []).length
+                        && owned.some((o) => {
+                            const rt = (this.tiles || []).find((t) => t.id === o.id);
+                            return rt && rt.letter !== o.letter;
+                        });
                     const localSeq = this._localInventorySeq || 0;
                     if (this.isHost?.() && remote < localSeq) return false;
                     if (this.isHost?.() && remote === localSeq && ownedChanged) return false;
+                    if (ownedLettersChanged && this._shouldKeepRuntimeTiles(board, owned)) {
+                        if (!this._hasSavedLocalLayoutForOwned?.(owned)) {
+                            return false;
+                        }
+                    }
                     if (remote > localSeq || ownedChanged) {
                         const layout = this._layoutMapForPlayer(board, uid, owned);
-                        const runtime = board?.gameStarted ? this.tiles : null;
+                        const runtime = this._shouldKeepRuntimeTiles(board, owned) ? this.tiles : null;
                         this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
                         this._localInventorySeq = remote;
-                        this._persistMpLayout();
+                        if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
+                            this._persistMpLayout();
+                        }
                         layoutChanged = true;
                     }
                     if (!this.tiles.length && (board.tilesOwnedByPlayer?.[uid]?.length || board.hands?.[uid]?.length)) {

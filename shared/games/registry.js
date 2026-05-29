@@ -81,7 +81,7 @@
      * @property {Record<string, string>} [mpAuditByMode] — MP audit config dir per mode
      * @property {string} [mpAuditConfig] — default MP audit dir when single mode
      * @property {string} [mobileMpExtras] — optional ptests module with runMobileMpExtras(page1, page2, ctx)
-     * @property {'default'|'extended'} [mpSuite] — MP runner tier (`test:mp` uses default only)
+     * @property {'default'|'extended'} [mpSuite] — MP runner tier (`npm run mp` uses default only)
      * @property {number[]} [mpPlayerCounts] — MP audit player counts (default [2])
      * @property {string} [mpAudit3p] — optional custom 3p audit module path (no .js)
      * @property {number} [maxPartyPlayers] — max party size for this game (default 8)

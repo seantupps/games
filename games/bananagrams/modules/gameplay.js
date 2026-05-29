@@ -275,16 +275,19 @@
                         if (ok && !this._winnerUid) this._showBanner('Peel!', 2200, { actorUid: me });
                         return ok;
                     }
+                    const ownedSnapshot = (this.tiles || []).map((t) => ({
+                        id: t.id,
+                        letter: t.letter,
+                        faceUp: !!t.faceUp
+                    }));
+                    const positionsSnapshot = this._serializePositions();
+                    this._guestApplyOptimisticPeel?.();
                     this._sendBananaInteraction({
                         type: 'peel',
-                        positions: this._serializePositions(),
-                        owned: (this.tiles || []).map((t) => ({
-                            id: t.id,
-                            letter: t.letter,
-                            faceUp: !!t.faceUp
-                        }))
+                        positions: positionsSnapshot,
+                        owned: ownedSnapshot
                     });
-                    // Optimistic local feedback; host board sync will reinforce banner + inventory.
+                    // Optimistic tile + banner; host board sync reconciles inventory.
                     this._showBanner('Peel!', 2200, { actorUid: me });
                     return true;
                 }

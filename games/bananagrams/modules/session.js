@@ -144,6 +144,7 @@
                     if (this.isHost()) {
                         this._hostBeginSplit();
                     } else {
+                        this._guestBeginSplit();
                         this._sendBananaInteraction({ type: 'split' });
                     }
                     return;
@@ -300,6 +301,27 @@
                 }
             },
 
+            /** Mobile + desktop default rack framing (same as fresh page load / refresh). */
+            _applyDefaultPlayingViewport() {
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
+                this._mobileContentBounds = null;
+                this._viewportFocal = null;
+                this.canvasPanX = 0;
+                this.canvasPanY = 0;
+                if (this.isMobileViewport?.() && this._usesPanZoomBoard?.()) {
+                    this.refreshMobileLayout?.();
+                    this._flushViewport();
+                    return;
+                }
+                const center = typeof this.getViewportContentCenter === 'function'
+                    ? this.getViewportContentCenter()
+                    : { x: this.ORIGIN, y: this.ORIGIN };
+                if (typeof GameViewport !== 'undefined') {
+                    GameViewport.centerWorldPoint(this, center.x, center.y);
+                }
+            },
+
             _flushViewport() {
                 if (typeof GameViewport === 'undefined') return;
                 if (!this._viewportFocal) {
@@ -327,15 +349,18 @@
                 }
                 const run = () => {
                     if (this.isMobileViewport?.()) {
+                        const preservePlayViewport = !!(this.gameStarted && this._fitZoomInitialized);
                         if (inReview) {
                             if (!this._reviewViewportSettled) {
                                 this._fitReviewViewportOnce?.();
                             }
-                        } else if (this._mobileLayoutAnchorLocked
-                            && typeof this.refreshMobileLayoutViewportOnly === 'function') {
-                            this.refreshMobileLayoutViewportOnly();
-                        } else {
-                            this.refreshMobileLayout?.();
+                        } else if (!preservePlayViewport) {
+                            if (this._mobileLayoutAnchorLocked
+                                && typeof this.refreshMobileLayoutViewportOnly === 'function') {
+                                this.refreshMobileLayoutViewportOnly();
+                            } else {
+                                this.refreshMobileLayout?.();
+                            }
                         }
                     }
                     this._flushViewport();

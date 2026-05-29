@@ -66,24 +66,52 @@
                 return { x: this.ORIGIN, y: this.ORIGIN };
             },
 
-            getPanZoomWorldVisualBounds() {
+            /** Shared mobile default frame — same zoom/focal for solo + MP starting racks. */
+            _standardStartingRackViewportBounds() {
                 const pad = 48;
                 const size = BananaRules.TILE_SIZE;
                 const gap = BananaRules.TILE_GAP;
                 const below = BananaRules.HAND_BELOW_CENTER;
+                const cols = BananaRules.COLS;
+                const o = this.ORIGIN;
+                const rows = Math.ceil(BananaRules.SOLO_HAND / cols);
+                const rackW = (cols - 1) * gap + size;
+                const rackH = (rows - 1) * gap + size;
+                const focalBias = BananaRules.MOBILE_RACK_FOCAL_BIAS ?? 0;
+                // Include empty board above the rack so default focal places rack toward bottom of screen.
+                return {
+                    w: rackW + pad * 2,
+                    h: below + rackH + pad * 2,
+                    cx: o,
+                    cy: o + (below + rackH) / 2 - focalBias
+                };
+            },
+
+            _isStartingRackLayout() {
+                if (!this.tiles?.length || typeof BananaGrid === 'undefined') return false;
+                const opts = this._rackLayoutOptions?.();
+                return BananaGrid.isStartingRack(
+                    this.tiles,
+                    { x: this.ORIGIN, y: this.ORIGIN },
+                    opts
+                );
+            },
+
+            getPanZoomWorldVisualBounds() {
+                const pad = 48;
+                const size = BananaRules.TILE_SIZE;
                 const o = this.ORIGIN;
                 const tiles = this.tiles;
-                if (!tiles?.length) {
-                    const cols = BananaRules.COLS;
-                    const rows = 3;
-                    const w = (cols - 1) * gap + size + pad * 2;
-                    const h = (rows - 1) * gap + size + pad * 2;
-                    return {
-                        w,
-                        h: below + h + pad * 3,
-                        cx: o,
-                        cy: o
-                    };
+                const inReview = this._inReviewExperience?.()
+                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview());
+                if (inReview && typeof this._reviewTilesBounds === 'function') {
+                    const rb = this._reviewTilesBounds(tiles);
+                    if (rb) {
+                        return { w: rb.w, h: rb.h, cx: rb.cx, cy: rb.cy };
+                    }
+                }
+                if (!tiles?.length || !this.gameStarted || this._isStartingRackLayout()) {
+                    return this._standardStartingRackViewportBounds();
                 }
                 let minX = Infinity;
                 let minY = o - pad * 3;
@@ -99,14 +127,6 @@
                 minX -= pad;
                 maxX += pad;
                 maxY += pad;
-                const inReview = this._inReviewExperience?.()
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview());
-                if (inReview && typeof this._reviewTilesBounds === 'function') {
-                    const rb = this._reviewTilesBounds(tiles);
-                    if (rb) {
-                        return { w: rb.w, h: rb.h, cx: rb.cx, cy: rb.cy };
-                    }
-                }
                 return {
                     w: maxX - minX,
                     h: maxY - minY,

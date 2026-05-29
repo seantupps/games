@@ -47,20 +47,42 @@
                 } catch (_) { /* ignore */ }
             },
 
-            _loadLocalHand() {
-                if (!this._isMultiplayerMode()) return [];
+            _layoutEpoch() {
+                const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
+                return S?.readResetCount?.(this.roomData)
+                    ?? this.roomData?.global?.resetCount
+                    ?? this._mpAppliedResetCount
+                    ?? 0;
+            },
+
+            _loadLocalHandRecord() {
+                if (!this._isMultiplayerMode()) return { resetCount: null, hand: [] };
                 try {
-                    const hand = JSON.parse(localStorage.getItem(this.getHandPersistKey()) || '[]');
-                    return Array.isArray(hand) ? hand : [];
+                    const raw = JSON.parse(localStorage.getItem(this.getHandPersistKey()) || '[]');
+                    if (Array.isArray(raw)) return { resetCount: null, hand: raw };
+                    if (raw && Array.isArray(raw.hand)) {
+                        return {
+                            resetCount: Number.isFinite(raw.resetCount) ? raw.resetCount : null,
+                            hand: raw.hand
+                        };
+                    }
+                    return { resetCount: null, hand: [] };
                 } catch (_) {
-                    return [];
+                    return { resetCount: null, hand: [] };
                 }
+            },
+
+            _loadLocalHand() {
+                return this._loadLocalHandRecord().hand;
             },
 
             _saveLocalHand(hand) {
                 if (!this._isMultiplayerMode()) return;
                 try {
-                    localStorage.setItem(this.getHandPersistKey(), JSON.stringify(hand || []));
+                    localStorage.setItem(this.getHandPersistKey(), JSON.stringify({
+                        resetCount: this._layoutEpoch(),
+                        hand: hand || []
+                    }));
                 } catch (_) { /* ignore */ }
             },
 
@@ -74,7 +96,9 @@
             _layoutFromTiles(tiles) {
                 const layout = {};
                 (tiles || []).forEach((t) => {
-                    layout[t.id] = { x: Math.round(t.x), y: Math.round(t.y) };
+                    if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                        layout[t.id] = { x: Math.round(t.x), y: Math.round(t.y) };
+                    }
                 });
                 return layout;
             },
@@ -90,8 +114,8 @@
                     id: t.id,
                     letter: t.letter,
                     faceUp: !!t.faceUp,
-                    x: Math.round(t.x),
-                    y: Math.round(t.y)
+                    x: Number.isFinite(t.x) ? Math.round(t.x) : 0,
+                    y: Number.isFinite(t.y) ? Math.round(t.y) : 0
                 })));
                 if (!this.isHost()) return;
                 this._hostEnsureMpStores();
@@ -103,22 +127,68 @@
                 const ids = new Set((owned || []).map((o) => o.id));
                 const pruned = {};
                 Object.entries(layout || {}).forEach(([id, p]) => {
-                    if (ids.has(id) && p && typeof p.x === 'number' && typeof p.y === 'number') {
+                    if (ids.has(id) && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
                         pruned[id] = { x: p.x, y: p.y };
                     }
                 });
                 return pruned;
             },
 
+            _letterMultisetSig(letters) {
+                return (letters || []).map((l) => String(l || '').toUpperCase()).sort().join('');
+            },
+
+            _localLayoutMatchesOwned(ownedList, localHand, localLayout) {
+                if (!ownedList?.length) return false;
+                const epoch = this._layoutEpoch();
+                const stored = this._loadLocalHandRecord?.() || { resetCount: null, hand: localHand };
+                if (stored.resetCount != null && epoch > 0 && stored.resetCount !== epoch) return false;
+                const pruned = this._pruneLayout(localLayout, ownedList);
+                if (!Object.keys(pruned).length) return false;
+                const hand = (stored.hand?.length ? stored.hand : localHand) || [];
+                if (!hand.length) {
+                    return Object.keys(pruned).length === ownedList.length;
+                }
+                if (hand.length !== ownedList.length) return false;
+                const ownedLetters = this._letterMultisetSig(ownedList.map((o) => o.letter));
+                const localLetters = this._letterMultisetSig(hand.map((t) => t.letter));
+                return ownedLetters === localLetters;
+            },
+
+            _hasSavedLocalLayoutForOwned(ownedList) {
+                if (!ownedList?.length) return false;
+                const localHand = this._loadLocalHand?.() || [];
+                const localLayout = this._loadLocalLayout();
+                return this._localLayoutMatchesOwned(ownedList, localHand, localLayout);
+            },
+
+            _shouldPersistMpLayout(ownedList, appliedLayout) {
+                if (!this._isMultiplayerMode() || !this._myUid()) return false;
+                if (!ownedList?.length) return true;
+                const appliedKeys = Object.keys(appliedLayout || {});
+                if (appliedKeys.length) return true;
+                return !this._hasSavedLocalLayoutForOwned(ownedList);
+            },
+
             _layoutMapForPlayer(board, uid, owned) {
-                // On refresh, always prefer local cached layout for the current player (host or guest).
-                // This avoids falling back to stale/incomplete board tilePositions and snapping tiles back.
+                // Prefer local cached layout for the current player (refresh / in-play).
                 if (uid === this._myUid()) {
-                    // Before SPLIT, tile ids restart from t-0 and stale local layouts from prior rounds
-                    // can misplace new deal tiles. Only apply local layout once gameplay has started.
-                    if (board?.gameStarted) {
-                        const local = this._pruneLayout(this._loadLocalLayout(), owned);
-                        if (Object.keys(local).length) return local;
+                    const ownedList = owned || [];
+                    if (ownedList.length) {
+                        const stored = this._loadLocalHandRecord?.() || { resetCount: null, hand: [] };
+                        const epoch = this._layoutEpoch();
+                        const epochOk = stored.resetCount == null
+                            || epoch === 0
+                            || stored.resetCount === epoch;
+                        const localLayout = this._loadLocalLayout();
+                        const pruned = this._pruneLayout(localLayout, ownedList);
+                        if (epochOk && Object.keys(pruned).length === ownedList.length) {
+                            return pruned;
+                        }
+                        const localHand = stored.hand?.length ? stored.hand : (this._loadLocalHand?.() || []);
+                        if (this._localLayoutMatchesOwned(ownedList, localHand, localLayout)) {
+                            return pruned;
+                        }
                     }
                 }
                 const list = board?.tilePositionsByPlayer?.[uid];

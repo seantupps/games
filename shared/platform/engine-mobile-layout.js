@@ -400,6 +400,11 @@
                     return;
                 }
                 if (usesPanZoomBoard(game)) {
+                    // Starting rack: full refit (not pan-only) so settings open/close matches refresh.
+                    if (game.started && !game.gameStarted) {
+                        refreshMobileLayout(game);
+                        return;
+                    }
                     if (typeof GameViewport !== 'undefined') {
                         GameViewport.reflowOnResize(game);
                     }

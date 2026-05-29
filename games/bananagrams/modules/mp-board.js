@@ -113,6 +113,14 @@
                 }
             },
 
+            _isFreshPostResetBoard(board) {
+                if (!board || board.version < 2) return false;
+                if (board.gameStarted) return false;
+                if ((board.peelSeq || 0) > 0 || (board.dumpSeq || 0) > 0) return false;
+                const hands = board.tilesOwnedByPlayer || {};
+                return Object.values(hands).some((h) => Array.isArray(h) && h.length > 0);
+            },
+
             _applyMultiplayerBoard(board, options = {}) {
                 if (!board) return;
                 const hadTilesBeforeApply = (this.tiles?.length || 0) > 0;
@@ -122,6 +130,12 @@
                         ? (new Error().stack || '').split('\n').slice(1, 4).join(' | ')
                         : '');
                 board = this._normalizeMpBoard(board);
+                if (this._mpAwaitReset && !this.isHost?.()) {
+                    if (!this._isFreshPostResetBoard(board)) {
+                        return;
+                    }
+                    options = { ...options, reset: true, force: true };
+                }
                 this._applyMpActionBanners(board);
                 this._traceDoneApply(board, options, traceCaller);
                 const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
@@ -131,6 +145,18 @@
                     this._mpAppliedResetCount = epoch;
                     this._boardSeq = 0;
                     this._exitReviewLocalState();
+                    if (!this._isFreshPostResetBoard(board)) {
+                        if (this._doneTraceOn()) {
+                            console.log('[APPLY] skip stale board at epoch bump', {
+                                caller: traceCaller,
+                                boardSeq: board.seq,
+                                gameStarted: board.gameStarted,
+                                peelSeq: board.peelSeq,
+                                dumpSeq: board.dumpSeq
+                            });
+                        }
+                        return;
+                    }
                     options = { ...options, force: true, reset: true };
                 }
                 const canApply = options.force
@@ -204,6 +230,24 @@
 
                 this._mirrorBananaAckFromBoard(board);
                 this._mirrorHostInventoryFromBoard(board);
+
+                const preservePlayViewport = !!(this.isMobileViewport?.()
+                    && this._usesPanZoomBoard?.()
+                    && this.gameStarted
+                    && this._fitZoomInitialized
+                    && !options.reset
+                    && !leavingReview);
+                let savedPlayViewport = null;
+                if (preservePlayViewport) {
+                    savedPlayViewport = {
+                        panX: this.canvasPanX,
+                        panY: this.canvasPanY,
+                        zoom: this.zoom,
+                        targetZoom: this.targetZoom,
+                        focalX: this._viewportFocal?.x ?? null,
+                        focalY: this._viewportFocal?.y ?? null
+                    };
+                }
         
                 let layoutChanged = false;
                 if (!inReview || options.reset) {
@@ -265,13 +309,29 @@
                 this._updateHudEl();
                 this.renderScoreboard();
                 if (this.isMobileViewport?.() && this._usesPanZoomBoard?.() && !inReview && (this.tiles?.length || 0) > 0) {
-                    this.refreshMobileLayout();
+                    const needsMobileRefit = !this._fitZoomInitialized || options.reset || leavingReview;
+                    if (needsMobileRefit && (options.reset || leavingReview)) {
+                        this._fitZoomInitialized = false;
+                        this._mobileLayoutAnchorLocked = false;
+                    }
+                    if (needsMobileRefit) {
+                        if (this._mobileLayoutAnchorLocked
+                            && typeof this.refreshMobileLayoutViewportOnly === 'function') {
+                            this.refreshMobileLayoutViewportOnly();
+                        } else {
+                            this.refreshMobileLayout();
+                        }
+                    }
                 }
                 if (layoutChanged) {
                     this.requestRender();
                     const shouldSyncViewport = !!(options.reset
+                        || leavingReview
                         || (!hadTilesBeforeApply && (this.tiles?.length || 0) > 0)
-                        || (this.isMobileViewport?.() && this._usesPanZoomBoard?.()));
+                        || (this.isMobileViewport?.() && this._usesPanZoomBoard?.() && !this._fitZoomInitialized));
+                    if (leavingReview && typeof this._resetPlayingViewportAfterReview === 'function') {
+                        this._resetPlayingViewportAfterReview();
+                    }
                     if (shouldSyncViewport) this._syncViewportAfterLayout();
                 } else {
                     this.requestRender();
@@ -280,6 +340,22 @@
                         if (typeof this._scheduleReviewViewportBurst === 'function') {
                             this._scheduleReviewViewportBurst('mp-board-apply-review');
                         }
+                    }
+                }
+
+                if (savedPlayViewport) {
+                    this.canvasPanX = savedPlayViewport.panX;
+                    this.canvasPanY = savedPlayViewport.panY;
+                    this.zoom = savedPlayViewport.zoom;
+                    this.targetZoom = savedPlayViewport.targetZoom;
+                    if (savedPlayViewport.focalX != null && savedPlayViewport.focalY != null) {
+                        this._viewportFocal = {
+                            x: savedPlayViewport.focalX,
+                            y: savedPlayViewport.focalY
+                        };
+                    }
+                    if (typeof GameViewport !== 'undefined') {
+                        GameViewport.applyPanZoom(this);
                     }
                 }
             },
@@ -535,7 +611,16 @@
             },
 
             _cleanBoardPayload(board) {
-                return JSON.parse(JSON.stringify(board));
+                const clean = JSON.parse(JSON.stringify(board));
+                const scrub = (val) => {
+                    if (typeof val === 'number' && !Number.isFinite(val)) return null;
+                    if (Array.isArray(val)) return val.map(scrub);
+                    if (val && typeof val === 'object') {
+                        Object.keys(val).forEach((k) => { val[k] = scrub(val[k]); });
+                    }
+                    return val;
+                };
+                return scrub(clean);
             },
 
             serializeBoard() {
@@ -705,9 +790,13 @@
                 this._mpAwaitReset = true;
                 this.tiles = [];
                 this.gameStarted = false;
+                this._resetAcknowledgedAt = Date.now();
                 this.elapsedMs = 0;
                 this._timerStart = null;
                 this._mpStartedAt = null;
+                if (typeof this._resetPlayingViewportAfterReview === 'function') {
+                    this._resetPlayingViewportAfterReview();
+                }
             },
 
             onGameReset() {
@@ -745,21 +834,32 @@
                 this._nextTileId = 0;
                 this._selectedIds.clear();
                 this._selectionHighlight = false;
+                this._bananaHandled = {};
+                this._bananaAck = {};
+                this._resetAcknowledgedAt = Date.now();
+                this._bannerText = '';
                 this.canvasPanX = 0;
                 this.canvasPanY = 0;
+                this._viewportFocal = null;
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
+                this._mobileContentBounds = null;
                 this.elapsedMs = 0;
                 this.setupNewHand();
+                this._applyDefaultPlayingViewport?.();
                 this._syncViewportAfterLayout();
             },
 
             _serializeHandTiles(tiles = this.tiles) {
-                return tiles.map((t) => ({
-                    id: t.id,
-                    letter: t.letter,
-                    x: t.x,
-                    y: t.y,
-                    faceUp: !!t.faceUp
-                }));
+                return (tiles || [])
+                    .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y))
+                    .map((t) => ({
+                        id: t.id,
+                        letter: t.letter,
+                        x: Math.round(t.x),
+                        y: Math.round(t.y),
+                        faceUp: !!t.faceUp
+                    }));
             }
     });
 })(typeof window !== 'undefined' ? window : global);

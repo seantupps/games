@@ -116,7 +116,6 @@
                 this._peelSeq = 0;
                 this._lastPeelDraws = null;
                 this._localInventorySeq = 0;
-                this.centerViewOnOrigin();
                 this._updateHudEl();
                 this._hostSyncBoard({ immediate: true });
                 this.tiles = this._mergeInventoryWithLayout(
@@ -125,6 +124,7 @@
                     null
                 );
                 this._localInventorySeq = this._mpInventorySeq[myUid] || 1;
+                this._applyDefaultPlayingViewport?.();
                 this.requestRender();
                 this._syncViewportAfterLayout();
             },
@@ -153,13 +153,10 @@
                 this._selectionHighlight = false;
                 this._bannerText = '';
                 this._bannerPlacement = 'center';
-                // Force a fresh mobile fit so opening rack is fully visible.
-                this._fitZoomInitialized = false;
-                this._mobileLayoutAnchorLocked = false;
-                this.centerViewOnOrigin();
                 this._updateHudEl();
                 this.persistState();
                 this._soloDistributionInvariantCheck?.('setupNewHand');
+                this._applyDefaultPlayingViewport?.();
                 this.requestRender();
                 this._syncViewportAfterLayout();
             },
@@ -177,6 +174,22 @@
                 });
                 this._syncMpTimerFromBoard(startedAt);
                 this._hostSyncBoard({ immediate: true });
+                this.requestRender();
+            },
+
+            /** Guest: mirror host SPLIT locally so drag positions are not wiped by stale pre-split boards. */
+            _guestBeginSplit() {
+                if (this.gameStarted) return;
+                if (this._inReviewExperience?.()) {
+                    return;
+                }
+                const startedAt = Date.now();
+                this.gameStarted = true;
+                this._mpStartedAt = startedAt;
+                this.tiles.forEach((t) => { t.faceUp = true; });
+                this._timerStart = startedAt;
+                this._startTimer();
+                this._mpDeferredBoard = null;
                 this.requestRender();
             },
 
@@ -219,6 +232,54 @@
                 return { ok: true };
             },
 
+            _peelPartyUids(actorUid) {
+                const active = new Set(this._getPlayerUids().filter(Boolean));
+                const hostUid = this.roomData?.host || this._myUid();
+                if (hostUid) active.add(hostUid);
+                if (actorUid) active.add(actorUid);
+                return [...active].filter(Boolean).sort();
+            },
+
+            /** Mirror host peel draw order so guest peel tiles spawn before RTDB echo. */
+            _guestApplyOptimisticPeel() {
+                if (this.isHost?.() || !this._isMultiplayerMode?.()) return false;
+                if (typeof BananaRules === 'undefined') return false;
+                const me = this._myUid();
+                const uids = this._peelPartyUids(me);
+                if (!uids.length || this._tilePool.length < uids.length) return false;
+
+                const pool = [...this._tilePool];
+                let nextId = this._nextTileId || 1;
+                const drawn = {};
+                const drawnIds = {};
+                uids.forEach((u) => {
+                    const letters = BananaRules.drawFromPool(pool, 1);
+                    if (!letters.length) return;
+                    const id = `t-${nextId++}`;
+                    drawn[u] = letters[0];
+                    drawnIds[u] = id;
+                });
+                const letter = drawn[me];
+                const id = drawnIds[me];
+                if (!letter || !id) return false;
+
+                const spots = this._planDrawnTileSpots(this.tiles, [letter]);
+                if (!spots || spots.length !== 1) return false;
+
+                this._tilePool = pool;
+                this._nextTileId = nextId;
+                this.tiles.push({
+                    id,
+                    letter,
+                    x: spots[0].x,
+                    y: spots[0].y,
+                    faceUp: true
+                });
+                this._persistMpLayout?.();
+                this.requestRender();
+                return true;
+            },
+
             _hostPeelForPlayer(uid, guestLayout = null) {
                 if (!this._checker || !BananaGrid) return false;
                 this._hostEnsureMpStores();
@@ -241,11 +302,7 @@
                 if (!hasThreeTileWord) return false;
         
                 const board = this._mpBoardFromRoom?.(this.roomData) || {};
-                const active = new Set(this._getPlayerUids().filter(Boolean));
-                const hostUid = this.roomData?.host || this._myUid();
-                if (hostUid) active.add(hostUid);
-                active.add(uid);
-                const uids = [...active].filter(Boolean).sort();
+                const uids = this._peelPartyUids(uid);
                 const roomOwned = board?.tilesOwnedByPlayer || {};
                 const ownedByUid = {};
                 // Peel uses an explicit in-memory baseline to avoid room snapshot races.

@@ -165,27 +165,31 @@
                 const merged = [];
                 owned.forEach((o) => {
                     const rt = runtimeById[o.id];
-                    if (rt) {
-                        merged.push({
-                            id: o.id,
-                            letter: o.letter,
-                            x: rt.x,
-                            y: rt.y,
-                            faceUp: !!o.faceUp
-                        });
-                        return;
+                    const pick = (x, y) => (
+                        Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
+                    );
+                    let coords = rt ? pick(rt.x, rt.y) : null;
+                    if (!coords) {
+                        const saved = layout[o.id];
+                        coords = saved ? pick(saved.x, saved.y) : null;
                     }
-                    const saved = layout[o.id];
-                    if (saved) {
+                    if (coords) {
                         merged.push({
                             id: o.id,
                             letter: o.letter,
-                            x: saved.x,
-                            y: saved.y,
+                            x: coords.x,
+                            y: coords.y,
                             faceUp: !!o.faceUp
                         });
                     }
                 });
+
+                const mergedIds = new Set(merged.map((t) => t.id));
+                const missing = owned.filter((o) => !mergedIds.has(o.id));
+                if (missing.length) {
+                    const fallback = this._rackTilesFromOwned(missing);
+                    merged.push(...fallback);
+                }
 
                 if (merged.length) return this._serializeHandTiles(merged);
 
@@ -242,7 +246,7 @@
                 let maxX = -Infinity;
                 let maxY = -Infinity;
                 (tiles || []).forEach((t) => {
-                    if (typeof t.x !== 'number' || typeof t.y !== 'number') return;
+                    if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
                     minX = Math.min(minX, t.x);
                     minY = Math.min(minY, t.y);
                     maxX = Math.max(maxX, t.x + size);
@@ -379,6 +383,7 @@
             },
 
             _scheduleReviewViewportBurst(source = 'unknown') {
+                if (!this._inReviewExperience?.()) return;
                 this._reviewDbg('burst', { source });
                 const run = () => {
                     if (!this.tiles?.length) return;
@@ -424,6 +429,7 @@
             },
 
             _flushReviewViewportImmediate(options = {}) {
+                if (!this._inReviewExperience?.()) return;
                 if (!this._isCanvasLayoutReady()) {
                     const retry = (this._reviewViewportRetry = (this._reviewViewportRetry || 0) + 1);
                     this._reviewDbg('flush-defer-zero-canvas', {
@@ -462,7 +468,7 @@
                 let maxX = -Infinity;
                 let maxY = -Infinity;
                 (tiles || []).forEach((t) => {
-                    if (typeof t.x !== 'number' || typeof t.y !== 'number') return;
+                    if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
                     minX = Math.min(minX, t.x);
                     minY = Math.min(minY, t.y);
                     maxX = Math.max(maxX, t.x + size);
@@ -493,6 +499,7 @@
             },
 
             _fitReviewViewportOnce() {
+                if (!this._inReviewExperience?.()) return;
                 if (!this._isCanvasLayoutReady()) {
                     const retry = (this._reviewFitRetries = (this._reviewFitRetries || 0) + 1);
                     this._reviewDbg('fit-defer-zero-canvas', { retry, metrics: this._canvasLayoutMetrics() });
@@ -730,8 +737,33 @@
                 this._winnerBannerUid = null;
             },
 
+            /** Drop review fit-zoom / focal so the next hand uses the normal playing viewport. */
+            _resetPlayingViewportAfterReview() {
+                this._reviewFitRetries = 0;
+                this._reviewViewportRetry = 0;
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
+                this._mobileContentBounds = null;
+                this.canvasPanX = 0;
+                this.canvasPanY = 0;
+                const defZoom = typeof this.getDefaultZoomForViewport === 'function'
+                    ? this.getDefaultZoomForViewport()
+                    : 1;
+                this.zoom = defZoom;
+                this.targetZoom = defZoom;
+                this._viewportFocal = null;
+                if (typeof GameViewport !== 'undefined') {
+                    GameViewport.centerWorldPoint(this, this.ORIGIN, this.ORIGIN);
+                    GameViewport.applyPanZoom(this);
+                }
+                this._reviewViewportGeneration = (this._reviewViewportGeneration || 0) + 1;
+            },
+
             _exitReviewLocalState() {
+                const wasInReviewPhase = this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW;
+                const hadReviewViewport = !!this._reviewViewportSettled;
                 const leavingVictory = this._reviewUiActive() || this._victoryRegistered || this.isOver;
+                const needsViewportReset = leavingVictory || wasInReviewPhase || hadReviewViewport;
                 this._postGameReview = false;
                 this._hostReviewTransitionActive = false;
                 this._reviewLayouts = null;
@@ -745,6 +777,9 @@
                 if (leavingVictory) {
                     this._clearPostGameVictoryState();
                     this._dismissHubWinBanner();
+                }
+                if (needsViewportReset) {
+                    this._resetPlayingViewportAfterReview();
                 }
                 if (this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW) {
                     this._mpClientBoardPhase = BananagramsGame.MP_PHASE.PLAYING;
@@ -762,7 +797,7 @@
                 const merged = [];
                 owned.forEach((o) => {
                     const p = positions[o.id];
-                    if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+                    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
                         merged.push({
                             id: o.id,
                             letter: o.letter,

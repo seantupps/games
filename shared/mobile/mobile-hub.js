@@ -116,10 +116,15 @@
         const win = frame.contentWindow;
         const run = () => {
             const g = win.game;
-            if (g?._mobileLayoutAnchorLocked && g?.refreshMobileLayoutViewportOnly) {
-                g.refreshMobileLayoutViewportOnly();
+            if (!g) return;
+            const startingHand = !!(g?.started && !g?.gameStarted);
+            const preservePlayViewport = !!(g.gameStarted && g._fitZoomInitialized);
+            if (startingHand && typeof g._applyDefaultPlayingViewport === 'function') {
+                g._applyDefaultPlayingViewport();
+            } else if (g?._mobileLayoutAnchorLocked && g?.refreshMobileLayoutViewportOnly) {
+                if (!preservePlayViewport) g.refreshMobileLayoutViewportOnly();
             } else if (g?.refreshMobileLayout) {
-                g.refreshMobileLayout();
+                if (!preservePlayViewport) g.refreshMobileLayout();
             } else if (g?.fitBoardToViewport) {
                 g.fitBoardToViewport();
             }

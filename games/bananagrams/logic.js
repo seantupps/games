@@ -38,7 +38,7 @@
      * MP testing only — set to e.g. 4 to deal fewer tiles; null = official rules.
      * Or pass ?hand=4 on the game iframe URL.
      */ 
-    const MP_HAND_OVERRIDE = 21;
+    const MP_HAND_OVERRIDE = 4;
 
     /** Official deal size by player count (rules.txt). */
     function startingHandSize(playerCount) {
@@ -53,6 +53,11 @@
     const TILE_GAP = TILE_SIZE;
     /** World Y offset from board origin — rack sits in lower viewport (not vertically centered). */
     const HAND_BELOW_CENTER = 200;
+    /**
+     * Mobile default viewport only: subtract from focal Y (world px) so the rack sits
+     * lower on screen. Increase to push rack south; decrease toward 0 to center more.
+     */
+    const MOBILE_RACK_FOCAL_BIAS = 150;
     /** Inset from viewport edges when placing peel/dump tiles (world px). */
     const SPAWN_VIEWPORT_PAD = 16;
     /**
@@ -480,6 +485,7 @@
         TILE_SIZE,
         TILE_GAP,
         HAND_BELOW_CENTER,
+        MOBILE_RACK_FOCAL_BIAS,
         SPAWN_VIEWPORT_PAD,
         SPAWN_MIN_GAP_FROM_ANCHOR,
         SPAWN_FAR_CANDIDATE_POOL,
