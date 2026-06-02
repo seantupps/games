@@ -38,7 +38,7 @@
      * MP testing only — set to e.g. 4 to deal fewer tiles; null = official rules.
      * Or pass ?hand=4 on the game iframe URL.
      */ 
-    const MP_HAND_OVERRIDE = 4;
+    const MP_HAND_OVERRIDE = 21;
 
     /** Official deal size by player count (rules.txt). */
     function startingHandSize(playerCount) {

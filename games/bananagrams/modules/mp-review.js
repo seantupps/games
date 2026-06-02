@@ -151,10 +151,27 @@
                     if (t.ownerUid && t.ownerUid !== me) return;
                     runtimeById[t.id] = t;
                 });
+                const runtimeMine = Object.values(runtimeById);
+
+                // Board/host inventory can lag behind local MP play (e.g. peel-grid fixture ids
+                // still in tilesOwnedByPlayer while this.tiles holds the live crossword).
+                const ownedOnRuntime = owned.filter((o) => runtimeById[o.id]).length;
+                const runtimeIsAuthoritative = runtimeMine.length > 0
+                    && (!owned.length
+                        || runtimeMine.length > owned.length
+                        || (owned.length && !ownedOnRuntime));
+                if (runtimeIsAuthoritative) {
+                    return this._serializeHandTiles(runtimeMine.map((t) => ({
+                        id: t.id,
+                        letter: t.letter,
+                        x: t.x,
+                        y: t.y,
+                        faceUp: !!t.faceUp
+                    })));
+                }
 
                 if (!owned.length) {
-                    const live = Object.values(runtimeById);
-                    return live.length ? this._serializeHandTiles(live) : [];
+                    return runtimeMine.length ? this._serializeHandTiles(runtimeMine) : [];
                 }
 
                 let layout = this._layoutMapForPlayer(board, me, owned);
