@@ -263,7 +263,8 @@
 
                 const mpBoard = mpBoardFromRoomData(game);
                 const boardInReview = boardInReviewPhase(game);
-                const boardAuthoritative = game.hasCap('mpBoardAuthoritative')
+                const boardAuthoritative = game.isMultiplayer
+                    && game.hasCap('mpBoardAuthoritative')
                     && !!(mpBoard?.version >= 2);
 
                 if (game.isMultiplayer && replayEvents.length === 0 && !boardInReview) {

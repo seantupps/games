@@ -262,7 +262,7 @@
                         '/w word1 -word2 ... — add/remove dictionary words',
                         '/b state — invalid words on your board, or peel/win-ready',
                         '/clear — clear local data and reload',
-                        '/win — same as _onPlayerWins (real victory path)',
+                        '/win — dev win (same review + hub banner path as real MP win)',
                         '/win banner <name> — hub win banner only (dev)',
                         '/help — show this list'
                     ].forEach((line) => this.append({ sender: 'System', content: line }));

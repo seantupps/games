@@ -54,8 +54,20 @@
                 };
             },
 
+            _bunchLenForDump() {
+                if (typeof this._mpAuthoritativeBunchLen === 'function') {
+                    return this._mpAuthoritativeBunchLen();
+                }
+                return this._tilePool?.length ?? 0;
+            },
+
+            _canDumpFromBunch() {
+                const min = typeof BananaRules !== 'undefined' ? BananaRules.DUMP_DRAW_COUNT : 3;
+                return this._bunchLenForDump() >= min;
+            },
+
             _applyDumpToTiles(tiles, tileId) {
-                if (!this._tilePool.length) return { ok: false, reason: 'empty-pool' };
+                if (!this._canDumpFromBunch()) return { ok: false, reason: 'short-pool' };
                 const idx = tiles.findIndex((t) => t.id === tileId);
                 if (idx < 0) return { ok: false, reason: 'tile-not-found' };
         
@@ -81,7 +93,7 @@
 
             _handleDump(tile) {
                 if (this._inReviewExperience?.()) return false;
-                if (!tile || !this._tilePool.length) return false;
+                if (!tile || !this._canDumpFromBunch()) return false;
                 if (this._isMultiplayerMode()) {
                     const me = this._myUid();
                     if (this.isHost()) {
@@ -90,7 +102,6 @@
                         if (ok) this._showBanner('Dump!', 2200, { actorUid: me });
                         return ok;
                     }
-                    if (!this._tilePool.length) return false;
                     const ownedSnapshot = (this.tiles || []).map((t) => ({
                         id: t.id,
                         letter: t.letter,
@@ -155,6 +166,21 @@
 
             _allTilesPlaced() {
                 return this._allTilesPlacedOn(this.tiles);
+            },
+
+            /** Bunch empty + full connected valid grid (MP win / solo win). */
+            _handQualifiesForBananasWin(hand) {
+                if (!this._checker || !BananaGrid) return false;
+                if (!hand?.length || hand.length < 3) return false;
+                const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
+                    ? this._mpAuthoritativeBunchLen()
+                    : this._tilePool.length;
+                if (bunchLen) return false;
+                const result = BananaGrid.validateGrid(hand, this._checker);
+                if (!result.ok || !this._allTilesPlacedOn(hand)) return false;
+                if (!BananaGrid.eachTileOccupiesUniqueCell(hand)) return false;
+                if (!BananaGrid.isConnected(hand)) return false;
+                return (result.words || []).some((w) => String(w || '').length >= 3);
             },
 
             _isHandDragActive() {
@@ -258,6 +284,8 @@
 
             _checkPeel() {
                 if (this._inReviewExperience?.()) return false;
+                if (this._winnerUid || this._victoryRegistered) return false;
+                if (typeof this._isBoardInReview === 'function' && this._isBoardInReview()) return false;
                 if (this._isHandDragActive()) return false;
                 if (!this._checker || !BananaGrid) return false;
                 if ((this.tiles?.length || 0) < 3) return false;
@@ -270,6 +298,33 @@
         
                 if (this._isMultiplayerMode()) {
                     const me = this._myUid();
+                    const partySize = (typeof this._peelPartyUids === 'function'
+                        ? this._peelPartyUids(me)
+                        : this._getPlayerUids()).filter(Boolean).length || 2;
+
+                    if (this._handQualifiesForBananasWin(this.tiles)) {
+                        if (this.isHost()) {
+                            if (this._hostBananasForPlayer(me)) return true;
+                        } else if (this._mpAuthoritativeBunchLen() === 0) {
+                            const ownedSnapshot = (this.tiles || []).map((t) => ({
+                                id: t.id,
+                                letter: t.letter,
+                                faceUp: !!t.faceUp
+                            }));
+                            this._sendBananaInteraction({
+                                type: 'bananas',
+                                positions: this._serializePositions(),
+                                owned: ownedSnapshot
+                            });
+                            return true;
+                        }
+                    }
+
+                    const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
+                        ? this._mpAuthoritativeBunchLen()
+                        : this._tilePool.length;
+                    if (bunchLen < partySize) return false;
+
                     if (this.isHost()) {
                         const ok = this._hostPeelForPlayer(me);
                         if (ok && !this._winnerUid) this._showBanner('Peel!', 2200, { actorUid: me });

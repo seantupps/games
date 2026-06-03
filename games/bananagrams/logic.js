@@ -135,7 +135,15 @@
         return pool.splice(0, count);
     }
 
-    function dumpTile(pool, letter, drawCount = 3) {
+    const DUMP_DRAW_COUNT = 3;
+
+    /** Bunch must hold at least 3 tiles before dump (1 returned + 3 drawn). */
+    function canDumpFromPool(pool) {
+        return Array.isArray(pool) && pool.length >= DUMP_DRAW_COUNT;
+    }
+
+    function dumpTile(pool, letter, drawCount = DUMP_DRAW_COUNT) {
+        if (!canDumpFromPool(pool)) return [];
         pool.push(letter);
         for (let i = pool.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -508,6 +516,8 @@
         dealSoloHand,
         dealPlayerHand,
         drawFromPool,
+        DUMP_DRAW_COUNT,
+        canDumpFromPool,
         dumpTile,
         peelAllPlayers,
         peelAllPlayersSplit,

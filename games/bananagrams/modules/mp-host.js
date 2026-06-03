@@ -212,7 +212,8 @@
                 const owned = [...(this._mpOwned[uid] || [])];
                 const idx = owned.findIndex((o) => o.id === tileId);
                 if (idx < 0) return { ok: false, reason: 'tile-not-found' };
-                if (!this._tilePool.length) return { ok: false, reason: 'empty-pool' };
+                const min = typeof BananaRules !== 'undefined' ? BananaRules.DUMP_DRAW_COUNT : 3;
+                if ((this._tilePool?.length ?? 0) < min) return { ok: false, reason: 'short-pool' };
         
                 const removed = owned[idx];
                 const nextPool = [...this._tilePool];
@@ -232,12 +233,44 @@
                 return { ok: true };
             },
 
+            /** Host local bunch during play; guests read synced global/board pool. */
+            _mpAuthoritativeBunchLen() {
+                if (this.isHost?.()) return this._tilePool?.length ?? 0;
+                const board = this._mpBoardFromRoom?.(this.roomData);
+                if (Array.isArray(board?.pool)) {
+                    const remote = board.pool.length;
+                    const local = this._tilePool?.length ?? 0;
+                    if (this.gameStarted && !this._winnerUid && remote !== local) {
+                        // Pool only decreases on host peel/dump — never inflate local from stale board echo.
+                        if (remote < local) this._tilePool = [...board.pool];
+                    }
+                    // Host is pool authority: trust local drain when RTDB board.pool lags after host peel.
+                    if (local === 0 && remote > 0) return 0;
+                    return remote;
+                }
+                return this._tilePool?.length ?? 0;
+            },
+
+            /** Active MP players for peel draws — roster with live hands, not stale room slots. */
             _peelPartyUids(actorUid) {
-                const active = new Set(this._getPlayerUids().filter(Boolean));
-                const hostUid = this.roomData?.host || this._myUid();
-                if (hostUid) active.add(hostUid);
-                if (actorUid) active.add(actorUid);
-                return [...active].filter(Boolean).sort();
+                const roster = this._getPlayerUids().filter(Boolean);
+                this._hostEnsureMpStores?.();
+                const board = this._mpBoardFromRoom?.(this.roomData) || {};
+                const roomOwned = board.tilesOwnedByPlayer || {};
+                const localOwned = this._mpOwned || {};
+                const handLen = (uid) => {
+                    const local = localOwned[uid];
+                    if (Array.isArray(local) && local.length > 0) return local.length;
+                    const remote = roomOwned[uid];
+                    return Array.isArray(remote) ? remote.length : 0;
+                };
+                let party = roster.filter((uid) => handLen(uid) > 0);
+                if (party.length < 2) party = [...roster];
+                if (party.length < 2) {
+                    const hostUid = this.roomData?.host || this._myUid();
+                    party = [...new Set([hostUid, actorUid].filter(Boolean))];
+                }
+                return [...new Set(party)].sort();
             },
 
             /** Mirror host peel draw order so guest peel tiles spawn before RTDB echo. */
@@ -280,8 +313,64 @@
                 return true;
             },
 
+            /** Flush latest MP layouts/inventory before host registers win (real peel-win or dev /win). */
+            _hostSyncLayoutBeforeWin(uid, guestLayout = null) {
+                this._hostEnsureMpStores();
+                const myUid = this._myUid();
+                if (guestLayout && uid !== myUid) {
+                    if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
+                    const positions = {};
+                    guestLayout.forEach((p) => {
+                        if (p?.id != null) positions[p.id] = { x: p.x, y: p.y };
+                    });
+                    this._mpPlayerLayouts[uid] = positions;
+                }
+                if (typeof this._hostCancelPendingBoardSync === 'function') {
+                    this._hostCancelPendingBoardSync();
+                }
+                if (typeof this._hostWriteBoard === 'function') {
+                    this._hostWriteBoard('playing');
+                } else {
+                    this._hostSyncBoard({ immediate: true });
+                }
+            },
+
+            _hostBananasForPlayer(uid, guestLayout = null) {
+                if (!this._checker || !BananaGrid) return false;
+                if (this._winnerUid || this._victoryRegistered
+                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
+                    return false;
+                }
+                if (this._tilePool.length) return false;
+                const myUid = this._myUid();
+                const hand = uid === myUid
+                    ? this.tiles
+                    : (guestLayout ? this._handFromOwnedAndPositions(uid, guestLayout) : null);
+                if (!this._handQualifiesForBananasWin(hand)) return false;
+                this._hostSyncLayoutBeforeWin(uid, guestLayout);
+                this._onPlayerWins(uid);
+                return true;
+            },
+
+            /** Dev /win — same host transition as bananas win (sync + review), skip peel validation. */
+            _hostDevWinForPlayer(uid, guestLayout = null) {
+                if (!this.isHost()) return false;
+                if (this._winnerUid || this._victoryRegistered
+                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
+                    return false;
+                }
+                this._tilePool = [];
+                this._hostSyncLayoutBeforeWin(uid, guestLayout);
+                this._onPlayerWins(uid);
+                return true;
+            },
+
             _hostPeelForPlayer(uid, guestLayout = null) {
                 if (!this._checker || !BananaGrid) return false;
+                if (this._winnerUid || this._victoryRegistered
+                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
+                    return false;
+                }
                 this._hostEnsureMpStores();
                 const myUid = this._myUid();
                 if (guestLayout && uid !== myUid) {
@@ -326,11 +415,7 @@
                     }));
                 }
                 const playerCount = uids.length;
-                if (this._tilePool.length < playerCount) {
-                    if (!BananaGrid.eachTileOccupiesUniqueCell(hand)) return false;
-                    this._onPlayerWins(uid);
-                    return true;
-                }
+                if (!this._tilePool.length || this._tilePool.length < playerCount) return false;
                 const drawn = {};
                 const drawnIds = {};
                 uids.forEach((u) => {
@@ -342,6 +427,7 @@
                     drawn[u] = letters[0];
                     drawnIds[u] = id;
                 });
+                if (Object.keys(drawn).length !== playerCount) return false;
                 if (guestLayout && uid !== myUid) {
                     const letterById = {};
                     (hand || []).forEach((t) => {
@@ -366,6 +452,9 @@
                 this._peelSeq = (this._peelSeq || 0) + 1;
                 this._peelActorUid = uid;
                 uids.forEach((u) => this._hostBumpInventorySeq(u));
+                if (typeof this._hostCancelPendingBoardSync === 'function') {
+                    this._hostCancelPendingBoardSync();
+                }
                 if (typeof this._hostWriteBoard === 'function') {
                     this._hostWriteBoard('playing');
                 } else {
@@ -379,9 +468,17 @@
              */
             _hostHandleBananaInteraction(uid, msg) {
                 if (!msg || !this.isHost() || uid === this._myUid()) return 'drop';
+                const postWin = !!(this._winnerUid || this._victoryRegistered
+                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview()));
+                if (postWin && msg.type !== 'victory-layout') return 'drop';
                 if (msg.type === 'dev-win' && msg.uid) {
-                    this._onPlayerWins(msg.uid);
-                    return 'handled';
+                    const layout = Array.isArray(msg.positions) ? msg.positions : null;
+                    if (Array.isArray(msg.owned) && msg.owned.length) {
+                        this._hostSetOwned(uid, msg.owned, false);
+                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
+                    }
+                    if (this._hostDevWinForPlayer(uid, layout)) return 'handled';
+                    return 'drop';
                 }
                 if (msg.type === 'split') {
                     if (this.gameStarted) return 'drop';
@@ -407,13 +504,34 @@
                     if (this._hostPeelForPlayer(uid, layout)) return 'handled';
                     return 'drop';
                 }
+                if (msg.type === 'bananas') {
+                    const layout = Array.isArray(msg.positions) ? msg.positions : null;
+                    if (Array.isArray(msg.owned) && msg.owned.length) {
+                        this._hostSetOwned(uid, msg.owned, false);
+                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
+                    }
+                    if (this._hostBananasForPlayer(uid, layout)) return 'handled';
+                    return 'drop';
+                }
                 if (msg.type === 'victory-layout') {
                     if (!Array.isArray(msg.tiles)) return 'drop';
-                    const ownedIds = new Set((this._mpOwned?.[uid] || []).map((o) => o.id));
+                    const winnerUid = this._winnerUid || this.roomData?.global?.board?.winnerUid;
+                    // Winner layout is frozen on host at win time; still accept loser snapshots.
+                    if (this._reviewEndingLayoutsFrozen && uid === winnerUid
+                        && (this._reviewLayouts?.[uid]?.length
+                            || this._endingLayoutsCache?.[uid]?.length)) {
+                        return 'handled';
+                    }
+                    const owned = this._mpOwned?.[uid]
+                        || this.roomData?.global?.board?.tilesOwnedByPlayer?.[uid]
+                        || [];
+                    const ownedIds = new Set(owned.map((o) => o.id));
                     let filtered = ownedIds.size
                         ? msg.tiles.filter((t) => t?.id && ownedIds.has(t.id))
                         : msg.tiles;
-                    if (!filtered.length && msg.tiles.length) {
+                    if (!filtered.length && msg.tiles.length
+                        && typeof this._isBoardInReview === 'function'
+                        && !this._isBoardInReview()) {
                         filtered = msg.tiles.filter((t) => t?.id);
                     }
                     if (!filtered.length) return 'drop';

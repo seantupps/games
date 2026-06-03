@@ -116,6 +116,7 @@
             _processBananaInteractions(banana) {
                 if (!this.isHost()) return;
                 let ackedNew = false;
+                let boardAlreadySynced = false;
                 this._flattenBananaInteractions(banana).forEach(({ uid, msg, path }) => {
                     if (this._isBananaAcked(uid, msg)) {
                         if (path) this.broadcast(path, null);
@@ -131,8 +132,11 @@
                     }
                     this._ackBananaInteraction(uid, msg, path);
                     ackedNew = true;
+                    if (result === 'handled' && (msg.type === 'peel' || msg.type === 'bananas')) {
+                        boardAlreadySynced = true;
+                    }
                 });
-                if (ackedNew) {
+                if (ackedNew && !boardAlreadySynced) {
                     if (this._hostSyncRaf) {
                         cancelAnimationFrame(this._hostSyncRaf);
                         this._hostSyncRaf = 0;

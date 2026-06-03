@@ -13,20 +13,145 @@
 
             _reconcileMpMode() {
                 const inParty = this.isMultiplayer && this.roomId && this.roomId !== 'lobby';
+                const wasInParty = !!this._mpSessionActive;
+
                 if (!inParty) {
                     if (this.mode !== 'solo') {
                         this.mode = 'solo';
                         if (typeof GameAdapter !== 'undefined') GameAdapter.refreshCapabilities(this);
                     }
+                    if (wasInParty) {
+                        this._leaveMultiplayerForSolo();
+                    }
+                    this._mpSessionActive = false;
                     return;
                 }
-                if (this.mode === 'multiplayer') return;
+
+                const enteringMp = !wasInParty;
+                this._mpSessionActive = true;
+
+                if (enteringMp) {
+                    this._prepareForMultiplayerSession();
+                }
+
+                if (this.mode === 'multiplayer') {
+                    this.renderScoreboard();
+                    return;
+                }
                 this.mode = 'multiplayer';
                 if (typeof GameAdapter !== 'undefined') GameAdapter.refreshCapabilities(this);
-                try {
-                    localStorage.removeItem(this.getPersistKey());
-                } catch (_) { /* ignore */ }
                 this.renderScoreboard();
+            },
+
+            /** Drop MP runtime state and restore the solo board (solo localStorage is preserved). */
+            _leaveMultiplayerForSolo() {
+                if (typeof this._exitReviewLocalState === 'function') {
+                    this._exitReviewLocalState();
+                }
+                this._dismissHubWinBanner?.();
+                this._hostReviewCompleting = false;
+                this._hostReviewTransitionActive = false;
+                this._mpClientBoardPhase = null;
+                this._mpOwned = null;
+                this._mpPlayerLayouts = null;
+                this._mpInventorySeq = null;
+                this._mpDeferredBoard = null;
+                this._mpAwaitReset = false;
+                this._reviewLayouts = null;
+                this._reviewLayoutsFp = null;
+                this._reviewAppliedPlayerCount = 0;
+                this._endingLayoutsCache = null;
+                this._myEndingLayoutPublished = false;
+                this._reviewEndingLayoutsFrozen = false;
+                this._mpReviewEpoch = 0;
+                this._reviewLayoutsSyncedFp = null;
+                this._boardSeq = 0;
+                this._bananaHandled = {};
+                this._bananaAck = {};
+                this._winnerUid = null;
+                this._victoryRegistered = false;
+                this._postGameReview = false;
+                this.isOver = false;
+                this.winner = null;
+                this._stopTimer();
+                this.tiles = [];
+                this._tilePool = [];
+                this.started = false;
+                this.gameStarted = false;
+                this._nextTileId = 0;
+                this.elapsedMs = 0;
+                this._timerFrozen = false;
+                this._bannerText = '';
+                this._selectedIds.clear();
+                this._selectionHighlight = false;
+                this._peelSeq = 0;
+                this._lastPeelSeq = 0;
+                this._dumpSeq = 0;
+                this._lastDumpSeq = 0;
+                this._peelActorUid = null;
+                this._dumpActorUid = null;
+                this._lastPeelDraws = null;
+                this._winnerBannerUid = null;
+                this._mpStartedAt = null;
+                this._localInventorySeq = 0;
+                this._mpScores = {};
+                this.canvasPanX = 0;
+                this.canvasPanY = 0;
+                this._viewportFocal = null;
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
+                this._mobileContentBounds = null;
+
+                const board = this.roomData?.global?.board;
+                if (board?.version >= 2 && this.roomData?.global) {
+                    this.roomData = {
+                        ...this.roomData,
+                        global: { ...this.roomData.global, board: null }
+                    };
+                }
+
+                if (!this.loadPersistedState()) {
+                    this.setupNewHand();
+                }
+                this._applyDefaultPlayingViewport?.();
+                this._syncViewportAfterLayout?.();
+                this.requestRender?.();
+            },
+
+            /** Clear solo runtime before MP board sync; do not wipe solo localStorage. */
+            _prepareForMultiplayerSession() {
+                this._exitReviewLocalState?.();
+                this._dismissHubWinBanner?.();
+                this._stopTimer();
+                this._mpOwned = null;
+                this._mpPlayerLayouts = null;
+                this._mpInventorySeq = null;
+                this._mpDeferredBoard = null;
+                this._postGameReview = false;
+                this._hostReviewTransitionActive = false;
+                this.tiles = [];
+                this._tilePool = [];
+                this.started = false;
+                this.gameStarted = false;
+                this._nextTileId = 0;
+                this.isOver = false;
+                this._winnerUid = null;
+                this._victoryRegistered = false;
+                this._bannerText = '';
+                this._selectedIds.clear();
+                this._selectionHighlight = false;
+                this.elapsedMs = 0;
+                this._timerFrozen = false;
+                this._peelSeq = 0;
+                this._dumpSeq = 0;
+                this._localInventorySeq = 0;
+                this.canvasPanX = 0;
+                this.canvasPanY = 0;
+                this._viewportFocal = null;
+                this._fitZoomInitialized = false;
+                this._mobileLayoutAnchorLocked = false;
+                this._mobileContentBounds = null;
+                this.requestRender?.();
             },
 
             isMyTurn() {

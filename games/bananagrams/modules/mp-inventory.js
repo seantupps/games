@@ -278,14 +278,17 @@
             },
 
             _shouldKeepRuntimeTiles(board, owned) {
-                if (board?.gameStarted || this.gameStarted) {
-                    return !!(this.tiles?.length);
-                }
                 const ownedIds = new Set((owned || []).map((o) => o.id));
+                const runtimeMatchesOwned = ownedIds.size > 0
+                    && (this.tiles?.length || 0) === ownedIds.size
+                    && (this.tiles || []).every((t) => ownedIds.has(t.id)
+                        && Number.isFinite(t.x) && Number.isFinite(t.y));
+                if (board?.gameStarted || this.gameStarted) {
+                    return runtimeMatchesOwned;
+                }
                 if (!ownedIds.size || !this.tiles?.length) return false;
                 if (this.tiles.length !== ownedIds.size) return false;
-                return this.tiles.every((t) => ownedIds.has(t.id)
-                    && Number.isFinite(t.x) && Number.isFinite(t.y));
+                return runtimeMatchesOwned;
             },
 
             _flushDeferredBoardApply() {

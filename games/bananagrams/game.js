@@ -96,6 +96,8 @@ class BananagramsGame extends BaseGame {
         this._mpReviewEpochClosed = 0;
         this._mpReviewEpoch = 0;
         this._reviewLayoutsSyncedFp = null;
+        /** True while in an active MP party room (used to detect MP → solo transitions). */
+        this._mpSessionActive = false;
 
         window.game = this;
         this.onIdentitySynced = () => {

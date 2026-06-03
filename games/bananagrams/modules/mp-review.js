@@ -161,7 +161,11 @@
                         || runtimeMine.length > owned.length
                         || (owned.length && !ownedOnRuntime));
                 if (runtimeIsAuthoritative) {
-                    return this._serializeHandTiles(runtimeMine.map((t) => ({
+                    const ownedIds = new Set(owned.map((o) => o.id));
+                    const source = owned.length
+                        ? runtimeMine.filter((t) => ownedIds.has(t.id))
+                        : runtimeMine;
+                    return this._serializeHandTiles(source.map((t) => ({
                         id: t.id,
                         letter: t.letter,
                         x: t.x,
@@ -622,16 +626,19 @@
 
                 if (this._isMultiplayerMode()) {
                     if (!this.isHost()) return;
+                    this._tilePool = [];
                     this._hostReviewTransitionActive = true;
+                    this._reviewEndingLayoutsFrozen = true;
                     if (typeof this._hostCancelPendingBoardSync === 'function') {
                         this._hostCancelPendingBoardSync();
                     }
-                    const me = this._myUid();
-                    const hostLayout = this._freezeMyEndingLayout();
                     this._reviewLayouts = {};
-                    if (hostLayout.length) {
-                        this._reviewLayouts[me] = hostLayout;
-                    }
+                    this._getPlayerUids().forEach((uid) => {
+                        const layout = uid === this._myUid()
+                            ? this._freezeMyEndingLayout()
+                            : this._captureRemoteEndingLayoutForUid(uid);
+                        if (layout.length) this._reviewLayouts[uid] = layout;
+                    });
                     this._hostSyncReviewState();
                     return;
                 }
@@ -654,6 +661,7 @@
                         this._publishMyEndingLayout();
                     }
                     this._freezeTimerOnVictory();
+                    this._tilePool = [];
                     if (board.winnerUid) {
                         this._winnerUid = board.winnerUid;
                         this.isOver = true;
@@ -789,6 +797,7 @@
                 this._reviewAppliedPlayerCount = 0;
                 this._endingLayoutsCache = null;
                 this._myEndingLayoutPublished = false;
+                this._reviewEndingLayoutsFrozen = false;
                 this._mpReviewEpoch = 0;
                 this._reviewLayoutsSyncedFp = null;
                 if (leavingVictory) {
@@ -808,9 +817,23 @@
 
             _captureRemoteEndingLayoutForUid(uid) {
                 if (!uid || uid === this._myUid()) return [];
-                const owned = this._mpOwned?.[uid] || [];
+                const board = this._boardReviewSnapshot?.() || this._mpBoardFromRoom?.(this.roomData) || {};
+                const owned = this._mpOwned?.[uid]
+                    || board?.tilesOwnedByPlayer?.[uid]
+                    || [];
                 if (!owned.length) return [];
-                const positions = this._mpPlayerLayouts?.[uid] || {};
+                const roomList = board?.tilePositionsByPlayer?.[uid];
+                let positions = {};
+                if (Array.isArray(roomList) && roomList.length) {
+                    positions = { ...this._positionsMapFromList(roomList) };
+                }
+                const staged = this._mpPlayerLayouts?.[uid] || {};
+                if (Object.keys(staged).length) {
+                    positions = { ...positions, ...staged };
+                }
+                if (!Object.keys(positions).length) {
+                    positions = this._layoutMapForPlayer(board, uid, owned);
+                }
                 const merged = [];
                 owned.forEach((o) => {
                     const p = positions[o.id];
@@ -824,6 +847,11 @@
                         });
                     }
                 });
+                const mergedIds = new Set(merged.map((t) => t.id));
+                const missing = owned.filter((o) => !mergedIds.has(o.id));
+                if (missing.length) {
+                    merged.push(...this._rackTilesFromOwned(missing));
+                }
                 if (!merged.length) return [];
                 return this._serializeHandTiles(merged);
             },
@@ -914,12 +942,31 @@
 
                 if (!merged.length) return;
 
-                const seen = new Set();
-                const deduped = merged.filter((t) => {
-                    if (seen.has(t.id)) return false;
-                    seen.add(t.id);
-                    return true;
+                const canonicalOwner = (id) => {
+                    const board = this._boardReviewSnapshot?.() || {};
+                    for (const uid of uids) {
+                        const owned = this._mpOwned?.[uid]
+                            || board.tilesOwnedByPlayer?.[uid]
+                            || [];
+                        if (owned.some((o) => o.id === id)) return uid;
+                    }
+                    return null;
+                };
+
+                const byId = new Map();
+                merged.forEach((t) => {
+                    if (!t?.id) return;
+                    const canon = canonicalOwner(t.id) || t.ownerUid;
+                    const existing = byId.get(t.id);
+                    if (!existing) {
+                        byId.set(t.id, { ...t, ownerUid: canon });
+                        return;
+                    }
+                    if (canon && t.ownerUid === canon && existing.ownerUid !== canon) {
+                        byId.set(t.id, { ...t, ownerUid: canon });
+                    }
                 });
+                const deduped = [...byId.values()];
 
                 const prevPlayers = this._reviewAppliedPlayerCount || 0;
                 const nextPlayers = this._reviewLayoutPlayerCount(layouts);
