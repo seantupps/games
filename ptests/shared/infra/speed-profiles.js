@@ -1,0 +1,92 @@
+/**
+ * Named speed tiers for ptests — scenarios opt in via applySpeedProfile().
+ * See ptests/SPEED.md for env var reference.
+ */
+const { setEnvIfUnset } = require('./env-defaults');
+const { STEP_MS } = require('./timeouts');
+
+/** @type {Record<string, Record<string, string>>} */
+const PROFILES = {
+    ci: {
+        FIVE_BANANA_BANNER_INSTANT_MS: '100',
+        FIVE_MP_VICTORY_MS: '300',
+        FIVE_MP_REVIEW_SYNC_MS: '400',
+        FIVE_MP_ACTIONS_POLL_MS: '30',
+        FIVE_MP_PEEL_STABILITY_SETTLE_MS: '60',
+        FIVE_VICTORY_DWELL_MS: '100'
+    },
+    dev: {
+        FIVE_STEP_TIMEOUT_MS: '3000',
+        FIVE_VICTORY_DWELL_MS: '150',
+        FIVE_MP_ACTIONS_POLL_MS: '50'
+    },
+    debug: {
+        FIVE_STEP_TIMEOUT_MS: '15000',
+        FIVE_VICTORY_DWELL_MS: '5000',
+        FIVE_MP_ACTIONS_POLL_MS: '120',
+        FIVE_MP_VICTORY_MS: '8000',
+        FIVE_MP_REVIEW_SYNC_MS: '12000'
+    }
+};
+
+const SCENARIO_PROFILES = {
+    actions: 'ci',
+    smoke: 'ci',
+    focus: 'dev'
+};
+
+function applySpeedProfile(tier, options = {}) {
+    const name = tier || SCENARIO_PROFILES[options.scenario] || process.env.FIVE_SPEED_PROFILE || 'dev';
+    const block = PROFILES[name];
+    if (!block) {
+        throw new Error(`Unknown speed profile "${name}". Known: ${Object.keys(PROFILES).join(', ')}`);
+    }
+    Object.entries(block).forEach(([k, v]) => setEnvIfUnset(k, v));
+    return name;
+}
+
+function resolveSpeedProfile(options = {}) {
+    if (options.scenario && SCENARIO_PROFILES[options.scenario]) {
+        return SCENARIO_PROFILES[options.scenario];
+    }
+    return process.env.FIVE_SPEED_PROFILE || 'dev';
+}
+
+function readEnvMs(key, fallback) {
+    const env = process.env[key];
+    if (env != null && env !== '') return Number(env);
+    return fallback;
+}
+
+function mpPollMs() {
+    return readEnvMs('FIVE_MP_ACTIONS_POLL_MS', 50);
+}
+
+function mpVictoryWaitMs() {
+    return readEnvMs('FIVE_MP_VICTORY_MS', 800);
+}
+
+function mpReviewWaitMs() {
+    return readEnvMs('FIVE_MP_REVIEW_SYNC_MS', 1200);
+}
+
+function peelStabilitySettleMs() {
+    return readEnvMs('FIVE_MP_PEEL_STABILITY_SETTLE_MS', 620);
+}
+
+function bannerInstantMs() {
+    return readEnvMs('FIVE_BANANA_BANNER_INSTANT_MS', 100);
+}
+
+module.exports = {
+    PROFILES,
+    SCENARIO_PROFILES,
+    applySpeedProfile,
+    resolveSpeedProfile,
+    mpPollMs,
+    mpVictoryWaitMs,
+    mpReviewWaitMs,
+    peelStabilitySettleMs,
+    bannerInstantMs,
+    WAIT_MS: STEP_MS
+};

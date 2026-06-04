@@ -4,15 +4,12 @@ functions/node_modules/
 vendor/
 
 # Playwright tests & test infra (not app runtime code)
-backup_ptests/
 scripts/
 
 # Local-only reference clones
 references/
 
 # Build / generated output
-build/
-backups/
 functions/lib/
 __pycache__/
 
@@ -40,7 +37,6 @@ tmp/
 
 # Docs & personal notes (not shipped app code)
 notes/
-notes.txt
 docs/
 instructions.md
 

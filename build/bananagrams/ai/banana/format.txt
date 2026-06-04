@@ -1,0 +1,36 @@
+
+Start (asci . board adjust based on letters in play)
+. . . . . .
+. H A W Z .
+. . . . . .
+--------------
+Attempt: 1 (attempts can reorganize the board)
+. . . . . .
+. H A W . .
+. . Z . . .
+-------------
+Peel -> S
+Attempt: 2
+. . . . . .
+. H A W S .
+. . Z . . .
+--------------
+Peel -> E
+Attempt 1:
+. . . E . .
+. H A W S .
+. . Z . . .
+--------------
+Peel -> Q
+[FALSE] Attempt: 3
+Dump Q -> AJC
+[FALSE] Attempt: 3
+Dump Z -> ETM
+--------------
+. . . J . .
+. . . E . .
+C H A W S .
+. . . . E M
+. . . . T .
+---------------
+Peel -> R

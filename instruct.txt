@@ -1,0 +1,5 @@
+victory banner
+hub visuals (background, buttons)
+non turn based game
+pan zoom
+zoom

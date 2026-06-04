@@ -38,6 +38,10 @@
      * @property {boolean} [supportsBoardStateInspect] — hub chat can request board-state snapshot
      * @property {number} [winBannerAutoFadeMs] — hub win banner auto-hide (post-game review games)
      * @property {boolean} [auditReadyCallable] — iframe implements isAuditReady(); MP/SP waits use it
+     * @property {string} [inGameActionBannerId] — iframe element id for peel/dump action banners (MP)
+     * @property {string} [inGameActionBannerVisibleClass] — visible class on action banner (default is-visible)
+     * @property {string} [inGameActionBannerActorField] — game field holding banner actor uid
+     * @property {string} [inGameActionBannerColorFn] — game method name for actor color
      * Guest MP reset: engine calls optional onRemoteReset() then applyBoard(global/board).
      * Host reset: onGameReset() then host pushes global/board via resetGame().
      */
@@ -80,6 +84,10 @@
      * @property {string} [auditConfig] — default SP audit dir when single mode
      * @property {Record<string, string>} [mpAuditByMode] — MP audit config dir per mode
      * @property {string} [mpAuditConfig] — default MP audit dir when single mode
+     * @property {string} [mobileAuditConfig] — optional SP audit for mobile topology (else desktop-sp)
+     * @property {Record<string, string>} [mobileAuditByMode]
+     * @property {string} [mobileMpAuditConfig] — optional MP audit for mobile topology (else desktop-mp)
+     * @property {Record<string, string>} [mobileMpAuditByMode]
      * @property {string} [mobileMpExtras] — optional ptests module with runMobileMpExtras(page1, page2, ctx)
      * @property {'default'|'extended'} [mpSuite] — MP runner tier (`npm run mp` uses default only)
      * @property {number[]} [mpPlayerCounts] — MP audit player counts (default [2])
@@ -203,7 +211,10 @@
                     syncStyle: 'board-authoritative',
                     mpBoardAuthoritative: true,
                     supportsPostGameReview: true,
-                    winBannerAutoFadeMs: 4000
+                    winBannerAutoFadeMs: 4000,
+                    inGameActionBannerId: 'banana-banner',
+                    inGameActionBannerActorField: '_bannerActorUid',
+                    inGameActionBannerColorFn: '_bannerColorForUid'
                 }
             },
             globalResetKeys: ['board'],
@@ -380,6 +391,20 @@
         return def.mpAuditConfig || null;
     }
 
+    function mobileAuditPathFor(id, mode) {
+        const def = get(id);
+        if (!def) return null;
+        if (def.mobileAuditByMode?.[mode]) return def.mobileAuditByMode[mode];
+        return def.mobileAuditConfig || null;
+    }
+
+    function mobileMpAuditPathFor(id, mode) {
+        const def = get(id);
+        if (!def) return null;
+        if (def.mobileMpAuditByMode?.[mode]) return def.mobileMpAuditByMode[mode];
+        return def.mobileMpAuditConfig || null;
+    }
+
     function buildHostGameSwitchUpdates(roomId, gameId, mode, resetCount) {
         const def = get(gameId);
         const Schema = typeof RtdbSchema !== 'undefined'
@@ -428,6 +453,8 @@
         getCapabilities,
         auditPathFor,
         mpAuditPathFor,
+        mobileAuditPathFor,
+        mobileMpAuditPathFor,
         maxPartyPlayers,
         mpPlayerCountsFor,
         supportsMpPlayerCount,

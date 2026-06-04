@@ -1,0 +1,76 @@
+Rummikub — tile distribution (standard vs XP)
+Sources: Lemada 2600 English manual (106 tiles, 2–4 players);
+          Rummikub XP / 5–6 player supplement (160 tiles).
+
+================================================================================
+STANDARD GAME (2–4 players) — 106 tiles
+================================================================================
+
+Number tiles: 13 values × 4 colors × 2 copies = 104 tiles
+
+Colors (English edition): Black, Red, Blue, Orange
+  Code letters used in build/rummikub/ai:  B, R, U, O
+  (U = blUe to avoid clash with Orange O)
+
+Per color, two of each value:
+
+  Color │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │ 8 │ 9 │10 │11 │12 │13 │ row sum
+  ──────┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼────────
+  Black │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │   26
+  Red   │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │   26
+  Blue  │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │   26
+  Orange│ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │ 2 │   26
+  ──────┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴────────
+  Column totals (both colors each): 8 of each value 1–13 across all colors
+
+Jokers: 2 tiles (wild)
+
+GRAND TOTAL: 104 + 2 = 106 tiles
+
+Multiset check (implementation):
+  For each color C in {B,R,U,O} and value V in 1..13: count(C,V) = 2
+  Joker count = 2
+  Sum of all tiles = 106
+
+================================================================================
+XP / LARGE SET (5–6 players) — 160 tiles
+================================================================================
+
+Number tiles: 13 values × 4 colors × 3 copies = 156 tiles
+Jokers: 4 tiles
+
+Per color, three of each value (manual: “12 sets of tiles 1–13 in four colours,
+and 4 joker tiles” for XP/Mini XP 5–6 player mode).
+
+GRAND TOTAL: 156 + 4 = 160 tiles
+
+This build folder targets the standard 106-tile set unless --variant=xp is passed
+to the terminal prototype.
+
+================================================================================
+DEAL COUNTS (standard)
+================================================================================
+
+  Players │ tiles each │ pool after deal
+  ────────┼────────────┼─────────────────
+    2     │     14     │ 106 − 28 = 78
+    3     │     14     │ 106 − 42 = 64
+    4     │     14     │ 106 − 56 = 50
+
+================================================================================
+SCORING VALUES (reference)
+================================================================================
+
+  Number tile 1–13  → face value
+  Joker on rack     → 30 penalty each (end of round)
+
+Opening meld threshold: 30 points (tiles played from rack on first meld only).
+
+================================================================================
+CANONICAL URLS (retrieved for this file)
+================================================================================
+
+  https://www.rummikub.org/rules
+  https://www.rummikub.org/introduction
+  https://rummikub.com/wp-content/uploads/2019/12/2600-English.pdf
+  https://rummikub.com/wp-content/uploads/2019/12/Rummikub-Int-manual_rule_2019_OL.pdf

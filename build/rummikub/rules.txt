@@ -1,0 +1,53 @@
+Rummikub — tile & meld rules (reference for puzzle validation)
+Primary game design for this repo: puzzle-mode.txt (hybrid single-player puzzle)
+
+Sources: Lemada 2600 English manual; rummikub.com official rules.
+
+================================================================================
+THIS PROJECT
+================================================================================
+
+We are NOT implementing full tabletop Rummikub (draw pile, turns, 30-point open).
+We use these rules to validate groups/runs on the puzzle board. See puzzle-mode.txt.
+
+================================================================================
+TILE SET (standard 2–4 player box — 106 tiles)
+================================================================================
+
+  • 104 number tiles: 1–13 in Black, Red, Blue, Orange — two copies each
+  • 2 jokers (wild)
+
+Color codes in terminal/build: B, R, U (blue), O (orange)
+Exact counts: distribution.txt
+
+================================================================================
+VALID SETS (must hold for every meld on the table at end of a solve)
+================================================================================
+
+GROUP — 3 or 4 tiles, same number, all different colors
+  Example: R7  B7  U7  (or all four colors)
+
+RUN — 3+ tiles, same color, consecutive values
+  Example: U5  U6  U7  U8
+  • 1 is always low; 13 is always high (no wrap: 13-1-2 invalid)
+
+JOKER — stands for the tile needed to complete the set; value = represented number
+
+================================================================================
+TABLE MANIPULATION (target behavior when solver / player is implemented)
+================================================================================
+
+  • All tiles on the table must form valid sets when the puzzle is solved
+  • Player may rearrange table tiles while playing from rack
+  • No loose tiles left on the table
+  • Rack empty = puzzle solved
+
+Full joker replacement rules (multiplayer manual) apply when we add joker logic;
+see puzzle-mode.txt for V1 scope.
+
+================================================================================
+CANONICAL URLS
+================================================================================
+
+  https://www.rummikub.org/rules
+  https://rummikub.com/wp-content/uploads/2019/12/2600-English.pdf

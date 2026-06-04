@@ -1,0 +1,15 @@
+{
+  "name": "rummikub-ai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "play": "tsx src/play.ts",
+    "build": "tsc",
+    "start": "node dist/play.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

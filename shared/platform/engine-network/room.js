@@ -69,7 +69,15 @@
 
         const hasBoard = game.roomData?.global?.board && hostWarmupBoardPopulated(game);
         const boardModeMismatch = hostWarmupBoardModeMismatch(game);
-        const needsWarmup = !game.roomData || !game.roomData.global || !hasBoard || boardModeMismatch;
+        let needsWarmup = !game.roomData || !game.roomData.global || !hasBoard || boardModeMismatch;
+
+        if (game.hasCap?.('mpBoardAuthoritative') && global.MpBoardAuth) {
+            needsWarmup = global.MpBoardAuth.hostWarmupBoardNeeded(
+                game,
+                (board) => board?.initialized === true || (board?.seq ?? 0) >= 1
+            );
+        }
+
         const gameInProgress = game._eventsLoaded && game.gameEvents.length > 0;
         const skipWarmupOnRefresh = gameInProgress
             || (hasBoard && !boardModeMismatch && (game.roomData?.global?.resetCount || 0) >= 1);

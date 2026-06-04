@@ -1,0 +1,53 @@
+If blue and green are both gone:
+    losing if red is 3 mod 4
+
+Otherwise:
+    If blue and green are both 2 or 3 mod 4:
+        losing if XOR total is 0
+    Else:
+        losing if XOR total is 1
+
+003, 007
+
+140, 180, 260, 370
+
+220, 330, 660, 770
+021, 032, 043, 054
+014, 025, 036, 047
+
+522,533,544
+Losing
+
+BG gone and 3R -> 3
+BG both 2 or 3 -> XOR=0
+
+XOR=1
+
+0-4: +4
+5,6: +7
+8: +3
+
+
+1 -> +1
+
+003
+007
+010
+021
+032
+
+100
+111
+122
+133
+
+201
+212
+213
+220
+
+302
+313
+330
+
+

@@ -238,6 +238,11 @@
             applyHostResetLocally: (patch) => applyHostResetLocally(game, patch)
         };
         game.sync = sync;
+        if (capabilitiesFor(game).mpBoardAuthoritative && global.MpBoardAuth) {
+            global.MpBoardAuth.initBoardAuthState(game);
+            sync.publishHostBoard = (body, opts) => global.MpBoardAuth.hostPublishBoard(game, body, opts);
+            sync.createCommandChannel = (opts) => global.MpBoardAuth.createCommandChannel(game, opts);
+        }
         return sync;
     }
 

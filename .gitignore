@@ -11,11 +11,9 @@ instructions.md
 
 # Python (legacy analysis scripts)
 __pycache__/
-build/
 backups/
 
 # Local dev & Playwright (never publish)
-ptests/
 scripts/
 backup_ptests/
 

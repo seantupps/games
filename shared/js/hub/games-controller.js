@@ -24,10 +24,10 @@
             return !state.roomId || state.roomId === 'lobby';
         }
 
-        /** Bananagrams uses solo in lobby and multiplayer in any party room. */
+        /** Hub iframe mode: lobby vs party from registry hubModeInLobby / hubModeInParty. */
         function effectiveGameMode() {
-            if (state.currentGame === 'bananagrams') {
-                return isLobby() ? 'solo' : 'multiplayer';
+            if (Registry.usesHubModeSwitch(state.currentGame)) {
+                return Registry.hubModeFor(state.currentGame, !isLobby());
             }
             return Registry.normalizeMode(state.currentGame, state.gameMode);
         }
@@ -36,10 +36,10 @@
             if (!Registry.has(state.currentGame)) {
                 state.currentGame = Registry.defaultId();
             }
-            if (state.currentGame === 'bananagrams') {
+            if (Registry.usesHubModeSwitch(state.currentGame)) {
                 state.gameMode = effectiveGameMode();
                 try {
-                    localStorage.setItem('bananagrams_mode', state.gameMode);
+                    localStorage.setItem(`${state.currentGame}_mode`, state.gameMode);
                 } catch (_) { /* ignore */ }
             } else {
                 state.gameMode = Registry.normalizeMode(state.currentGame, state.gameMode);
@@ -212,7 +212,9 @@
             if (!lobby && !Registry.isAvailableForPartySize(state.currentGame, partySize)) {
                 const fallback = Registry.defaultPartyGameId(partySize);
                 if (Registry.has(fallback) && isHost) {
-                    state.gameMode = fallback === 'bananagrams' ? 'multiplayer' : Registry.defaultModeFor(fallback);
+                    state.gameMode = Registry.usesHubModeSwitch(fallback)
+                        ? Registry.hubModeFor(fallback, true)
+                        : Registry.defaultModeFor(fallback);
                     setGame(fallback, true);
                     syncLeavePartyButton();
                     return;

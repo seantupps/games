@@ -33,7 +33,19 @@ class TemplateGame extends BaseGame {
             this.requestRender();
         };
 
+        this._bindMobileLayoutRefresh();
         window.game = this;
+    }
+
+    /** Call fitBoardToViewport / refreshMobileLayout when registry mobileLayoutPolicy is set. */
+    _bindMobileLayoutRefresh() {
+        const refit = () => {
+            if (typeof this.refreshMobileLayout === 'function') this.refreshMobileLayout();
+            else if (typeof this.fitBoardToViewport === 'function') this.fitBoardToViewport();
+        };
+        window.addEventListener('resize', refit);
+        window.addEventListener('orientationchange', refit);
+        requestAnimationFrame(refit);
     }
 
     /** Playwright MP/SP ready — set auditReadyCallable: true in registry for generic boardKind. */

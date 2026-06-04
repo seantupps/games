@@ -279,15 +279,22 @@
 
             _shouldKeepRuntimeTiles(board, owned) {
                 const ownedIds = new Set((owned || []).map((o) => o.id));
+                const runtime = this.tiles || [];
                 const runtimeMatchesOwned = ownedIds.size > 0
-                    && (this.tiles?.length || 0) === ownedIds.size
-                    && (this.tiles || []).every((t) => ownedIds.has(t.id)
+                    && runtime.length === ownedIds.size
+                    && runtime.every((t) => ownedIds.has(t.id)
                         && Number.isFinite(t.x) && Number.isFinite(t.y));
+                const runtimeSubsetOfOwned = runtime.length > 0
+                    && runtime.every((t) => ownedIds.has(t.id)
+                        && Number.isFinite(t.x) && Number.isFinite(t.y));
+                const inventoryGrew = runtimeSubsetOfOwned && owned.length > runtime.length;
                 if (board?.gameStarted || this.gameStarted) {
-                    return runtimeMatchesOwned;
+                    if (runtimeMatchesOwned) return true;
+                    // Peel/dump draw: keep live board positions; only new ids need spawning.
+                    return inventoryGrew;
                 }
-                if (!ownedIds.size || !this.tiles?.length) return false;
-                if (this.tiles.length !== ownedIds.size) return false;
+                if (!ownedIds.size || !runtime.length) return false;
+                if (runtime.length !== ownedIds.size) return inventoryGrew;
                 return runtimeMatchesOwned;
             },
 

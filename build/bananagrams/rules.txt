@@ -1,0 +1,73 @@
+Bananagrams - standard rules (physical game)
+============================================
+
+Object
+------
+Be the first player to use all your letters in a valid, connected crossword-style
+grid and call "BANANAS!" when the Bunch is nearly empty.
+
+
+Setup
+-----
+1. Place all 144 letter tiles face down in the center. This is the BUNCH.
+2. Each player draws starting tiles from the BUNCH (keep them face down):
+     2-4 players: 21 tiles each
+     5-6 players: 15 tiles each
+     7-8 players: 11 tiles each
+3. Leave the rest of the tiles in the BUNCH.
+
+
+Start
+-----
+Any player calls "SPLIT!" Everyone flips their tiles face up at the same time.
+
+
+Building your grid
+------------------
+- Each player builds their own grid. There are no turns; everyone plays at once.
+- Words must intersect like a crossword. The whole grid must stay connected.
+- Words read left-to-right (horizontal) or top-to-bottom (vertical). No diagonals.
+- Minimum word length: 2 letters (house rules sometimes use 3+).
+- You may rearrange your entire grid at any time.
+- Valid words only: standard dictionary English. No proper nouns, abbreviations,
+  or foreign words unless your group agrees otherwise.
+- For our digital version, use the compiled tournament lexicon (NWL/CSW build).
+
+
+PEEL
+----
+When you place your last face-up letter into your grid, call "PEEL!"
+Every player (including you) immediately draws one tile from the BUNCH.
+
+
+DUMP
+----
+At any time you may call "DUMP!":
+  - Return one of your letters face down to the BUNCH.
+  - Draw three new tiles from the BUNCH.
+Other players are not affected. You may DUMP as often as you like.
+
+
+Winning
+-------
+When the BUNCH has fewer tiles than the number of players still in the hand,
+the first player to use ALL their letters in a connected grid calls "BANANAS!"
+
+
+Challenge (Rotten Banana)
+-------------------------
+After "BANANAS!", other players may inspect the winning grid.
+If any word is misspelled or otherwise unacceptable:
+  - They call "ROTTEN BANANA!"
+  - That player is out for this hand.
+  - Their tiles go back face down into the BUNCH.
+  - Remaining players continue until someone wins with a valid grid.
+
+
+Common variants (not standard)
+------------------------------
+- Smoothie: split all tiles equally; no BUNCH; no PEEL.
+- Banana Solitaire: one player, 21 tiles, PEEL when needed; beat your time.
+- Restaurant: 21 tiles each, DUMP allowed, no PEEL.
+
+Sources: Official Bananagrams rules sheet (Bananagrams, Inc., FoxMind).

@@ -189,6 +189,13 @@
                         if (this._localLayoutMatchesOwned(ownedList, localHand, localLayout)) {
                             return pruned;
                         }
+                        // Partial local layout (e.g. +1 peel tile not cached yet) beats stale board echo.
+                        if (epochOk && Object.keys(pruned).length > 0) {
+                            const ownedIdSet = new Set(ownedList.map((o) => o.id));
+                            if (Object.keys(pruned).every((id) => ownedIdSet.has(id))) {
+                                return pruned;
+                            }
+                        }
                     }
                 }
                 const list = board?.tilePositionsByPlayer?.[uid];

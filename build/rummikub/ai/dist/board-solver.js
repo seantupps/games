@@ -1,0 +1,275 @@
+import { COLORS } from './types.js';
+import { isValidMeld } from './validate.js';
+import { Grid } from './grid.js';
+import { layoutMelds } from './layout.js';
+import { buildOriginalLongRuns, meldPickWeight, partitionPreservationScore, weightedPickMelds } from './partition-bias.js';
+const GREEDY_TOP_CANDIDATES = 8;
+const GROUP_SIZES = [3, 4];
+const MIN_RUN = 3;
+const MAX_RUN = 13;
+function splitPool(pool) {
+    const numbers = [];
+    const jokers = [];
+    for (const t of pool) {
+        if (t.kind === 'number')
+            numbers.push(t);
+        else
+            jokers.push(t);
+    }
+    return { numbers, jokers };
+}
+function tryBuildRun(numbers, jokers, color, start, len) {
+    const seq = numbers.filter((t) => t.color === color);
+    const picked = [];
+    const used = new Set();
+    let ji = 0;
+    for (let v = start; v < start + len; v++) {
+        const hit = seq.find((t) => t.value === v && !used.has(t.id));
+        if (hit) {
+            used.add(hit.id);
+            picked.push(hit);
+        }
+        else if (ji < jokers.length) {
+            used.add(jokers[ji].id);
+            picked.push(jokers[ji]);
+            ji++;
+        }
+        else {
+            return null;
+        }
+    }
+    const meld = { kind: 'run', tiles: picked };
+    return isValidMeld(meld) ? picked : null;
+}
+function tryBuildGroup(numbers, jokers, value, size) {
+    const tiles = numbers.filter((t) => t.value === value);
+    const byColor = new Map();
+    for (const t of tiles) {
+        const list = byColor.get(t.color) ?? [];
+        list.push(t);
+        byColor.set(t.color, list);
+    }
+    const colors = [...byColor.keys()];
+    if (colors.length + jokers.length < size)
+        return null;
+    const tryPick = (order) => {
+        const picked = [];
+        let ji = 0;
+        for (const c of order) {
+            if (picked.length >= size)
+                break;
+            const t = byColor.get(c)?.[0];
+            if (!t)
+                continue;
+            picked.push(t);
+        }
+        while (picked.length < size && ji < jokers.length)
+            picked.push(jokers[ji]);
+        if (picked.length !== size)
+            return null;
+        const meld = { kind: 'group', tiles: picked };
+        return isValidMeld(meld) ? picked : null;
+    };
+    const direct = tryPick(colors);
+    if (direct)
+        return direct;
+    if (colors.length >= size) {
+        const perm = [...colors];
+        for (let i = 0; i < 24; i++) {
+            for (let j = perm.length - 1; j > 0; j--) {
+                const k = i % (j + 1);
+                [perm[j], perm[k]] = [perm[k], perm[j]];
+            }
+            const hit = tryPick(perm.slice(0, size));
+            if (hit)
+                return hit;
+        }
+    }
+    return null;
+}
+function meldKey(meld) {
+    return meld.tiles
+        .map((t) => t.id)
+        .sort()
+        .join(',');
+}
+function poolKey(pool) {
+    const counts = new Map();
+    for (const t of pool) {
+        const k = t.kind === 'joker' ? 'J' : `${t.color}${t.value}`;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, n]) => `${k}:${n}`)
+        .join(',');
+}
+/** All valid melds pickable from pool (solver rules: runs 3+, sets 3–4). */
+function enumerateMelds(pool, cap) {
+    const out = [];
+    const seen = new Set();
+    const { numbers, jokers } = splitPool(pool);
+    const add = (meld) => {
+        if (out.length >= cap)
+            return;
+        const key = meldKey(meld);
+        if (seen.has(key))
+            return;
+        seen.add(key);
+        out.push(meld);
+    };
+    for (let len = MAX_RUN; len >= MIN_RUN; len--) {
+        for (const color of COLORS) {
+            for (let start = 1; start + len - 1 <= 13; start++) {
+                const tiles = tryBuildRun(numbers, jokers, color, start, len);
+                if (tiles)
+                    add({ kind: 'run', tiles });
+                if (out.length >= cap)
+                    return out;
+            }
+        }
+    }
+    for (let value = 1; value <= 13; value++) {
+        for (const size of GROUP_SIZES) {
+            const tiles = tryBuildGroup(numbers, jokers, value, size);
+            if (tiles)
+                add({ kind: 'group', tiles });
+            if (out.length >= cap)
+                return out;
+        }
+    }
+    return out;
+}
+function removeTiles(pool, meld) {
+    const ids = new Set(meld.tiles.map((t) => t.id));
+    return pool.filter((t) => !ids.has(t.id));
+}
+function updateBest(best, melds, remaining, poolSize, longRuns) {
+    const placed = poolSize - remaining.length;
+    if (placed > best.placed) {
+        return { melds: [...melds], remaining: [...remaining], placed };
+    }
+    if (placed < best.placed)
+        return best;
+    if (remaining.length < best.remaining.length) {
+        return { melds: [...melds], remaining: [...remaining], placed };
+    }
+    if (remaining.length > best.remaining.length)
+        return best;
+    if (longRuns.length) {
+        const nextPres = partitionPreservationScore(melds, longRuns);
+        const bestPres = partitionPreservationScore(best.melds, longRuns);
+        if (nextPres < bestPres) {
+            return { melds: [...melds], remaining: [...remaining], placed };
+        }
+    }
+    return best;
+}
+function backtrack(remaining, melds, deadlineMs, rng, poolSize, best, failed, longRuns) {
+    if (remaining.length === 0) {
+        return { melds: [...melds], remaining: [], placed: poolSize };
+    }
+    if (Date.now() >= deadlineMs)
+        return best;
+    best = updateBest(best, melds, remaining, poolSize, longRuns);
+    if (remaining.length < MIN_RUN && remaining.length > 0)
+        return best;
+    const key = poolKey(remaining);
+    if (failed.has(key))
+        return best;
+    const cap = remaining.length <= 20 ? 80 : 40;
+    const candidates = enumerateMelds(remaining, cap);
+    if (!candidates.length) {
+        failed.add(key);
+        return best;
+    }
+    rng.shuffle(candidates);
+    let result = best;
+    for (const meld of candidates) {
+        const next = removeTiles(remaining, meld);
+        const hit = backtrack(next, [...melds, meld], deadlineMs, rng, poolSize, result, failed, longRuns);
+        if (hit.placed === poolSize)
+            return hit;
+        if (hit.placed > result.placed)
+            result = hit;
+        else if (hit.placed === result.placed && longRuns.length) {
+            const hitPres = partitionPreservationScore(hit.melds, longRuns);
+            const resPres = partitionPreservationScore(result.melds, longRuns);
+            if (hitPres < resPres)
+                result = hit;
+        }
+    }
+    failed.add(key);
+    return result;
+}
+function pickGreedyMeld(candidates, longRuns, rng) {
+    candidates.sort((a, b) => b.tiles.length - a.tiles.length);
+    const pool = candidates.slice(0, Math.min(GREEDY_TOP_CANDIDATES, candidates.length));
+    if (!longRuns.length || pool.length <= 1)
+        return pool[rng.randrange(pool.length)];
+    return weightedPickMelds(pool, (m) => meldPickWeight(m, longRuns), rng);
+}
+/** Partition board tiles into valid melds; rack is not used. */
+export function partitionBoardTiles(pool, rng, deadlineMs, opts = {}) {
+    const poolSize = pool.length;
+    const longRuns = opts.originalMelds?.length ? buildOriginalLongRuns(opts.originalMelds) : [];
+    let best = { melds: [], remaining: [...pool], placed: 0 };
+    let attempts = 0;
+    while (Date.now() < deadlineMs) {
+        attempts++;
+        let remaining = [...pool];
+        rng.shuffle(remaining);
+        const melds = [];
+        while (remaining.length >= MIN_RUN) {
+            const cands = enumerateMelds(remaining, 35);
+            if (!cands.length)
+                break;
+            const pick = pickGreedyMeld(cands, longRuns, rng);
+            melds.push(pick);
+            remaining = removeTiles(remaining, pick);
+        }
+        best = updateBest(best, melds, remaining, poolSize, longRuns);
+        if (best.placed === poolSize)
+            break;
+        if (attempts >= 40)
+            break;
+    }
+    if (best.remaining.length > 0 && best.remaining.length <= 14 && Date.now() < deadlineMs) {
+        const tail = backtrack(best.remaining, best.melds, deadlineMs, rng, poolSize, best, new Set(), longRuns);
+        if (tail.placed > best.placed)
+            best = tail;
+        else if (tail.placed === best.placed && longRuns.length) {
+            const tailPres = partitionPreservationScore(tail.melds, longRuns);
+            const bestPres = partitionPreservationScore(best.melds, longRuns);
+            if (tailPres < bestPres)
+                best = tail;
+        }
+        if (tail.placed === poolSize)
+            best = tail;
+    }
+    const grid = meldsToGrid(best.melds);
+    return { result: best, grid, attempts };
+}
+/** True when every board tile is in a valid meld on the laid-out grid. */
+export function partitionIsSolved(result) {
+    return result.remaining.length === 0 && result.melds.length > 0;
+}
+export function meldsToGrid(melds) {
+    const g = new Grid();
+    layoutMelds(g, melds);
+    return g;
+}
+function countMeldedTiles(melds) {
+    return melds.reduce((s, m) => s + m.tiles.length, 0);
+}
+/** Fragment/orphan stats after layout. */
+export function layoutStats(melds, remaining) {
+    const melded = countMeldedTiles(melds);
+    return {
+        melded,
+        orphans: remaining.length,
+        fragments: remaining.length > 0 ? 1 : 0,
+        meldCount: melds.length
+    };
+}
+//# sourceMappingURL=board-solver.js.map

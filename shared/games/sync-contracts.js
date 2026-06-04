@@ -43,6 +43,7 @@
             review: 'global/board.phase',
             notes: 'Do not apply event-log isOver/applyState in MP. Interactions under interactions/banana.'
         }
+        // NEW_GAME_CONTRACT_INSERT
     };
 
     /** @type {Record<string, MpSyncContract>} */
@@ -74,12 +75,63 @@
         return contract.style === 'event-log' || contract.style === 'hybrid';
     }
 
+    /**
+     * CI helper — registry syncStyle / mpBoardAuthoritative must match documented contracts.
+     * @returns {string[]} error messages (empty = ok)
+     */
+    function validateRegistryAlignment(registry) {
+        const reg = registry || (typeof global !== 'undefined' ? global.GameRegistry : null);
+        if (!reg?.list) return ['GameRegistry not available'];
+        const errors = [];
+
+        function mpAuditForMode(game, mode) {
+            if (game.mpAuditByMode?.[mode]) return game.mpAuditByMode[mode];
+            if (game.mpAuditConfig && (mode === game.defaultMode || game.modes.length === 1)) {
+                return game.mpAuditConfig;
+            }
+            return null;
+        }
+
+        function requiresContract(game, mode) {
+            if (mpAuditForMode(game, mode)) return true;
+            if ((game.mpPlayerCounts || []).some((n) => n >= 2)) return true;
+            return false;
+        }
+
+        for (const game of registry.list()) {
+            for (const mode of game.modes) {
+                const caps = registry.getCapabilities(game.id, mode);
+                const contract = contractFor(game.id, mode);
+                if (!contract) {
+                    if (requiresContract(game, mode)) {
+                        errors.push(`Missing sync contract: ${game.id}:${mode}`);
+                    }
+                    continue;
+                }
+                if (contract.style !== caps.syncStyle) {
+                    errors.push(
+                        `${game.id}:${mode} syncStyle registry=${caps.syncStyle} contract=${contract.style}`
+                    );
+                }
+                const boardAuthCap = !!caps.mpBoardAuthoritative;
+                const boardAuthContract = contract.style === 'board-authoritative';
+                if (boardAuthCap !== boardAuthContract) {
+                    errors.push(
+                        `${game.id}:${mode} mpBoardAuthoritative=${boardAuthCap} vs contract=${contract.style}`
+                    );
+                }
+            }
+        }
+        return errors;
+    }
+
     const GameSyncContracts = {
         BY_GAME,
         BY_GAME_MODE,
         contractFor,
         isBoardAuthoritative,
-        allowsEventLogApply
+        allowsEventLogApply,
+        validateRegistryAlignment
     };
 
     if (typeof module !== 'undefined' && module.exports) {
