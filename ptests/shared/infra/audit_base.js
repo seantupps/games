@@ -3,7 +3,13 @@ require('./bootstrap');
 const { chromium } = require('playwright');
 const { ensureTestStack, buildAppUrl, buildHubUrl } = require('./emulator-utils');
 const { STEP_MS } = require('./timeouts');
-const { playwrightHeadless, playwrightSlowMo, shouldCloseBrowser } = require('./env-defaults');
+const {
+    playwrightHeadless,
+    playwrightSlowMo,
+    shouldCloseBrowser,
+    registerKeepOpenBrowser
+} = require('./env-defaults');
+const { DESKTOP_VIEWPORT } = require('./viewport-constants');
 const { createTestLogger, isMpChatterSuppressed } = require('./test-logger');
 
 /**
@@ -42,7 +48,8 @@ async function runGameAudit(gameId, options = {}) {
             headless: playwrightHeadless(),
             slowMo: playwrightSlowMo()
         });
-        context = await browser.newContext();
+        registerKeepOpenBrowser(browser);
+        context = await browser.newContext({ viewport: DESKTOP_VIEWPORT });
         page = await context.newPage();
         ownsBrowser = true;
     }
@@ -93,12 +100,21 @@ async function runGameAudit(gameId, options = {}) {
             const { enableMobileHub } = require('../../platform/mobile/lib/mobile_assertions');
             await enableMobileHub(page);
             await page.evaluate(() => window.FiveViewport?.syncHubViewport?.());
+            if (!playwrightHeadless()) {
+                const { syncMpHeadedMobileViewport } = require('../platform/mp-headed-view');
+                await syncMpHeadedMobileViewport(page);
+            }
         }
 
         // Hook for custom initialization (e.g., UI drag tests)
         if (beforeLoop) await beforeLoop(page, { gameId, context, isMobile: !!options.isMobile });
 
         if (options.skipGameLoop) {
+            if (options.isMobile && !playwrightHeadless()) {
+                const { syncMpHeadedMobileViewport } = require('../platform/mp-headed-view');
+                await syncMpHeadedMobileViewport(page);
+                if (!shouldCloseBrowser()) await page.bringToFront();
+            }
             log(`SUCCESS: ${gameId.toUpperCase()} (${gameMode.toUpperCase()}) UI AUDIT COMPLETED`);
             return;
         }

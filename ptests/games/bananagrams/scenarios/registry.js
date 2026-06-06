@@ -1,27 +1,96 @@
 /**
  * Scenario names for Bananagrams test entry points.
- *   node .../desktop-mp/index.js --focus
- *   node .../desktop-sp.js --scenario=hub
- *   node ptests/run.js sp --game=bananagrams --scenario=actions
+ *   node ptests/run.js mp --game=bananagrams              → consolidated full audit (one session)
+ *   node ptests/run.js mp --game=bananagrams --scenario=all → every MP scenario (separate runs)
+ *
+ * Scenario roles:
+ *   full    — 21-tile gameplay parity (deal, split, AI win, review, distribution)
+ *   sync    — micro layout/sync invariants (disconnected stragglers, peel spawn timing)
+ *   review  — last-bunch pool drain + solve/win/review loop (last-bunch alias)
+ *   actions — 21-tile AI playthrough only (no micro fixtures)
  */
 
-const MP_SCENARIOS = ['full', 'focus', 'actions'];
-const SP_SCENARIOS = ['all', 'hub', 'ui', 'actions', 'placement', 'dump', 'peel'];
+const MP_SCENARIOS = ['full', 'sync', 'focus', 'actions', 'solve', 'review'];
+/** Bare `--game=bananagrams` — single full audit (focus/solve/actions/review via `--scenario=`). */
+const MP_DEFAULT_SUITE = ['full'];
+const SP_SCENARIOS = ['all', 'hub', 'ui', 'actions', 'placement', 'dump', 'peel', 'solve'];
 const SP_ACTION_SLICES = ['placement', 'dump', 'peel'];
 
-function parseScenarioArgv(argv, defaultId = 'all') {
-    const fromEnv = process.env.FIVE_SCENARIO;
-    if (fromEnv) return String(fromEnv).trim().toLowerCase();
+/**
+ * Multi-round / play-to-win MP debug runs should use actions (AI playthrough), not full audit.
+ * @param {{ game?: string|null, scenario?: string|null, rounds?: number, winSide?: string|null, pause?: boolean }} config
+ * @returns {string|null}
+ */
+function inferBananagramsMpScenario(config) {
+    if (!config || config.scenario || config.manualTest) return null;
+    const game = config.game;
+    if (game) {
+        const { matchesGameFilter } = require('../../../shared/infra/run-spec');
+        if (!matchesGameFilter(game, 'bananagrams')) return null;
+    }
+    if ((config.rounds || 0) > 1 || config.winSide || config.pause) return 'actions';
+    return null;
+}
 
-    const fromNpm = process.env.npm_config_scenario;
-    if (fromNpm) return String(fromNpm).trim().toLowerCase();
+/**
+ * Bare `--game=bananagrams` (no --scenario/--win/--rounds/--pause) runs consolidated `full` audit.
+ * `--scenario=all` runs every MP scenario; other explicit flags run a single scenario.
+ * @param {import('../../../shared/infra/run-spec').RunConfig} [config]
+ * @returns {string[]}
+ */
+function resolveBananagramsMpScenarioPlan(config) {
+    const cfg = config || (() => {
+        try {
+            return require('../../../shared/infra/run-config').getActiveRunConfig();
+        } catch (_) {
+            return {};
+        }
+    })();
+
+    if (cfg.manualTest) return [];
+
+    if (cfg.scenario) {
+        let scenario = String(cfg.scenario).trim().toLowerCase();
+        if (scenario === 'last-bunch') scenario = 'review';
+        if (scenario === 'all') return [...MP_SCENARIOS];
+        return [scenario];
+    }
+
+    const inferred = inferBananagramsMpScenario(cfg);
+    if (inferred) return [inferred];
+
+    const game = cfg.game;
+    if (game) {
+        const { matchesGameFilter } = require('../../../shared/infra/run-spec');
+        if (matchesGameFilter(game, 'bananagrams')) {
+            return [...MP_DEFAULT_SUITE];
+        }
+    }
+
+    return ['full'];
+}
+
+function parseScenarioArgv(argv, defaultId = 'all') {
+    try {
+        const { getActiveRunConfig } = require('../../../shared/infra/run-config');
+        const cfg = getActiveRunConfig();
+        if (cfg.scenario) return String(cfg.scenario).trim().toLowerCase();
+        const inferred = inferBananagramsMpScenario(cfg);
+        if (inferred) return inferred;
+    } catch (_) { /* run-config optional in some entry points */ }
 
     const args = argv || [];
     if (args.includes('--focus')) return 'focus';
     const eq = args.find((a) => a.startsWith('--scenario='));
-    if (eq) return eq.split('=')[1] || defaultId;
+    if (eq) {
+        const v = eq.split('=')[1] || defaultId;
+        return String(v).trim().toLowerCase() === 'last-bunch' ? 'review' : v;
+    }
     const idx = args.indexOf('--scenario');
-    if (idx >= 0 && args[idx + 1]) return args[idx + 1];
+    if (idx >= 0 && args[idx + 1]) {
+        const v = args[idx + 1];
+        return String(v).trim().toLowerCase() === 'last-bunch' ? 'review' : v;
+    }
     return defaultId;
 }
 
@@ -69,19 +138,22 @@ function parseWinSideArgv(argv = process.argv.slice(2)) {
     const idx = argv.indexOf('--win');
     if (idx >= 0 && argv[idx + 1]) return parseWinSideValue(argv[idx + 1]);
 
-    const fromEnv = process.env.FIVE_MP_WIN_SIDE;
-    if (fromEnv) return parseWinSideValue(fromEnv);
-
-    const fromNpm = process.env.npm_config_win;
-    if (fromNpm) return parseWinSideValue(fromNpm);
+    try {
+        const { getWinSide } = require('../../../shared/infra/run-config');
+        const fromConfig = getWinSide();
+        if (fromConfig) return fromConfig;
+    } catch (_) { /* run-config optional */ }
 
     return null;
 }
 
 module.exports = {
     MP_SCENARIOS,
+    MP_DEFAULT_SUITE,
     SP_SCENARIOS,
     SP_ACTION_SLICES,
+    inferBananagramsMpScenario,
+    resolveBananagramsMpScenarioPlan,
     parseScenarioArgv,
     parseWinSideArgv,
     parseWinSideValue,

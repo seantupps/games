@@ -83,16 +83,15 @@
             const reviewCaps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
             if (fdoc && reviewCaps.supportsPostGameReview) {
                 [
-                    ['banana-done', fdoc.getElementById('banana-done-btn')],
                     ['banana-hud', fdoc.getElementById('banana-hud')],
                     ['banana-banner', fdoc.getElementById('banana-banner')],
                     ['scoreboard', fdoc.querySelector('.scoreboard')]
                 ].forEach(([id, el]) => {
-                    if (id === 'banana-done' && !el?.classList.contains('show')) return;
                     if (id === 'banana-banner' && !el?.classList.contains('is-visible')) return;
                     if (id === 'scoreboard' && !el?.classList.contains('show')) return;
                     add(el, id);
                 });
+                // Done is fixed bottom-center in the iframe — must not pull the hub win banner downward.
             }
             return rects;
         }
@@ -104,40 +103,57 @@
                 && a.bottom > b.top - gap;
         }
 
-        function adjustWinBannerObstacleClearance(banner, box) {
-            if (!banner || winBannerLayoutLocked) return;
-            banner.style.removeProperty('top');
-            banner.style.removeProperty('left');
-            banner.style.transform = 'translateX(-50%)';
+        /**
+         * Single placement pass: read --win-banner-top-default, clear obstacles, write --win-banner-top.
+         * CSS owns styling; JS owns final placement (one custom property, no inline top/left tug-of-war).
+         */
+        function applyWinBannerPlacement(banner, box) {
+            if (!banner || winBannerLayoutLocked || isWinBannerLocked(banner)) return;
+            if (!banner.classList.contains('visible') && !banner.classList.contains('is-fitting')) {
+                return;
+            }
+
+            banner.style.setProperty('--win-banner-left', '50%');
+            banner.style.setProperty('--win-banner-top', 'var(--win-banner-top-default, 15%)');
+
             const gap = 12;
-            const obstacles = collectWinBannerObstacles();
-            let rect = banner.getBoundingClientRect();
+            let topPx = banner.getBoundingClientRect().top;
+            if (topPx < box.minTop) topPx = box.minTop;
 
             for (let attempt = 0; attempt < 16; attempt++) {
+                banner.style.setProperty('--win-banner-top', `${Math.ceil(topPx)}px`);
+                const rect = banner.getBoundingClientRect();
+                const obstacles = collectWinBannerObstacles();
                 const overlapping = obstacles.filter((o) => rectsOverlap(rect, o.rect, gap));
-                const outOfBox = rect.top < box.minTop
-                    || rect.left < box.minLeft
-                    || rect.right > box.maxRight
-                    || rect.bottom > box.maxBottom;
-                if (!overlapping.length && !outOfBox) break;
-
-                let nextTop = rect.top;
+                let nextTop = topPx;
                 if (rect.top < box.minTop) nextTop = box.minTop;
                 overlapping.forEach((o) => {
                     if (rectsOverlap(rect, o.rect, gap)) {
-                        nextTop = Math.max(nextTop, o.rect.bottom + gap);
+                        const bannerMidY = rect.top + rect.height / 2;
+                        if (o.rect.top < bannerMidY) {
+                            nextTop = Math.max(nextTop, o.rect.bottom + gap);
+                        }
                     }
                 });
-                if (rect.bottom > box.maxBottom) {
-                    nextTop = Math.min(nextTop, box.maxBottom - rect.height);
+                const after = banner.getBoundingClientRect();
+                if (after.bottom > box.maxBottom) {
+                    nextTop = Math.min(nextTop, box.maxBottom - after.height);
                 }
-                if (nextTop !== rect.top) {
-                    banner.style.top = `${Math.ceil(nextTop)}px`;
-                    banner.style.transform = 'translateX(-50%)';
-                } else {
-                    break;
-                }
-                rect = banner.getBoundingClientRect();
+                if (Math.abs(nextTop - topPx) < 0.5) break;
+                topPx = nextTop;
+            }
+
+            banner.style.setProperty('--win-banner-top', `${Math.ceil(topPx)}px`);
+
+            let rect = banner.getBoundingClientRect();
+            if (rect.right > box.maxRight) {
+                const left = Math.max(box.minLeft, box.maxRight - rect.width);
+                banner.style.setProperty('--win-banner-left', `${left + rect.width / 2}px`);
+            }
+            rect = banner.getBoundingClientRect();
+            if (rect.bottom > box.maxBottom) {
+                topPx = Math.max(box.minTop, box.maxBottom - rect.height);
+                banner.style.setProperty('--win-banner-top', `${Math.ceil(topPx)}px`);
             }
         }
 
@@ -147,8 +163,8 @@
             if (!banner.classList.contains('visible') && !banner.classList.contains('is-fitting')) return;
             const mobile = document.documentElement.classList.contains('five-mobile');
             const box = getWinBannerViewportBox();
-            banner.style.removeProperty('top');
-            banner.style.removeProperty('left');
+            banner.style.removeProperty('--win-banner-top');
+            banner.style.removeProperty('--win-banner-left');
             banner.style.transform = 'translateX(-50%)';
             banner.style.maxWidth = `${box.maxW}px`;
             banner.style.maxHeight = `${box.maxH}px`;
@@ -182,24 +198,14 @@
                     banner.style.fontSize = `${size}px`;
                 }
             }
-            adjustWinBannerObstacleClearance(banner, box);
-            let rect = banner.getBoundingClientRect();
-            if (rect.right > box.maxRight) {
-                const left = Math.max(box.minLeft, box.maxRight - rect.width);
-                banner.style.left = `${left + rect.width / 2}px`;
-                banner.style.transform = 'translateX(-50%)';
-            }
-            rect = banner.getBoundingClientRect();
-            if (rect.bottom > box.maxBottom) {
-                banner.style.top = `${Math.max(box.minTop, box.maxBottom - rect.height)}px`;
-            }
+            applyWinBannerPlacement(banner, box);
         }
 
-        /** Post-game review: nudge hub banner below iframe Done if boxes overlap. */
+        /** Post-game review: re-run the same placement pass after iframe layout settles. */
         function adjustPostGameReviewWinBannerClearance(banner) {
             const caps = Registry?.getCapabilities(ctx.currentGame, ctx.gameMode) || {};
             if (!banner || !caps.supportsPostGameReview) return;
-            adjustWinBannerObstacleClearance(banner, getWinBannerViewportBox());
+            applyWinBannerPlacement(banner, getWinBannerViewportBox());
         }
 
         let winBannerResizeBound = false;
@@ -238,8 +244,8 @@
             banner.style.fontSize = '';
             banner.style.removeProperty('width');
             banner.style.removeProperty('height');
-            banner.style.removeProperty('top');
-            banner.style.removeProperty('left');
+            banner.style.removeProperty('--win-banner-top');
+            banner.style.removeProperty('--win-banner-left');
             banner.style.removeProperty('max-width');
             banner.style.removeProperty('max-height');
             banner.style.removeProperty('text-align');
@@ -412,6 +418,7 @@
         ctx.showWinBanner = showWinBanner;
         ctx.startWinBannerFadeOut = startWinBannerFadeOut;
         ctx.fitWinBannerToViewport = fitWinBannerToViewport;
+        ctx.applyWinBannerPlacement = applyWinBannerPlacement;
         ctx.adjustPostGameReviewWinBannerClearance = adjustPostGameReviewWinBannerClearance;
         ctx.adjustBananagramsWinBannerClearance = adjustPostGameReviewWinBannerClearance;
 

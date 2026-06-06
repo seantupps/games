@@ -5,7 +5,12 @@
  */
 
 const { STEP_MS } = require('../../../shared/infra/timeouts');
-const { centerMpViewerOnPages, isMpHeaded, syncMpHeadedMobileViewport } = require('../../../shared/platform/mp-headed-view');
+const {
+    centerMpViewerOnPages,
+    isMpHeaded,
+    syncMpHeadedMobileViewport,
+    syncMpHeadedDesktopViewport
+} = require('../../../shared/platform/mp-headed-view');
 const { ensureWinBannerDwellForAudit } = require('../assertions/bananagrams_hub_layout');
 
 function startWinBannerLayoutAsserts(pages) {
@@ -146,7 +151,7 @@ async function applyEndingSnapshotsForReview(frames, players, snapshots) {
                 faceUp: true,
                 x: t.x,
                 y: t.y
-            })), true);
+            })), true, { allowTilesToOwned: true });
         }
         g._hostSyncBoard?.();
         return { ok: true };
@@ -178,7 +183,7 @@ async function setupPlayerCrosswords(hostFrame, players) {
 
                 faceUp: true
 
-            })), true);
+            })), true, { allowTilesToOwned: true });
 
         });
 
@@ -551,7 +556,7 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
         if (opts.mobile) {
             await Promise.all(pages.map((p) => syncMpHeadedMobileViewport(p)));
         } else {
-            await centerMpViewerOnPages(pages);
+            await Promise.all(pages.map((p) => syncMpHeadedDesktopViewport(p)));
         }
     }
 
@@ -849,7 +854,7 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
             if (opts.mobile) {
                 await Promise.all(pages.map((p) => syncMpHeadedMobileViewport(p)));
             } else {
-                await centerMpViewerOnPages(pages);
+                await Promise.all(pages.map((p) => syncMpHeadedDesktopViewport(p)));
             }
         }
         const pointerType = opts.pointerType ?? (opts.skipTouch ? 'mouse' : 'touch');

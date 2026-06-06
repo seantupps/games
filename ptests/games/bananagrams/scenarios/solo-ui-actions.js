@@ -6,6 +6,16 @@ const { getGameFrame } = require('../../../shared/platform/game-harness');
 const { solveAttemptFromBrowserState } = require('../ai');
 const { playwrightSlowMo } = require('../../../shared/infra/env-defaults');
 const { assertTileDistributionInReview } = require('../assertions/bananagrams_distribution_assertions');
+const {
+    attachSnapshotTileIds,
+    rackLettersFromSnap,
+    applyPinnedPlacementsInFrame
+} = require('../lib/ai-snapshot-apply');
+const {
+    clickDone,
+    waitSoloFaceDownHand,
+    waitSoloPostGameReview
+} = require('../assertions/bananagrams_solo_done');
 
 const ACTION_SLICES = ['placement', 'dump', 'peel'];
 
@@ -370,7 +380,7 @@ function snapshotBrowserState() {
         const originPt = { x: origin, y: origin };
         if (BananaGrid.isStartingRack(g.tiles, originPt, opts)) {
             return {
-                rack: g.tiles.map((t) => t.letter),
+                rack: g.tiles.map((t) => ({ id: t.id, letter: t.letter })),
                 boardCells: [],
                 poolLen: g._tilePool.length,
                 tileCount: g.tiles.length,
@@ -415,9 +425,9 @@ function snapshotBrowserState() {
         for (const t of g.tiles) {
             if (boardIds.has(t.id)) {
                 const { gx, gy } = toCell(t);
-                boardCells.push({ gx, gy, letter: t.letter });
+                boardCells.push({ gx, gy, letter: t.letter, id: t.id });
             } else {
-                rack.push(t.letter);
+                rack.push({ id: t.id, letter: t.letter });
             }
         }
         const allPlaced = typeof g._allTilesPlaced === 'function' ? g._allTilesPlaced() : false;
@@ -481,10 +491,16 @@ async function runSoloFullGameAudit(page, options = {}) {
         if (typeof g.requestRender === 'function') g.requestRender();
     });
 
-    // Inject snapshot function for merged calls
-    await gameFrame.evaluate((fnStr) => {
-        window.snapshotBrowserState = new Function('return ' + fnStr)();
-    }, snapshotBrowserState.toString());
+    // Inject snapshot + id-pinned apply for in-frame merged calls
+    await gameFrame.evaluate(({ snapFn, applySrc }) => {
+        const outer = new Function('return ' + snapFn)();
+        window.snapshotBrowserState = outer();
+        // eslint-disable-next-line no-eval
+        eval(`window.applyPinnedPlacementsInFrame = ${applySrc}`);
+    }, {
+        snapFn: snapshotBrowserState.toString(),
+        applySrc: applyPinnedPlacementsInFrame.toString()
+    });
 
     let snap = await gameFrame.evaluate(snapshotBrowserState());
     let peels = 0;
@@ -521,7 +537,7 @@ async function runSoloFullGameAudit(page, options = {}) {
                     poolBefore,
                     poolAfter: g._tilePool.length,
                     tileCount: g.tiles.length,
-                    nextSnap: (window.snapshotBrowserState())()
+                    nextSnap: window.snapshotBrowserState()
                 };
             });
             if (dumpResult.ok) {
@@ -593,63 +609,41 @@ async function runSoloFullGameAudit(page, options = {}) {
 
         const solved = solveAttemptFromBrowserState({
             boardCells: snap.boardCells,
-            rackLetters: snap.rack
+            rackLetters: rackLettersFromSnap(snap)
         });
 
         if (solved.changed) {
+            const pinnedPlacements = attachSnapshotTileIds(snap, solved.placements);
             const applied = await gameFrame.evaluate(({ placements, origin, gap, shouldPeel }) => {
+                const base = window.applyPinnedPlacementsInFrame({ placements, origin, gap });
+                if (!base.ok) return base;
+
                 const g = window.game;
-                const used = new Set();
-                for (const p of placements) {
-                    const tx = origin + p.gx * gap;
-                    const ty = origin + p.gy * gap;
-                    const want = p.letter.toUpperCase();
-                    let best = null;
-                    let bestD = Infinity;
-                    for (const t of g.tiles) {
-                        if (used.has(t.id) || t.letter.toUpperCase() !== want) continue;
-                        const d = (t.x - tx) ** 2 + (t.y - ty) ** 2;
-                        if (d < bestD) {
-                            bestD = d;
-                            best = t;
-                        }
-                    }
-                    if (!best) return { ok: false, reason: 'missing-tile', letter: p.letter };
-                    used.add(best.id);
-                    best.x = tx;
-                    best.y = ty;
-                    best.faceUp = true;
-                }
-                const rackOpts = g._rackLayoutOptions();
-                const rb = BananaGrid.getRackBounds({ x: origin, y: origin }, rackOpts.cols, rackOpts.gap, rackOpts.tileSize, rackOpts.handBelowCenter);
-
-                const unassigned = g.tiles.filter(t => !used.has(t.id));
-                for (let i = 0; i < unassigned.length; i++) {
-                    const row = Math.floor(i / rackOpts.cols);
-                    const col = i % rackOpts.cols;
-                    unassigned[i].x = rb.x + col * rackOpts.gap;
-                    unassigned[i].y = rb.y + row * rackOpts.gap;
-                    unassigned[i].faceUp = true;
-                }
-
-                if (typeof g.requestRender === 'function') g.requestRender();
-
                 let peeled = false;
-                let poolBefore = g._tilePool.length;
+                const poolBefore = g._tilePool.length;
                 if (shouldPeel && g._allTilesPlaced?.()) {
                     g._bannerText = '';
                     peeled = g._checkPeel();
                 }
 
-                // Return next state immediately
-                const nextSnap = (snapshotBrowserState())();
-                return { ok: true, placed: used.size, peeled, poolBefore, poolAfter: g._tilePool.length, nextSnap };
-            }, { placements: solved.placements, origin: snap.origin, gap: snap.gap, shouldPeel: solved.cleared });
+                const nextSnap = window.snapshotBrowserState();
+                return {
+                    ok: true,
+                    placed: base.placed,
+                    peeled,
+                    poolBefore,
+                    poolAfter: g._tilePool.length,
+                    nextSnap
+                };
+            }, {
+                placements: pinnedPlacements,
+                origin: snap.origin,
+                gap: snap.gap,
+                shouldPeel: solved.cleared
+            });
 
             if (!applied.ok) {
-                console.log(`[TEST] Turn ${turn}: apply skipped (${JSON.stringify(applied)}).`);
-                snap = await gameFrame.evaluate(snapshotBrowserState());
-                continue;
+                throw new Error(`Turn ${turn}: AI apply failed (${JSON.stringify(applied)})`);
             }
 
             if (applied.peeled) {
@@ -749,6 +743,65 @@ async function finishSoloAiWinWithDistributionCheck(gameFrame, label = 'solo-ai-
     );
 }
 
+function pauseTimeoutMs() {
+    return Number(process.env.FIVE_PAUSE_TIMEOUT_MS || 3600000);
+}
+
+async function advanceSoloRoundAfterReview(page, gameFrame, roundLabel, { pause = false } = {}) {
+    await waitSoloPostGameReview(gameFrame, STEP_MS);
+    if (pause) {
+        console.log(`[TEST] Paused in review after ${roundLabel} — press Done to continue...`);
+        await waitSoloFaceDownHand(gameFrame, pauseTimeoutMs());
+    } else {
+        await clickDone(gameFrame);
+        await waitSoloFaceDownHand(gameFrame, STEP_MS);
+    }
+    return { gameFrame: await getGameFrame(page) };
+}
+
+/** Solo play-to-win session (--scenario=actions or --rounds=N). */
+async function runSoloActionsSession(page, options = {}) {
+    const { getRounds, isPaused } = require('../../../shared/infra/run-config');
+    const rounds = Math.max(1, Number(options.rounds ?? getRounds()) || 1);
+    const pause = options.pause ?? isPaused();
+    let gameFrame = null;
+
+    console.log(
+        `[TEST] Solo actions: play-to-win (${rounds} round${rounds > 1 ? 's' : ''}`
+        + `${pause ? ', pause in review' : ''})...`
+    );
+
+    for (let round = 1; round <= rounds; round++) {
+        console.log(`[TEST] Solo actions round ${round}/${rounds}...`);
+        await runSoloFullGameAudit(page, {
+            skipPrepare: round > 1,
+            gameFrame: gameFrame || options.gameFrame
+        });
+        gameFrame = await getGameFrame(page);
+        console.log(`[TEST] SUCCESS: Solo actions round ${round}/${rounds} complete.`);
+
+        if (round < rounds) {
+            const next = await advanceSoloRoundAfterReview(page, gameFrame, `round ${round}`, { pause });
+            gameFrame = next.gameFrame;
+            continue;
+        }
+
+        if (pause) {
+            await waitSoloPostGameReview(gameFrame, STEP_MS);
+            console.log(
+                `[TEST] SUCCESS: Solo actions complete (${rounds} round${rounds > 1 ? 's' : ''}, paused in review).`
+            );
+            return;
+        }
+    }
+
+    await clickDone(gameFrame);
+    await waitSoloFaceDownHand(gameFrame, STEP_MS);
+    console.log(
+        `[TEST] SUCCESS: Solo actions playthrough complete (${rounds} round${rounds > 1 ? 's' : ''}).`
+    );
+}
+
 module.exports = {
     ACTION_SLICES,
     SLICE_RUNNERS,
@@ -757,5 +810,6 @@ module.exports = {
     runDumpChecks,
     runPeelChecks,
     runSoloActionsAudit,
-    runSoloFullGameAudit
+    runSoloFullGameAudit,
+    runSoloActionsSession
 };

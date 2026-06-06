@@ -55,6 +55,7 @@
                 this._mpOwned = null;
                 this._mpPlayerLayouts = null;
                 this._mpInventorySeq = null;
+                this._mpCanonicalReset?.();
                 this._mpDeferredBoard = null;
                 this._mpAwaitReset = false;
                 this._reviewLayouts = null;
@@ -181,6 +182,24 @@
                 return BananaRules.buildShuffledPool(bag, cfg.bunchCount);
             },
 
+            /** Host-only: pool + all players' _mpOwned must match the MP bag (id-pool mode). */
+            _mpDistributionInvariantCheck(context = 'unknown') {
+                if (!this.isHost?.() || !this._isMultiplayerMode?.()
+                    || typeof BananaRules === 'undefined') {
+                    return true;
+                }
+                this._mpEnsureIdPoolModeFromPool?.();
+                if (!this._mpPoolIsIdBased?.()) {
+                    if (this.started || this.gameStarted) {
+                        console.error('[Bananagrams] MP distribution check without id pool', { context });
+                        this._lastMpDistCheck = { context, ok: false, reason: 'no-id-pool' };
+                        return false;
+                    }
+                    return true;
+                }
+                return this._mpIdPoolInvariantCheck?.(context) ?? true;
+            },
+
             _soloDistributionInvariantCheck(context = 'unknown') {
                 if (this._isMultiplayerMode() || typeof BananaRules === 'undefined') return true;
                 const bagLabel = this._soloBagLabel();
@@ -261,8 +280,7 @@
 
             beginGame() {
                 if (this.gameStarted) return;
-                if (this._inReviewExperience?.()
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
+                if (!this.canMutatePlayingBoard?.()) {
                     return;
                 }
                 if (this._isMultiplayerMode()) {
@@ -283,6 +301,49 @@
                 this.requestRender();
             },
 
+            /** True when any tile has left the default pre-SPLIT rack layout. */
+            _hasBoardLeftStartingRack() {
+                if (!this.tiles?.length || !this.canMutatePlayingBoard?.()) return false;
+                if (typeof this._isStartingRackLayout === 'function') {
+                    return !this._isStartingRackLayout();
+                }
+                return false;
+            },
+
+            /**
+             * Start (or repair) the elapsed timer when tiles leave the starting rack —
+             * e.g. drag, touch, or dev /b solve placing tiles on the board.
+             */
+            _ensurePlayStartedFromBoardActivity() {
+                if (!this.canMutatePlayingBoard?.() || !this._hasBoardLeftStartingRack()) return;
+
+                if (!this.gameStarted) {
+                    this.beginGame();
+                    return;
+                }
+
+                if (!this._usesGameTimer() || this._timerFrozen) return;
+                if (this._timerRaf && this._timerStart != null) return;
+
+                const startedAt = this._mpStartedAt || Date.now();
+                if (this._isMultiplayerMode()) {
+                    if (this.isHost?.()) {
+                        if (!this._mpStartedAt) {
+                            this._mpStartedAt = startedAt;
+                            this._hostSyncBoard?.({ immediate: true });
+                        }
+                        this._syncMpTimerFromBoard(this._mpStartedAt || startedAt);
+                    } else {
+                        this._timerStart = startedAt;
+                        this._startTimer();
+                    }
+                    return;
+                }
+
+                this._timerStart = this._timerStart || Date.now();
+                this._startTimer();
+            },
+
             _startTimer() {
                 if (!this._usesGameTimer() || this._timerFrozen) return;
                 if (this._timerRaf) return;
@@ -301,7 +362,7 @@
             },
 
             _syncMpTimerFromBoard(startedAt) {
-                if (this._timerFrozen || this._inReviewExperience?.()) {
+                if (this._timerFrozen || !this.canMutatePlayingBoard?.()) {
                     return;
                 }
                 if (!this._usesGameTimer() || !startedAt || !this.gameStarted) return;
@@ -457,6 +518,7 @@
             },
 
             _syncViewportAfterLayout() {
+                if (this._devBoardSolveSkipViewport) return;
                 const inReview = this._inReviewExperience?.()
                     || (typeof this._isBoardInReview === 'function' && this._isBoardInReview());
                 if (inReview && this._reviewViewportSettled) {
@@ -723,7 +785,9 @@
     async _loadDictionary() {
         if (typeof BananaDictionary === 'undefined') return;
         try {
-            const { nodes } = await BananaDictionary.loadWordlist('dict/enable.bin.gz');
+            const { nodes, header } = await BananaDictionary.loadWordlist('dict/enable.bin.gz');
+            this._dictNodes = nodes;
+            this._dictHeader = header || {};
             this._baseChecker = BananaDictionary.createChecker(nodes);
             this._dictOverrides = this._loadDictOverrides();
             this._checker = this._buildCheckerWithOverrides(this._baseChecker, this._dictOverrides);

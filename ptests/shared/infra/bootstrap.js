@@ -6,14 +6,11 @@
  * FIVE_PROFILE=prod   — production runners (no auto stack)
  * FIVE_SKIP_BOOTSTRAP=1 — opt out (rare)
  */
-const {
-    applyEnvProfiles,
-    defaultBootstrapProfiles,
-    applyDefaultPlaywrightDisplayMode
-} = require('./env-defaults');
+const { applyEnvProfiles, defaultBootstrapProfiles } = require('./env-defaults');
+const { resetRunEnv } = require('./run-config');
 
 function applyBootstrap(extraProfiles = []) {
-    applyDefaultPlaywrightDisplayMode();
+    resetRunEnv();
     applyEnvProfiles(defaultBootstrapProfiles(extraProfiles));
 }
 

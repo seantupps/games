@@ -29,11 +29,157 @@
                 return !!this._postGameReview;
             },
 
-            /** Gameplay/input: board says review or review UI is active. */
+            /** Gameplay/input: board says review or review UI is active (projection / read-only). */
             _inReviewExperience() {
-                return this._reviewUiActive()
-                    || this._isBoardInReview()
-                    || !!this._hostReviewTransitionActive;
+                return !this.canMutatePlayingBoard();
+            },
+
+            /**
+             * One-way projection gate — playing inventory may rebuild this.tiles only while
+             * global/board is in playing phase AND the client is not in win/review.
+             * Review tiles are projected only from reviewLayouts (_applyReviewLayouts).
+             */
+            _shouldProjectPlayingInventory(board, options = {}) {
+                if (options.reset && options.force) return true;
+                if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW) return false;
+                if (this._reviewUiActive?.()) return false;
+                if (this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW && !options.reset) {
+                    return false;
+                }
+                if (!this.canMutatePlayingBoard?.()) return false;
+                return true;
+            },
+
+            /** Playing board snapshots that fail the projection gate must not mutate client state. */
+            _shouldApplyPlayingBoardSnapshot(board, options = {}) {
+                if (!board || options.reset) return true;
+                if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW) return true;
+                if (this._shouldProjectPlayingInventory(board, options)) return true;
+                // Post-Done redeal / SPLIT — fresh playing board after review closed locally.
+                if (board.gameStarted && !board.winnerUid && !this._winnerUid && !this.isOver
+                    && !this._reviewUiActive?.() && !this._hostReviewTransitionActive) {
+                    return true;
+                }
+                return false;
+            },
+
+            /** Re-project merged review tiles if playing inventory clobbered this.tiles. */
+            _ensureReviewTilesProjected(board) {
+                if (!board || this._boardPhase(board) !== BananagramsGame.MP_PHASE.REVIEW) return;
+                const partyUids = this._getPlayerUids();
+                if (partyUids.length < 2) return;
+                const orig = board.reviewLayoutsOrig || board.reviewLayouts || this._reviewLayouts;
+                if (!this._reviewLayoutsReady(orig, partyUids)) return;
+                const display = typeof this._displayReviewLayoutsFromOrig === 'function'
+                    ? this._displayReviewLayoutsFromOrig(orig)
+                    : orig;
+                const expectedTiles = Object.values(display || {})
+                    .reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+                const visiblePlayers = new Set((this.tiles || [])
+                    .map((t) => t.ownerUid || this._myUid())
+                    .filter(Boolean)).size;
+                if ((this.tiles?.length || 0) >= expectedTiles
+                    && visiblePlayers >= partyUids.length) {
+                    return;
+                }
+                this._reviewLayoutsFp = null;
+                this._applyReviewLayouts(display);
+                this._mpAssertReviewProjection(board, 'ensureReviewTilesProjected');
+            },
+
+            /** Fail loud in dev/test when runtime tiles drift from board reviewLayouts authority. */
+            _mpAssertReviewProjection(board, label = 'review-projection') {
+                if (!board || this._boardPhase(board) !== BananagramsGame.MP_PHASE.REVIEW) return;
+                const partyUids = this._getPlayerUids();
+                if (partyUids.length < 2) return;
+                const layouts = board.reviewLayoutsOrig || board.reviewLayouts || this._reviewLayouts;
+                if (!this._reviewLayoutsReady(layouts, partyUids)) return;
+                const expectedTiles = Object.values(layouts || {})
+                    .reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+                const counts = {};
+                partyUids.forEach((u) => { counts[u] = 0; });
+                (this.tiles || []).forEach((t) => {
+                    const o = t.ownerUid || this._myUid();
+                    if (counts[o] != null) counts[o] += 1;
+                });
+                const missing = partyUids.filter((u) => !counts[u]);
+                const drift = (this.tiles?.length || 0) < expectedTiles || missing.length;
+                if (!drift) return;
+                const detail = {
+                    label,
+                    tileCount: this.tiles?.length,
+                    expectedTiles,
+                    counts,
+                    missing,
+                    boardSeq: board.seq,
+                    reviewEpoch: board.reviewEpoch
+                };
+                if (typeof BananaDev !== 'undefined' && BananaDev.failAuthorityCommit) {
+                    BananaDev.failAuthorityCommit('review projection drift', detail);
+                } else if (this._reviewTraceOn()) {
+                    console.warn('[REVIEW] projection drift', detail);
+                }
+            },
+
+            _setGamePhase(phase) {
+                if (!phase || this._gamePhase === phase) return;
+                this._gamePhase = phase;
+            },
+
+            /**
+             * Single derived phase for command gating (host authority + dev commands).
+             * Most restrictive signal wins — stored _gamePhase never overrides win/review flags.
+             * @returns {'playing'|'win-pending'|'review'|'done'}
+             */
+            deriveGamePhase() {
+                if (this._hostReviewCompleting) return 'done';
+                const order = { playing: 0, 'win-pending': 1, review: 2, done: 3 };
+                const candidates = [];
+                if (this._reviewUiActive?.() || this._isBoardInReview?.()) {
+                    candidates.push('review');
+                }
+                if (this._hostReviewTransitionActive) candidates.push('win-pending');
+                if (this._winnerUid || this._victoryRegistered || this.isOver) {
+                    candidates.push('win-pending');
+                }
+                if (this.isHost?.() && this._gamePhase && this._gamePhase !== 'playing') {
+                    candidates.push(this._gamePhase);
+                }
+                if (!candidates.length) return 'playing';
+                return candidates.reduce(
+                    (best, phase) => (order[phase] >= order[best] ? phase : best),
+                    'playing'
+                );
+            },
+
+            /** Host playing writes, peel, dump, drag, dev solve — only while phase is playing. */
+            canMutatePlayingBoard() {
+                return this.deriveGamePhase() === 'playing';
+            },
+
+            /** @deprecated alias — use !canMutatePlayingBoard() */
+            isPostWinOrReview() {
+                return !this.canMutatePlayingBoard();
+            },
+
+            /** Dev/test snapshot when phase flags drift from board.phase. */
+            gamePhaseSnapshot() {
+                const board = typeof this._boardReviewSnapshot === 'function'
+                    ? this._boardReviewSnapshot()
+                    : null;
+                return {
+                    phase: this.deriveGamePhase(),
+                    storedPhase: this._gamePhase || null,
+                    postGameReview: !!this._postGameReview,
+                    hostReviewTransition: !!this._hostReviewTransitionActive,
+                    hostReviewCompleting: !!this._hostReviewCompleting,
+                    boardPhase: board ? this._boardPhase(board) : null,
+                    winnerUid: this._winnerUid || null,
+                    victoryRegistered: !!this._victoryRegistered,
+                    isOver: !!this.isOver,
+                    boardSeq: this._boardSeq ?? 0,
+                    devSolveSeq: this._devSolveSeq ?? 0
+                };
             },
 
             /** Whether host may write review payloads to RTDB. */
@@ -52,6 +198,7 @@
                     this._hostReviewTransitionActive = false;
                     return;
                 }
+                this._setGamePhase('review');
                 this._postGameReview = true;
                 this._hostReviewTransitionActive = false;
                 this._bindReviewViewportReflow();
@@ -61,6 +208,12 @@
                 this._mpClientBoardPhase = BananagramsGame.MP_PHASE.REVIEW;
                 this._setBoardReadOnly(true);
                 this._syncDoneButton();
+                if (this._isMultiplayerMode?.() && this._winnerUid && !this._victoryRegistered) {
+                    const hostUid = this.roomData?.host || '';
+                    const hubWinner = this._winnerUid === hostUid ? 'P1' : 'P2';
+                    this.clearAutoReset?.();
+                    this._registerVictoryWithoutAutoReset(hubWinner, { winnerUid: this._winnerUid });
+                }
                 window.parent.postMessage({ type: 'post-game-blocking', active: true }, '*');
             },
 
@@ -127,13 +280,22 @@
                 const uids = Object.keys(layouts || {}).sort();
                 return uids.map((uid) => {
                     const tiles = layouts[uid] || [];
-                    const parts = tiles.map((t) => `${t.id}:${Math.round(t.x)},${Math.round(t.y)}`);
+                    const parts = tiles.map((t) => {
+                        const letter = String(t?.letter || '').toUpperCase();
+                        return `${t.id}:${letter}:${Math.round(t.x)},${Math.round(t.y)}`;
+                    });
                     return `${uid}#${tiles.length}#${parts.join(',')}`;
                 }).join('|');
             },
 
             _reviewLayoutPlayerCount(layouts) {
                 return Object.values(layouts || {}).filter((list) => list?.length > 0).length;
+            },
+
+            _reviewLayoutsReady(layouts, partyUids = null) {
+                const uids = (partyUids || this._getPlayerUids()).filter(Boolean);
+                if (uids.length < 2) return true;
+                return uids.every((uid) => Array.isArray(layouts?.[uid]) && layouts[uid].length > 0);
             },
 
             /** Authoritative end-of-game layout for one uid on THIS client only. */
@@ -152,10 +314,56 @@
                     runtimeById[t.id] = t;
                 });
                 const runtimeMine = Object.values(runtimeById);
+                const boardOwned = board?.tilesOwnedByPlayer?.[me] || [];
+                const letterForId = (id, runtimeLetter) => {
+                    const fromBoard = boardOwned.find((o) => o.id === id)?.letter
+                        || owned.find((o) => o.id === id)?.letter;
+                    if (this._isMultiplayerMode?.()) {
+                        if (this.isHost?.()) {
+                            return this._mpCanonicalLetter?.(id, fromBoard || runtimeLetter, 'ending-capture')
+                                || fromBoard || runtimeLetter;
+                        }
+                        return this._mpNormLetter?.(fromBoard || runtimeLetter) || runtimeLetter;
+                    }
+                    return runtimeLetter;
+                };
 
-                // Board/host inventory can lag behind local MP play (e.g. peel-grid fixture ids
-                // still in tilesOwnedByPlayer while this.tiles holds the live crossword).
+                if (runtimeMine.length > 0) {
+                    const ownedIds = new Set(owned.map((o) => o.id));
+                    const source = owned.length
+                        ? runtimeMine.filter((t) => ownedIds.has(t.id))
+                        : runtimeMine;
+                    const extras = owned.length
+                        ? runtimeMine.filter((t) => !ownedIds.has(t.id))
+                        : [];
+                    const merged = [...source, ...extras];
+                    const use = merged.length ? merged : runtimeMine;
+                    return this._serializeHandTiles(use.map((t) => ({
+                        id: t.id,
+                        letter: letterForId(t.id, t.letter),
+                        x: t.x,
+                        y: t.y,
+                        faceUp: !!t.faceUp
+                    })));
+                }
+
                 const ownedOnRuntime = owned.filter((o) => runtimeById[o.id]).length;
+                const ownedLetterDrift = owned.some((o) => {
+                    const rt = runtimeById[o.id];
+                    return rt && String(rt.letter).toUpperCase() !== String(o.letter).toUpperCase();
+                });
+                if (ownedLetterDrift && owned.length) {
+                    return this._serializeHandTiles(owned.map((o) => {
+                        const rt = runtimeById[o.id];
+                        return {
+                            id: o.id,
+                            letter: letterForId(o.id, o.letter),
+                            x: rt?.x,
+                            y: rt?.y,
+                            faceUp: !!(rt?.faceUp ?? o.faceUp)
+                        };
+                    }).filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y)));
+                }
                 const runtimeIsAuthoritative = runtimeMine.length > 0
                     && (!owned.length
                         || runtimeMine.length > owned.length
@@ -167,7 +375,7 @@
                         : runtimeMine;
                     return this._serializeHandTiles(source.map((t) => ({
                         id: t.id,
-                        letter: t.letter,
+                        letter: letterForId(t.id, t.letter),
                         x: t.x,
                         y: t.y,
                         faceUp: !!t.faceUp
@@ -197,10 +405,10 @@
                     if (coords) {
                         merged.push({
                             id: o.id,
-                            letter: o.letter,
+                            letter: letterForId(o.id, rt?.letter ?? o.letter),
                             x: coords.x,
                             y: coords.y,
-                            faceUp: !!o.faceUp
+                            faceUp: rt ? !!rt.faceUp : !!o.faceUp
                         });
                     }
                 });
@@ -389,6 +597,7 @@
                 if (this._reviewViewportReflowBound) return;
                 this._reviewViewportReflowBound = true;
                 const reflow = () => {
+                    if (this._headedMpReviewLock) return;
                     const inReview = typeof this._inReviewExperience === 'function'
                         ? this._inReviewExperience()
                         : this._reviewUiActive();
@@ -404,6 +613,7 @@
             },
 
             _scheduleReviewViewportBurst(source = 'unknown') {
+                if (this._headedMpReviewLock) return;
                 if (!this._inReviewExperience?.()) return;
                 this._reviewDbg('burst', { source });
                 const run = () => {
@@ -450,6 +660,7 @@
             },
 
             _flushReviewViewportImmediate(options = {}) {
+                if (this._headedMpReviewLock) return;
                 if (!this._inReviewExperience?.()) return;
                 if (!this._isCanvasLayoutReady()) {
                     const retry = (this._reviewViewportRetry = (this._reviewViewportRetry || 0) + 1);
@@ -520,6 +731,7 @@
             },
 
             _fitReviewViewportOnce() {
+                if (this._headedMpReviewLock) return;
                 if (!this._inReviewExperience?.()) return;
                 if (!this._isCanvasLayoutReady()) {
                     const retry = (this._reviewFitRetries = (this._reviewFitRetries || 0) + 1);
@@ -626,6 +838,8 @@
 
                 if (this._isMultiplayerMode()) {
                     if (!this.isHost()) return;
+                    this._setGamePhase('win-pending');
+                    this._mpFreezeFinalAuthoritySnapshot?.();
                     this._tilePool = [];
                     this._hostReviewTransitionActive = true;
                     this._reviewEndingLayoutsFrozen = true;
@@ -633,12 +847,14 @@
                         this._hostCancelPendingBoardSync();
                     }
                     this._reviewLayouts = {};
-                    this._getPlayerUids().forEach((uid) => {
-                        const layout = uid === this._myUid()
-                            ? this._freezeMyEndingLayout()
-                            : this._captureRemoteEndingLayoutForUid(uid);
-                        if (layout.length) this._reviewLayouts[uid] = layout;
-                    });
+                    const myUid = this._myUid();
+                    const mine = this._freezeMyEndingLayout();
+                    if (mine.length) this._reviewLayouts[myUid] = mine;
+                    if (typeof this._processBananaInteractions === 'function') {
+                        this._processBananaInteractions(this.roomData?.interactions?.banana);
+                    }
+                    // Loser layouts come from victory-layout (client runtime). Do not seed from
+                    // stale host-owned inventory — that poisons reviewLayoutsOrig before sync.
                     this._hostSyncReviewState();
                     return;
                 }
@@ -668,30 +884,41 @@
                     }
                     const orig = board.reviewLayoutsOrig;
                     const hasOrig = orig && Object.keys(orig).length;
-                    if (hasOrig || (board.reviewLayouts && Object.keys(board.reviewLayouts).length)) {
-                        if (hasOrig) {
-                            this._reviewLayouts = {
-                                ...(this._reviewLayouts || {}),
-                                ...orig
-                            };
-                        } else {
-                            this._reviewLayouts = {
-                                ...(this._reviewLayouts || {}),
-                                ...board.reviewLayouts
-                            };
+                    const hasDisplay = board.reviewLayouts && Object.keys(board.reviewLayouts).length;
+                    if (hasOrig || hasDisplay) {
+                        const partyUids = this._getPlayerUids();
+                        let origMerged = {
+                            ...(this._reviewLayouts || {}),
+                            ...(hasOrig ? orig : board.reviewLayouts)
+                        };
+                        if (!this.isHost()) {
+                            const me = this._myUid();
+                            if (!origMerged[me]?.length) {
+                                const mine = this._endingLayoutsCache?.[me]
+                                    || this._captureEndingLayoutForUid(me);
+                                if (mine?.length) origMerged[me] = mine;
+                            }
                         }
-                        const display = hasOrig && typeof this._displayReviewLayoutsFromOrig === 'function'
-                            ? this._displayReviewLayoutsFromOrig(orig)
-                            : board.reviewLayouts;
+                        this._reviewLayouts = origMerged;
+                        if (!this._reviewLayoutsReady(origMerged, partyUids)) {
+                            return;
+                        }
+                        const display = typeof this._displayReviewLayoutsFromOrig === 'function'
+                            ? this._displayReviewLayoutsFromOrig(origMerged)
+                            : (hasDisplay ? board.reviewLayouts : origMerged);
                         this._reviewLayoutsSyncedFp = this._reviewLayoutsFingerprint(display);
                         this._applyReviewLayouts(display);
+                        this._activateReviewUi();
+                        this._ensureReviewTilesProjected(board);
+                        this._mpAssertReviewProjection(board, 'applyMpReviewFromBoard');
                     }
-                    this._activateReviewUi();
                     return;
                 }
 
                 if (this._boardPhase(board) !== BananagramsGame.MP_PHASE.REVIEW && this._reviewUiActive()) {
-                    this._exitReviewLocalState();
+                    if (!this._winnerUid && !this.isOver && !this._hostReviewTransitionActive) {
+                        this._exitReviewLocalState();
+                    }
                 }
             },
 
@@ -706,18 +933,11 @@
             _isStalePlayingBoardWhileInReview(board, options = {}) {
                 if (!board || options.reset) return false;
                 if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW) return false;
-                const locallyInReview = this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW
-                    || this._isBoardInReview(this._boardReviewSnapshot());
-                if (!locallyInReview) return false;
-                const hasWinner = !!(this._winnerUid
-                    || this.roomData?.winnerUid
-                    || this.roomData?.global?.board?.winnerUid
-                    || board.winnerUid);
-                if (!hasWinner && !this.isOver) return false;
+                if (this._shouldApplyPlayingBoardSnapshot(board, options)) return false;
                 const incomingSeq = board.seq ?? 0;
                 const localSeq = this._boardSeq ?? 0;
                 if (incomingSeq < localSeq) return true;
-                return incomingSeq <= localSeq;
+                return true;
             },
 
             _isStaleReviewBoard(board) {
@@ -789,6 +1009,7 @@
                 const hadReviewViewport = !!this._reviewViewportSettled;
                 const leavingVictory = this._reviewUiActive() || this._victoryRegistered || this.isOver;
                 const needsViewportReset = leavingVictory || wasInReviewPhase || hadReviewViewport;
+                this._setGamePhase('playing');
                 this._postGameReview = false;
                 this._hostReviewTransitionActive = false;
                 this._reviewLayouts = null;
@@ -864,10 +1085,7 @@
                         const frozen = this._endingLayoutsCache?.[uid]
                             || this._captureEndingLayoutForUid(uid);
                         if (frozen.length) layouts[uid] = frozen;
-                        return;
                     }
-                    const remote = this._captureRemoteEndingLayoutForUid(uid);
-                    if (remote.length) layouts[uid] = remote;
                 });
                 this._reviewLayouts = layouts;
                 return layouts;
@@ -884,6 +1102,7 @@
 
             _hostBeginNextRound() {
                 if (!this.isHost() || !this._isMultiplayerMode()) return;
+                this._setGamePhase('done');
                 this._hostReviewCompleting = true;
                 this._dismissHubWinBanner();
                 this._closeReviewEpoch();
@@ -894,13 +1113,7 @@
                 this._mpStartedAt = null;
                 this._stopTimer();
                 this.resetGame();
-                const board = this._boardReviewSnapshot();
-                const leftReview = board
-                    && this._boardPhase(board) === BananagramsGame.MP_PHASE.PLAYING
-                    && (board.reviewEpoch ?? 0) === 0;
-                if (leftReview) {
-                    this._hostReviewCompleting = false;
-                }
+                this._hostReviewCompleting = false;
             },
 
             _applyReviewLayouts(layouts) {
@@ -973,6 +1186,15 @@
                 const partySize = uids.length;
                 const hadAllPlayers = prevPlayers >= partySize;
                 const haveAllPlayers = nextPlayers >= partySize;
+
+                if (partySize >= 2) {
+                    if (!this._reviewLayoutsReady(layouts, uids)) {
+                        return;
+                    }
+                    if (hadAllPlayers && !haveAllPlayers) {
+                        return;
+                    }
+                }
 
                 this.tiles = deduped;
                 this._reviewLayoutsFp = fingerprint;

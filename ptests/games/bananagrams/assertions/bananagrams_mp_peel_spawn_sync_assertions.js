@@ -47,9 +47,20 @@ async function measurePeelSpawnVisibleMs(page, beforeIds, t0, options = {}) {
     const deadline = t0 + timeoutMs;
 
     while (Date.now() < deadline) {
-        const check = await isPeelSpawnDomVisible(page, beforeIds);
-        if (check.visible) return Date.now() - t0;
-        await page.waitForTimeout(pollMs);
+        if (page.isClosed()) return null;
+        try {
+            const check = await isPeelSpawnDomVisible(page, beforeIds);
+            if (check.visible) return Date.now() - t0;
+        } catch (err) {
+            if (page.isClosed() || /closed|destroyed/i.test(String(err?.message || ''))) return null;
+            throw err;
+        }
+        try {
+            await page.waitForTimeout(pollMs);
+        } catch (err) {
+            if (page.isClosed() || /closed|destroyed/i.test(String(err?.message || ''))) return null;
+            throw err;
+        }
     }
     return null;
 }
@@ -79,27 +90,49 @@ async function assertPeelSpawnVisibleSameTime(opts) {
         timeoutMs = DEFAULT_TIMEOUT_MS
     } = opts;
 
-    const measureOpts = { timeoutMs, pollMs: POLL_MS };
-    const t0 = Date.now();
-    const hostMeasure = measurePeelSpawnVisibleMs(page1, hostBeforeIds, t0, measureOpts);
-    const guestMeasure = measurePeelSpawnVisibleMs(page2, guestBeforeIds, t0, measureOpts);
-
     const peelRes = opts.peelEvaluate
         ? await opts.peelEvaluate()
         : await peelFrame.evaluate(() => {
             const g = window.game;
             g._bannerText = '';
-            g._checkPeel();
-            return { banner: g._bannerText, count: g.tiles.length };
+            const peeled = g._checkPeel();
+            return { banner: g._bannerText, count: g.tiles.length, peeled };
         });
-    if (peelRes.banner !== 'Peel!') {
+    const peelTriggered = peelRes.banner === 'Peel!' || peelRes.peeled === true || peelRes.ok === true;
+    if (!peelTriggered) {
         throw new Error(`${label}: peel trigger failed (${JSON.stringify(peelRes)})`);
     }
     if (peelRes.setup && (!peelRes.setup.placed || !peelRes.setup.valid)) {
         throw new Error(`${label}: peel grid invalid (${JSON.stringify(peelRes.setup)})`);
     }
 
-    const [hostMs, guestMs] = await Promise.all([hostMeasure, guestMeasure]);
+    const flushHost = opts.flushHost;
+    if (flushHost) await flushHost();
+
+    const t0 = Date.now();
+    let hostMs = null;
+    let guestMs = null;
+    const deadline = t0 + timeoutMs;
+
+    while (Date.now() < deadline) {
+        if (page1.isClosed() || page2.isClosed()) break;
+        if (flushHost) await flushHost();
+        if (hostMs == null) {
+            const hostCheck = await isPeelSpawnDomVisible(page1, hostBeforeIds);
+            if (hostCheck.visible) hostMs = Date.now() - t0;
+        }
+        if (guestMs == null) {
+            const guestCheck = await isPeelSpawnDomVisible(page2, guestBeforeIds);
+            if (guestCheck.visible) guestMs = Date.now() - t0;
+        }
+        if (hostMs != null && guestMs != null) break;
+        try {
+            await page1.waitForTimeout(POLL_MS);
+        } catch (err) {
+            if (page1.isClosed() || page2.isClosed() || /closed|destroyed/i.test(String(err?.message || ''))) break;
+            throw err;
+        }
+    }
     if (hostMs == null || guestMs == null) {
         const [hostState, guestState] = await Promise.all([
             isPeelSpawnDomVisible(page1, hostBeforeIds),

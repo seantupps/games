@@ -7,20 +7,19 @@ require('./shared/infra/bootstrap');
 const path = require('path');
 const { spawn } = require('child_process');
 const {
-    parseRunSpec,
-    applyRunSpecEnv,
     formatAuditLabel,
     printRunHelp,
     matchesGameFilter,
     includesPlayerCount,
     isOnlyPlayerCount
 } = require('./shared/infra/run-spec');
-const { awaitBrowserDismissal } = require('./shared/infra/env-defaults');
+const { initRunConfig, setActiveRunConfig } = require('./shared/infra/run-config');
+const { endPlaywrightRun } = require('./shared/infra/env-defaults');
 
 const ROOT = __dirname;
 
-function forwardEnv(spec) {
-    applyRunSpecEnv(spec);
+function forwardConfig(spec) {
+    setActiveRunConfig(spec);
 }
 
 function runNodeScript(relScript, extraArgv = []) {
@@ -44,30 +43,24 @@ async function runHub() {
     return main();
 }
 
-async function runSp() {
+async function runSp(spec) {
     const { runSpSuite } = require('./platform/desktop/run-sp');
-    return runSpSuite({ summarize: true });
+    return runSpSuite({ summarize: false, spec });
 }
 
 function useFullMpSuite(spec) {
     return spec.mode === 'mp' && !spec.game && !spec.slimAudit;
 }
 
-function applyMpSuiteEnv(spec) {
-    if (spec.suite !== 'default') {
-        process.env.FIVE_MP_SUITE = spec.suite;
-        return;
-    }
+function applyMpSuiteDefaults(spec) {
+    if (spec.suite !== 'default') return;
     if (useFullMpSuite(spec)) {
         spec.suite = 'all';
-        process.env.FIVE_MP_SUITE = 'all';
         return;
     }
     if (matchesGameFilter(spec.game, 'bananagrams')) {
         spec.suite = 'extended';
-        process.env.FIVE_MP_SUITE = 'extended';
         spec.skipPlatform = true;
-        process.env.FIVE_MP_SKIP_PLATFORM = '1';
     }
 }
 
@@ -89,7 +82,7 @@ async function runMp3p(spec, opts = {}) {
 }
 
 async function runCombinedMpSuite(spec) {
-    const { printSuiteHeader, printBenchmarkResults } = require('./shared/infra/runner-results');
+    const { printSuiteHeader, emitBenchmarkSummary } = require('./shared/infra/runner-results');
     const summarize = spec.summarize !== false;
     const wants2 = includesPlayerCount(spec, 2);
     const wants3 = includesPlayerCount(spec, 3);
@@ -110,7 +103,7 @@ async function runCombinedMpSuite(spec) {
             priorPassed = mobileOut.allPassed;
         } else {
             const { runMpSuite } = require('./platform/desktop/run-mp');
-            const mpOut = await runMpSuite({ summarize: false });
+            const mpOut = await runMpSuite({ summarize: false, spec });
             allResults.push(...mpOut.results);
             priorPassed = mpOut.allPassed;
         }
@@ -128,23 +121,20 @@ async function runCombinedMpSuite(spec) {
     const totalDuration = ((Date.now() - totalStart) / 1000).toFixed(2);
     const allPassed = allResults.length > 0 && allResults.every((r) => r.success) && priorPassed;
 
+    const out = { results: allResults, allPassed, totalDuration };
+
     if (summarize) {
-        printBenchmarkResults({
-            results: allResults,
-            totalDuration,
+        emitBenchmarkSummary(out, {
             namePad: 28,
-            title: 'BENCHMARK RESULTS'
+            failMessage: 'MP suite had failures'
         });
-        if (!allPassed) {
-            throw new Error('MP suite had failures');
-        }
     }
 
-    return { results: allResults, allPassed, totalDuration };
+    return out;
 }
 
 async function runMp(spec) {
-    applyMpSuiteEnv(spec);
+    applyMpSuiteDefaults(spec);
     const summarize = spec.summarize !== false;
 
     if (spec.slimAudit && spec.game?.includes('piles') && spec.topology !== 'mobile') {
@@ -174,7 +164,7 @@ async function runMp(spec) {
 
     if (includesPlayerCount(spec, 2)) {
         const { runMpSuite } = require('./platform/desktop/run-mp');
-        const out = await runMpSuite({ summarize });
+        const out = await runMpSuite({ summarize, spec });
         if (!summarize) return out;
         if (!out.allPassed) {
             throw new Error('Desktop MP suite had failures');
@@ -186,7 +176,7 @@ async function runMp(spec) {
 }
 
 async function runMobile(spec) {
-    applyMpSuiteEnv(spec);
+    applyMpSuiteDefaults(spec);
     const wantsBoth = includesPlayerCount(spec, 2) && includesPlayerCount(spec, 3);
     if (spec.mode === 'mp' && (useFullMpSuite(spec) || wantsBoth)) {
         return runCombinedMpSuite({ ...spec, topology: 'mobile' });
@@ -195,81 +185,111 @@ async function runMobile(spec) {
     return mainInner(spec);
 }
 
+function printRunSuiteHeader(spec) {
+    const { printSuiteHeader } = require('./shared/infra/runner-results');
+    if (spec.mode === 'mp' && isOnlyPlayerCount(spec, 3)) {
+        printSuiteHeader('BANANAGRAMS MP 3P', [
+            `${spec.topology || 'desktop'}${spec.topology === 'mobile' ? ', all mobile' : ''}`,
+            spec.scenario ? `scenario=${spec.scenario}` : 'full audit'
+        ]);
+        return;
+    }
+    if (spec.topology === 'mobile') {
+        const { resolveDeviceName } = require('./platform/mobile/lib/mobile-utils');
+        const device = resolveDeviceName();
+        printSuiteHeader('MOBILE PLAYWRIGHT SUITE (EMULATED)', [
+            `Device: ${device}  |  ${process.env.FIVE_BASE_URL}`,
+            `mode=${spec.mode}${spec.game ? ` game=${spec.game}` : ''}${spec.scenario ? ` scenario=${spec.scenario}` : ''}${spec.skipPlatform ? ' (no platform)' : ''}`
+        ]);
+        return;
+    }
+    if (spec.mode === 'all') {
+        printSuiteHeader('FULL RUN — SP + MP');
+    } else if (spec.mode === 'sp') {
+        printSuiteHeader('SINGLE-LAUNCH CONCURRENT BENCHMARK RUNNER');
+    } else if (spec.mode === 'mp') {
+        printSuiteHeader('DESKTOP MULTIPLAYER SUITE');
+    }
+}
+
+function resolveBenchmarkTarget(spec) {
+    if (spec.mode === 'sp' && !spec.game) return 3.0;
+    if (spec.topology === 'mobile' && spec.mode === 'mp' && spec.scenario === 'actions') {
+        return Number(process.env.FIVE_MOBILE_MP_TARGET_S || 10);
+    }
+    return null;
+}
+
+function benchmarkNamePad(spec) {
+    if (spec.mode === 'all') return 32;
+    if (spec.topology === 'mobile' || spec.mode === 'mp') return 28;
+    return 16;
+}
+
+function benchmarkTitle(spec) {
+    return spec.mode === 'all' ? 'ALL RESULTS' : 'BENCHMARK RESULTS';
+}
+
+function benchmarkFailMessage(spec) {
+    if (spec.topology === 'mobile') return 'Mobile test suite had failures';
+    if (spec.mode === 'sp') return 'SP suite had failures';
+    if (spec.mode === 'mp') return 'Desktop MP suite had failures';
+    if (spec.mode === 'all') return 'Combined SP+MP run had failures';
+    return 'Suite had failures';
+}
+
 /**
  * Run one topology (desktop | mobile | mixed). When summarize is false, returns { allPassed, results }.
  * @param {import('./shared/infra/run-spec').RunSpec} spec
  */
 async function runSingleTopology(spec) {
     const summarize = spec.summarize !== false;
-    const { prefixResults } = require('./shared/infra/runner-results');
+    const { emitBenchmarkSummary, prefixResults } = require('./shared/infra/runner-results');
+
+    if (summarize && spec.mode !== 'hub') {
+        printRunSuiteHeader(spec);
+    }
+
+    let out = null;
 
     if (spec.topology === 'mobile') {
         if (spec.mode === 'mp' && isOnlyPlayerCount(spec, 3)) {
-            const out = await runMp3p(spec, { summarize });
-            if (!summarize) return out;
-            return;
+            out = await runMp3p({ ...spec, summarize: false }, { summarize: false });
+        } else {
+            out = await runMobile({ ...spec, summarize: false });
         }
-        const out = await runMobile({ ...spec, summarize: false });
-        if (!summarize) return out;
-        if (!out.allPassed) {
-            throw new Error('Mobile test suite had failures');
-        }
-        return;
-    }
-
-    if (spec.mode === 'hub') {
+    } else if (spec.mode === 'hub') {
         await runHub();
         return summarize ? undefined : { allPassed: true, results: [] };
-    }
-
-    if (spec.mode === 'all') {
-        const { runSpSuite } = require('./platform/desktop/run-sp');
-        const { printSuiteHeader, printBenchmarkResults } = require('./shared/infra/runner-results');
+    } else if (spec.mode === 'all') {
         const totalStart = Date.now();
-        if (summarize) {
-            printSuiteHeader('FULL RUN — SP + MP');
-        }
-        const spOut = await runSpSuite({ summarize: false });
+        const spOut = await runSp({ ...spec, summarize: false });
         const mpOut = await runCombinedMpSuite({ ...spec, summarize: false });
-        const results = [
-            ...prefixResults(spOut.results, 'SP'),
-            ...prefixResults(mpOut.results, 'MP')
-        ];
-        const totalDuration = ((Date.now() - totalStart) / 1000).toFixed(2);
-        const allPassed = spOut.allPassed && mpOut.allPassed;
-        if (summarize) {
-            printBenchmarkResults({
-                results,
-                totalDuration,
-                namePad: 32,
-                title: 'ALL RESULTS'
-            });
-            if (!allPassed) {
-                throw new Error('Combined SP+MP run had failures');
-            }
-            return;
-        }
-        return { allPassed, results, totalDuration };
+        out = {
+            results: [
+                ...prefixResults(spOut.results, 'SP'),
+                ...prefixResults(mpOut.results, 'MP')
+            ],
+            allPassed: spOut.allPassed && mpOut.allPassed,
+            totalDuration: ((Date.now() - totalStart) / 1000).toFixed(2)
+        };
+    } else if (spec.mode === 'sp') {
+        out = await runSp({ ...spec, summarize: false });
+    } else if (spec.mode === 'mp') {
+        out = await runMp({ ...spec, summarize: false });
+    } else {
+        throw new Error(`Unhandled run spec: ${JSON.stringify(spec)}`);
     }
 
-    if (spec.mode === 'sp') {
-        if (summarize) {
-            await runSp();
-            return;
-        }
-        const { runSpSuite } = require('./platform/desktop/run-sp');
-        return runSpSuite({ summarize: false });
+    if (summarize && out) {
+        emitBenchmarkSummary(out, {
+            namePad: benchmarkNamePad(spec),
+            targetSeconds: resolveBenchmarkTarget(spec),
+            title: benchmarkTitle(spec),
+            failMessage: benchmarkFailMessage(spec)
+        });
     }
-
-    if (spec.mode === 'mp') {
-        if (summarize) {
-            await runMp(spec);
-            return;
-        }
-        return runMp({ ...spec, summarize: false });
-    }
-
-    throw new Error(`Unhandled run spec: ${JSON.stringify(spec)}`);
+    return out;
 }
 
 /**
@@ -277,7 +297,7 @@ async function runSingleTopology(spec) {
  * @param {import('./shared/infra/run-spec').RunSpec} spec
  */
 async function runAllTopologies(spec) {
-    const { printSuiteHeader, printBenchmarkResults, prefixResults } = require('./shared/infra/runner-results');
+    const { printSuiteHeader, emitBenchmarkSummary, prefixResults } = require('./shared/infra/runner-results');
     const summarize = spec.summarize !== false;
     const topologies = spec.mode === 'hub' ? ['desktop'] : ['desktop', 'mobile'];
     const totalStart = Date.now();
@@ -287,8 +307,8 @@ async function runAllTopologies(spec) {
     for (const topology of topologies) {
         if (!allPassed) break;
         const child = { ...spec, topology, summarize: false };
-        forwardEnv(child);
-        applyMpSuiteEnv(child);
+        forwardConfig(child);
+        applyMpSuiteDefaults(child);
 
         if (summarize) {
             printSuiteHeader(`${topology.toUpperCase()} — ${spec.mode.toUpperCase()}${spec.game ? ` game=${spec.game}` : ''}`);
@@ -316,22 +336,21 @@ async function runAllTopologies(spec) {
 
     if (summarize) {
         const totalDuration = ((Date.now() - totalStart) / 1000).toFixed(2);
-        printBenchmarkResults({
-            results: combined,
-            totalDuration,
-            namePad: 32,
-            title: 'BENCHMARK RESULTS (desktop + mobile)'
-        });
-        if (!allPassed) {
-            throw new Error('Dual-topology suite had failures');
-        }
+        emitBenchmarkSummary(
+            { results: combined, allPassed, totalDuration },
+            {
+                namePad: 32,
+                title: 'BENCHMARK RESULTS (desktop + mobile)',
+                failMessage: 'Dual-topology suite had failures'
+            }
+        );
     }
 
     return { allPassed, results: combined };
 }
 
 async function main() {
-    const spec = parseRunSpec(process.argv.slice(2));
+    const spec = initRunConfig(process.argv.slice(2));
     if (spec.help) {
         printRunHelp();
         return;
@@ -339,17 +358,21 @@ async function main() {
 
     let failed = false;
     try {
+        if (spec.manualTest) {
+            const { runManualTest } = require('./shared/infra/manual-test');
+            await runManualTest(spec);
+            return;
+        }
         if (spec.topology === 'all') {
             await runAllTopologies(spec);
         } else {
-            forwardEnv(spec);
             await runSingleTopology(spec);
         }
     } catch (err) {
         failed = true;
         throw err;
     } finally {
-        await awaitBrowserDismissal();
+        await endPlaywrightRun();
         if (failed) process.exitCode = 1;
     }
 }

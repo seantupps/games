@@ -1,4 +1,6 @@
 require('../../shared/infra/bootstrap');
+const { ensureRunConfig, getActiveRunConfig } = require('../../shared/infra/run-config');
+ensureRunConfig(process.argv.slice(2));
 
 const { chromium } = require('playwright');
 const { runGameAudit } = require('../../shared/infra/audit_base');
@@ -7,11 +9,16 @@ const { buildSingleplayerAudits } = require('../../shared/infra/test-manifest');
 const { runAllComponents } = require('../../hub/runner');
 const { filterAuditsByGame } = require('../../shared/infra/run-spec');
 const { ensureTestStack } = require('../../shared/infra/emulator-utils');
-const { playwrightHeadless, shouldCloseBrowser, playwrightSlowMo } = require('../../shared/infra/env-defaults');
+const {
+    playwrightHeadless,
+    shouldCloseBrowser, playwrightSlowMo, registerKeepOpenBrowser
+} = require('../../shared/infra/env-defaults');
 const { runnerLog, printSuiteHeader, printBenchmarkResults, hubSubResultsToBenchmark, isRunnerQuiet } = require('../../shared/infra/runner-results');
+const { DESKTOP_VIEWPORT } = require('../../shared/infra/viewport-constants');
 
 async function runSpSuite(options = {}) {
     const { summarize = true } = options;
+    const spec = options.spec || getActiveRunConfig();
     const totalStart = Date.now();
     if (summarize) {
         printSuiteHeader('SINGLE-LAUNCH CONCURRENT BENCHMARK RUNNER');
@@ -19,14 +26,16 @@ async function runSpSuite(options = {}) {
 
     await ensureTestStack();
 
-    const gameFilter = process.env.FIVE_GAME || null;
+    const gameFilter = spec.game || null;
     const skipGlobalHub = !!gameFilter;
 
     const browser = await chromium.launch({
         headless: playwrightHeadless(),
         slowMo: playwrightSlowMo()
     });
+    registerKeepOpenBrowser(browser);
 
+    try {
     let hubResult;
     if (!skipGlobalHub) {
         const hubStart = Date.now();
@@ -57,19 +66,21 @@ async function runSpSuite(options = {}) {
         return { results: hubResult ? [hubResult] : [], allPassed: false, totalDuration: '0.00', error: err.message };
     }
 
+    const keepOpen = !shouldCloseBrowser();
+
     const runWithSingleBrowser = async (test) => {
         const start = Date.now();
         runnerLog(`[RUNNER] Starting test page: ${test.name}...`);
+        const context = await browser.newContext({ viewport: DESKTOP_VIEWPORT });
+        const page = await context.newPage();
         try {
-            const context = await browser.newContext();
-            const page = await context.newPage();
-
             await runGameAudit(test.gameId, {
                 ...test.config,
                 page,
                 context,
                 browser,
-                skipStackCheck: true
+                skipStackCheck: true,
+                manageContext: !keepOpen
             });
 
             const duration = (Date.now() - start) / 1000;
@@ -86,16 +97,13 @@ async function runSpSuite(options = {}) {
                 duration: duration.toFixed(2),
                 error: err.message
             };
+        } finally {
+            if (!keepOpen) await context.close().catch(() => {});
         }
     };
 
     const gameResults = await Promise.all(tests.map((test) => runWithSingleBrowser(test)));
     const results = hubResult ? [hubResult, ...gameResults] : gameResults;
-
-    runnerLog('[RUNNER] Closing Chromium Browser...');
-    if (shouldCloseBrowser()) {
-        await browser.close();
-    }
 
     const totalDuration = ((Date.now() - totalStart) / 1000).toFixed(2);
     const allPassed = results.length > 0 && results.every((r) => r.success);
@@ -112,6 +120,11 @@ async function runSpSuite(options = {}) {
     }
 
     return { results, allPassed, totalDuration };
+    } finally {
+        if (shouldCloseBrowser()) {
+            await browser.close().catch(() => {});
+        }
+    }
 }
 
 async function main() {
@@ -121,11 +134,11 @@ async function main() {
 module.exports = { main, runSpSuite };
 
 if (require.main === module) {
-    const { awaitBrowserDismissal } = require('../../shared/infra/env-defaults');
+    const { endPlaywrightRun } = require('../../shared/infra/env-defaults');
     main()
         .catch((err) => {
             console.error(err.message || err);
             process.exitCode = 1;
         })
-        .finally(() => awaitBrowserDismissal());
+        .finally(() => endPlaywrightRun());
 }

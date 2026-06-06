@@ -13,21 +13,22 @@
  *   npm run all -- --cross-client
  */
 require('./shared/infra/bootstrap');
+const { ensureRunConfig, setActiveRunConfig, createDefaultRunConfig } = require('./shared/infra/run-config');
+ensureRunConfig(process.argv.slice(2));
 
 const { ensureTestStack } = require('./shared/infra/emulator-utils');
 const { printSuiteHeader, printBenchmarkResults, prefixResults, runnerLog } = require('./shared/infra/runner-results');
-const { awaitBrowserDismissal } = require('./shared/infra/env-defaults');
+const { endPlaywrightRun } = require('./shared/infra/env-defaults');
 
 function parseAllFlags(argv = process.argv.slice(2)) {
-    const crossClient = argv.includes('--cross-client')
-        || argv.includes('--phone-path')
-        || process.env.FIVE_CROSS_CLIENT === '1';
+    const crossClient = argv.includes('--cross-client') || argv.includes('--phone-path');
     return { crossClient };
 }
 
 /** Minimal spec for embedded phases — avoid parseRunSpec([]) defaulting mode=all, players=1. */
 function fullSuiteSpec(overrides = {}) {
     return {
+        ...createDefaultRunConfig(),
         mode: 'mp',
         topology: 'desktop',
         playerCounts: [2],
@@ -38,6 +39,11 @@ function fullSuiteSpec(overrides = {}) {
         skipStackCheck: true,
         ...overrides
     };
+}
+
+function activateSpec(spec) {
+    setActiveRunConfig(spec);
+    return spec;
 }
 
 /**
@@ -83,35 +89,34 @@ async function main(argv = process.argv.slice(2)) {
         {
             name: 'Desktop SP',
             run: async () => {
+                const spec = activateSpec(fullSuiteSpec({ mode: 'sp' }));
                 const { runSpSuite } = require('./platform/desktop/run-sp');
-                return runSpSuite({ summarize: false });
+                return runSpSuite({ summarize: false, spec });
             }
         },
         {
             name: 'Desktop MP 2p',
             run: async () => {
-                process.env.FIVE_MP_SUITE = 'all';
-                const { runCombinedMpSuite } = require('./run');
-                return runCombinedMpSuite(fullSuiteSpec({
+                const spec = activateSpec(fullSuiteSpec({
                     topology: 'desktop',
                     playerCounts: [2],
                     players: 2
                 }));
+                const { runCombinedMpSuite } = require('./run');
+                return runCombinedMpSuite(spec);
             }
         },
         {
             name: 'Desktop MP 3p',
             run: async () => {
+                const spec = activateSpec(fullSuiteSpec({
+                    topology: 'desktop',
+                    game: 'bananagrams',
+                    playerCounts: [3],
+                    players: 3
+                }));
                 const { runMp3p } = require('./run');
-                return runMp3p(
-                    fullSuiteSpec({
-                        topology: 'desktop',
-                        game: 'bananagrams',
-                        playerCounts: [3],
-                        players: 3
-                    }),
-                    { summarize: false }
-                );
+                return runMp3p(spec, { summarize: false });
             }
         },
         {
@@ -134,40 +139,39 @@ async function main(argv = process.argv.slice(2)) {
         {
             name: 'Mobile SP',
             run: async () => {
-                const { mainInner } = require('./platform/mobile/run-suite');
-                return mainInner(fullSuiteSpec({
+                const spec = activateSpec(fullSuiteSpec({
                     mode: 'sp',
                     topology: 'mobile'
                 }));
+                const { mainInner } = require('./platform/mobile/run-suite');
+                return mainInner(spec);
             }
         },
         {
             name: 'Mobile MP 2p',
             run: async () => {
-                process.env.FIVE_MP_SUITE = 'all';
-                const { runCombinedMpSuite } = require('./run');
-                return runCombinedMpSuite(fullSuiteSpec({
+                const spec = activateSpec(fullSuiteSpec({
                     mode: 'mp',
                     topology: 'mobile',
                     playerCounts: [2],
                     players: 2,
                     skipPlatform: true
                 }));
+                const { runCombinedMpSuite } = require('./run');
+                return runCombinedMpSuite(spec);
             }
         },
         {
             name: 'Mobile MP 3p',
             run: async () => {
+                const spec = activateSpec(fullSuiteSpec({
+                    topology: 'mobile',
+                    game: 'bananagrams',
+                    playerCounts: [3],
+                    players: 3
+                }));
                 const { runMp3p } = require('./run');
-                return runMp3p(
-                    fullSuiteSpec({
-                        topology: 'mobile',
-                        game: 'bananagrams',
-                        playerCounts: [3],
-                        players: 3
-                    }),
-                    { summarize: false }
-                );
+                return runMp3p(spec, { summarize: false });
             }
         }
     ];
@@ -210,5 +214,5 @@ if (require.main === module) {
             console.error(err.message || err);
             process.exit(1);
         })
-        .finally(() => awaitBrowserDismissal());
+        .finally(() => endPlaywrightRun());
 }

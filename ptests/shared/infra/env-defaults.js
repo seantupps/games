@@ -119,6 +119,7 @@ function defaultBootstrapProfiles(extra = []) {
 
 const HEADED_ARGV = new Set(['-h', '--h', '--headed']);
 const KEEP_OPEN_ARGV = new Set(['--open', '--keep-open', '--keep-browser']);
+const MANUAL_TEST_ARGV = new Set(['--test']);
 
 /** @param {string[]} [argv] */
 function parseHeadedFromArgv(argv = process.argv.slice(2)) {
@@ -130,79 +131,153 @@ function parseKeepBrowserOpenFromArgv(argv = process.argv.slice(2)) {
     return argv.some((a) => KEEP_OPEN_ARGV.has(a));
 }
 
-/** npm run script -- --headed (Windows often leaves this in env, not argv). */
-function parseHeadedFromNpmConfig() {
-    const v = process.env.npm_config_headed;
-    if (v == null || v === 'false' || v === '0') return false;
-    return v === 'true' || v === '1' || v === '';
+/** @param {string[]} [argv] */
+function parseManualTestFromArgv(argv = process.argv.slice(2)) {
+    return argv.some((a) => MANUAL_TEST_ARGV.has(a));
 }
 
-/** npm run script -- --open */
-function parseKeepOpenFromNpmConfig() {
-    const v = process.env.npm_config_open;
-    if (v == null || v === 'false' || v === '0') return false;
-    return v === 'true' || v === '1' || v === '';
+/** --test on argv for this invocation only. */
+function isManualTestFromCli(argv = process.argv.slice(2)) {
+    return parseManualTestFromArgv(argv);
 }
 
-/** Explicit headed request for this process — argv/npm only, not stale FIVE_HEADED. */
+/** Manual test mode — RunConfig when parsed from argv, else argv/npm for this invocation. */
+function isManualTestRequested(argv = process.argv.slice(2)) {
+    try {
+        const { isManualTestMode, isRunConfigFromArgv } = require('./run-config');
+        if (isRunConfigFromArgv()) return isManualTestMode();
+    } catch (_) { /* run-config optional */ }
+    return isManualTestFromCli(argv);
+}
+
+/** Headed request from argv for this invocation (--open/--test imply headed). */
+function isHeadedFromCli(argv = process.argv.slice(2)) {
+    return parseHeadedFromArgv(argv)
+        || isKeepOpenFromCli(argv)
+        || isManualTestFromCli(argv);
+}
+
+/** Headed — RunConfig when parsed from argv, else argv/npm for this invocation. */
 function isHeadedRequested(argv = process.argv.slice(2)) {
-    return parseHeadedFromArgv(argv) || parseHeadedFromNpmConfig();
+    try {
+        const { getActiveRunConfig, isRunConfigFromArgv } = require('./run-config');
+        if (isRunConfigFromArgv()) return !!getActiveRunConfig().headed;
+    } catch (_) { /* run-config optional */ }
+    return isHeadedFromCli(argv);
 }
 
-/** Explicit keep-open request — argv/npm only, not stale FIVE_KEEP_BROWSER_OPEN. */
+/** Keep-open from argv for this invocation. */
+function isKeepOpenFromCli(argv = process.argv.slice(2)) {
+    return parseKeepBrowserOpenFromArgv(argv);
+}
+
+/** Keep-open — RunConfig when parsed from argv, else argv/npm. */
 function isKeepOpenRequested(argv = process.argv.slice(2)) {
-    return parseKeepBrowserOpenFromArgv(argv) || parseKeepOpenFromNpmConfig();
+    try {
+        const { getActiveRunConfig, isRunConfigFromArgv } = require('./run-config');
+        if (isRunConfigFromArgv()) return !!getActiveRunConfig().keepBrowserOpen;
+    } catch (_) { /* run-config optional */ }
+    return isKeepOpenFromCli(argv);
 }
 
-/** Default headless unless FIVE_HEADLESS=0 or FIVE_HEADED=1 (or --h on argv). */
+/** Headless unless active RunConfig.headed (CLI source of truth). */
 function playwrightHeadless() {
-    if (process.env.FIVE_HEADED === '1' || process.env.FIVE_HEADLESS === '0') return false;
-    return true;
+    const { isHeadless } = require('./run-config');
+    return isHeadless();
 }
 
-/** SlowMo value from FIVE_SLOW_MO env var. */
+/** SlowMo from active RunConfig (--slow). */
 function playwrightSlowMo() {
-    const v = Number(process.env.FIVE_SLOW_MO || 0);
-    return v > 0 ? v : 0;
+    try {
+        const { getSlowMo } = require('./run-config');
+        return getSlowMo();
+    } catch (_) {
+        return 0;
+    }
+}
+
+/** @type {Set<import('playwright').Browser>} */
+const keepOpenBrowsers = new Set();
+
+/** Track a browser for --open runs so awaitBrowserDismissal can exit when it closes. */
+function registerKeepOpenBrowser(browser) {
+    if (!browser || shouldCloseBrowser()) return;
+    keepOpenBrowsers.add(browser);
+}
+
+function pruneDisconnectedKeepOpenBrowsers() {
+    for (const browser of keepOpenBrowsers) {
+        if (!browser.isConnected()) keepOpenBrowsers.delete(browser);
+    }
 }
 
 /** Whether the browser should automatically close after the test. */
 function shouldCloseBrowser() {
-    // Keep headed window open for manual inspection: FIVE_KEEP_BROWSER_OPEN=1 (or --open / --keep-open).
-    if (process.env.FIVE_KEEP_BROWSER_OPEN === '1') return false;
-    return true;
+    const { shouldKeepBrowserOpen } = require('./run-config');
+    return !shouldKeepBrowserOpen();
 }
 
-/** Block until the user closes the browser or presses Ctrl+C (headed --open runs). */
+/** Force-close every tracked browser (default exit path). */
+async function forceCloseAllBrowsers() {
+    pruneDisconnectedKeepOpenBrowsers();
+    const browsers = [...keepOpenBrowsers];
+    keepOpenBrowsers.clear();
+    await Promise.all(browsers.map((b) => b.close().catch(() => {})));
+}
+
+/** Block until browsers close/disconnect or the user presses Ctrl+C (--open / --test only). */
 async function awaitBrowserDismissal() {
-    if (shouldCloseBrowser()) return;
+    pruneDisconnectedKeepOpenBrowsers();
+    if (!keepOpenBrowsers.size) return;
+
+    const { isManualTestMode } = require('./run-config');
+    const reason = isManualTestMode() ? '--test' : '--open';
     console.log(
-        '\n\x1b[33m[ptests] Browser left open (--open). Close the window or press Ctrl+C to exit.\x1b[0m'
+        `\n\x1b[33m[ptests] Browser left open (${reason}). Close Chrome or press Ctrl+C to exit.\x1b[0m`
     );
-    await new Promise(() => { });
+
+    await new Promise((resolve) => {
+        const timers = [];
+        const listeners = [];
+
+        const done = () => {
+            for (const [target, event, handler] of listeners) {
+                target.removeListener(event, handler);
+            }
+            for (const t of timers) clearInterval(t);
+            resolve();
+        };
+
+        const onSignal = () => done();
+        process.on('SIGINT', onSignal);
+        process.on('SIGTERM', onSignal);
+        listeners.push([process, 'SIGINT', onSignal], [process, 'SIGTERM', onSignal]);
+
+        const onBrowserGone = () => {
+            pruneDisconnectedKeepOpenBrowsers();
+            if (!keepOpenBrowsers.size) done();
+        };
+
+        for (const browser of keepOpenBrowsers) {
+            if (!browser.isConnected()) continue;
+            browser.on('disconnected', onBrowserGone);
+            listeners.push([browser, 'disconnected', onBrowserGone]);
+        }
+
+        const poll = setInterval(onBrowserGone, 400);
+        timers.push(poll);
+        onBrowserGone();
+    });
 }
 
-/** @param {boolean} headed */
-function applyPlaywrightHeadedMode(headed) {
-    if (headed) {
-        process.env.FIVE_HEADLESS = '0';
-        process.env.FIVE_HEADED = '1';
-    } else {
-        process.env.FIVE_HEADLESS = '1';
-        delete process.env.FIVE_HEADED;
+/** Normal runs: close browsers immediately. --open / --test: wait for manual dismissal. */
+async function endPlaywrightRun() {
+    const { shouldKeepBrowserOpen } = require('./run-config');
+    if (shouldKeepBrowserOpen()) {
+        await awaitBrowserDismissal();
+        return;
     }
-}
-
-/** Sync Playwright display mode from argv (clears stale FIVE_HEADED from prior runs). */
-function applyDefaultPlaywrightDisplayMode(argv = process.argv.slice(2)) {
-    const keepOpen = isKeepOpenRequested(argv);
-    const headed = isHeadedRequested(argv) || keepOpen;
-    applyPlaywrightHeadedMode(headed);
-    if (keepOpen) {
-        process.env.FIVE_KEEP_BROWSER_OPEN = '1';
-    } else {
-        delete process.env.FIVE_KEEP_BROWSER_OPEN;
-    }
+    await forceCloseAllBrowsers();
 }
 
 module.exports = {
@@ -213,15 +288,19 @@ module.exports = {
     resolveProfileName,
     defaultBootstrapProfiles,
     parseHeadedFromArgv,
-    parseHeadedFromNpmConfig,
     isHeadedRequested,
     parseKeepBrowserOpenFromArgv,
-    parseKeepOpenFromNpmConfig,
+    parseManualTestFromArgv,
+    isManualTestFromCli,
+    isManualTestRequested,
+    isHeadedFromCli,
+    isKeepOpenFromCli,
     isKeepOpenRequested,
     playwrightHeadless,
     playwrightSlowMo,
     shouldCloseBrowser,
+    registerKeepOpenBrowser,
+    forceCloseAllBrowsers,
     awaitBrowserDismissal,
-    applyPlaywrightHeadedMode,
-    applyDefaultPlaywrightDisplayMode
+    endPlaywrightRun
 };

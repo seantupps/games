@@ -3,10 +3,11 @@
  * Real phone: npm run stack + npm run phone:lan:urls (see docs/PHONE_TESTING.md).
  */
 const { devices } = require('playwright');
+const { MOBILE_VIEWPORT } = require('../../../shared/infra/viewport-constants');
 
 /** Galaxy S24+ class viewport (portrait-preferred; game supports both orientations). */
 const GALAXY_S24_PLUS = {
-    viewport: { width: 412, height: 915 },
+    viewport: { ...MOBILE_VIEWPORT },
     deviceScaleFactor: 3.5,
     isMobile: true,
     hasTouch: true,

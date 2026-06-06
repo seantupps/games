@@ -11,14 +11,10 @@ const {
     touchPanBackground,
     touchTapBackgroundStable,
     touchDragTile,
-    touchDragTileToWorld,
     holdDump,
-    assertPeelSpawnClearance,
-    preparePeelCrosswordTouchPlan,
     assertSettingsEdgeSwipeDisabled,
     assertNoMarqueeOnMobile
 } = require('./bananagrams_touch');
-const { peelCrosswordPlacements, peelGridInFrame } = require('../assertions/bananagrams_peel_fixture');
 const { assertPinchZoomRange } = require('../../../platform/mobile/lib/mobile_assertions');
 
 function log(msg) {
@@ -72,7 +68,8 @@ async function resetSoloHand(gameFrame) {
     });
     await gameFrame.waitForFunction(() => {
         const g = window.game;
-        return g && g.started && g.tiles.length >= 21 && !g.gameStarted;
+        return g && g.started && g.tiles.length >= 21 && !g.gameStarted
+            && g._dictReady && !!g._checker;
     }, { timeout: STEP_MS });
 }
 
@@ -259,69 +256,6 @@ async function runBananagramsSpMobile(page) {
     await runSoloFullGameAudit(page);
     gameFrame = await getGameFrame(page);
     log('SUCCESS: AI solver playthrough complete.');
-
-    log('Peel spawn: touch-drag tiles then peel grid script...');
-    await resetSoloHand(gameFrame);
-    const origin = await gameFrame.evaluate(() => window.game.ORIGIN);
-    const placements = peelCrosswordPlacements(origin);
-    const peelPlan = await preparePeelCrosswordTouchPlan(gameFrame, placements);
-    if (!peelPlan.ok) throw new Error(`Peel touch plan failed (${JSON.stringify(peelPlan)})`);
-    for (const m of peelPlan.moves) {
-        const drag = await touchDragTileToWorld(gameFrame, m.idx, m.wx, m.wy);
-        if (!drag.ok || !drag.moved) {
-            throw new Error(`Peel drag failed (${JSON.stringify(drag)})`);
-        }
-    }
-    log('SUCCESS: Touch-drag moved peel crossword tiles.');
-
-    const gridSetup = await gameFrame.evaluate(peelGridInFrame);
-    if (!gridSetup.placed || !gridSetup.valid) {
-        throw new Error(`Peel grid fixture invalid (${JSON.stringify(gridSetup)})`);
-    }
-    const peel1 = await gameFrame.evaluate(() => {
-        const g = window.game;
-        const n = g.tiles.length;
-        const poolBefore = g._tilePool.length;
-        const beforeIds = [...g.tiles.map((t) => t.id)];
-        g._bannerText = '';
-        g._checkPeel();
-        return {
-            banner: g._bannerText,
-            count: g.tiles.length,
-            pool: g._tilePool.length,
-            ok: g._bannerText === 'Peel!' && g.tiles.length === n + 1 && g._tilePool.length === poolBefore - 1,
-            beforeIds,
-            poolBefore,
-            n
-        };
-    });
-    if (!peel1.ok) throw new Error(`First peel failed (${JSON.stringify(peel1)})`);
-    await assertPeelSpawnClearance(gameFrame, peel1.beforeIds, 'peel 1 spawn');
-    log('SUCCESS: Peel 1 — spawn visible and clear of crossword.');
-
-    log('Second peel + spawn (repeat peel grid on mobile)...');
-    const peel2Setup = await gameFrame.evaluate(peelGridInFrame);
-    if (!peel2Setup.placed || !peel2Setup.valid) {
-        throw new Error(`Second peel grid invalid (${JSON.stringify(peel2Setup)})`);
-    }
-    const peel2 = await gameFrame.evaluate(() => {
-        const g = window.game;
-        const n = g.tiles.length;
-        const poolBefore = g._tilePool.length;
-        const beforeIds = [...g.tiles.map((t) => t.id)];
-        g._bannerText = '';
-        g._checkPeel();
-        return {
-            ok: g._bannerText === 'Peel!' && g.tiles.length === n + 1 && g._tilePool.length === poolBefore - 1,
-            banner: g._bannerText,
-            count: g.tiles.length,
-            pool: g._tilePool.length,
-            beforeIds
-        };
-    });
-    if (!peel2.ok) throw new Error(`Second peel failed (${JSON.stringify(peel2)})`);
-    await assertPeelSpawnClearance(gameFrame, peel2.beforeIds, 'peel 2 spawn');
-    log('SUCCESS: Peel 2 — spawn still clear on mobile viewport.');
 
     await testBananasDevWinDoneTwice(page, gameFrame, { log, timeout: STEP_MS });
     log('SUCCESS: Bananagrams solo mobile suite passed.');

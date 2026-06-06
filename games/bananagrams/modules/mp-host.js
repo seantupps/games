@@ -50,7 +50,7 @@
 
             _maybeSetupMultiplayer() {
                 if (!this._isMultiplayerMode() || !this.isHost()) return;
-                if (this._inReviewExperience?.()) return;
+                if (!this.canMutatePlayingBoard?.()) return;
                 if (typeof BananaRules === 'undefined') return;
                 const uids = this._getPlayerUids();
                 if (uids.length < 2) return;
@@ -88,26 +88,42 @@
                 this.gameStarted = false;
                 this._mpStartedAt = null;
                 this._winnerUid = null;
-                this._tilePool = this._buildTilePool();
+                this._setGamePhase?.('playing');
                 const handSize = this._handSizeForParty();
                 const origin = { x: this.ORIGIN, y: this.ORIGIN };
-                let nextId = 0;
                 this._mpOwned = {};
                 this._mpInventorySeq = {};
+                const shuffledIds = this._mpMaterializeDeck?.();
+                if (!shuffledIds?.length) return;
+                this._tilePool = shuffledIds;
                 const myUid = this._myUid();
                 uids.forEach((uid) => {
-                    const dealt = BananaRules.dealPlayerHand(
-                        this._tilePool, origin, handSize, nextId
-                    );
+                    const dealt = this._mpDealTilesFromPoolIds(this._tilePool, origin, handSize);
                     const { owned, positions } = this._splitTiles(dealt);
                     this._mpOwned[uid] = owned;
                     this._mpInventorySeq[uid] = 1;
                     if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
                     this._mpPlayerLayouts[uid] = positions;
                     if (!this._mpScores[uid]) this._mpScores[uid] = 0;
-                    nextId += handSize;
                 });
-                this._nextTileId = nextId;
+                Object.values(this._mpOwned).forEach((list) => {
+                    this._mpCanonicalRegisterDrawn?.(list, 'initial-deal');
+                });
+                const guestUid = uids.find((u) => u !== myUid);
+                if (guestUid) {
+                    (this._mpOwned[guestUid] || []).forEach((t) => {
+                        const letter = this._mpLetter?.(t.id) || '';
+                        this.traceTileLetter?.({
+                            ctx: 'initial-deal',
+                            playerId: guestUid,
+                            tileId: t.id,
+                            observedLetter: letter,
+                            canonicalLetter: letter,
+                            source: 'deal',
+                            round: 0
+                        });
+                    });
+                }
                 this.elapsedMs = 0;
                 this._timerStart = null;
                 this._selectedIds.clear();
@@ -117,16 +133,19 @@
                 this._lastPeelDraws = null;
                 this._localInventorySeq = 0;
                 this._updateHudEl();
-                this._hostSyncBoard({ immediate: true });
                 this.tiles = this._mergeInventoryWithLayout(
                     this._mpOwned[myUid],
                     this._mpPlayerLayouts[myUid] || {},
                     null
                 );
                 this._localInventorySeq = this._mpInventorySeq[myUid] || 1;
+                this._hostSyncBoard({ immediate: true });
                 this._applyDefaultPlayingViewport?.();
                 this.requestRender();
                 this._syncViewportAfterLayout();
+                this._mpLetterIntegrityCheck?.('initial-deal');
+                this._mpDistributionInvariantCheck?.('initial-deal');
+                this._mpAssertDealEpochMembership?.('initial-deal');
             },
 
             setupNewHand() {
@@ -163,7 +182,7 @@
 
             _hostBeginSplit() {
                 if (this.gameStarted) return;
-                if (this._inReviewExperience?.()) {
+                if (!this.canMutatePlayingBoard?.()) {
                     return;
                 }
                 const startedAt = Date.now();
@@ -180,7 +199,7 @@
             /** Guest: mirror host SPLIT locally so drag positions are not wiped by stale pre-split boards. */
             _guestBeginSplit() {
                 if (this.gameStarted) return;
-                if (this._inReviewExperience?.()) {
+                if (!this.canMutatePlayingBoard?.()) {
                     return;
                 }
                 const startedAt = Date.now();
@@ -203,34 +222,55 @@
                 if (!result.ok) return false;
                 this._hostBumpInventorySeq(uid);
                 this._hostBumpDump(uid);
+                this._hostApplyLocalOwnedToTiles?.(uid, result.removedId || tileId);
                 this._hostSyncBoard({ immediate: true });
+                this._mpDistributionInvariantCheck?.('host-dump');
+                this._mpLetterIntegrityCheck?.('host-dump');
                 return true;
             },
 
             _hostApplyDumpInventoryOnly(uid, tileId) {
+                this._mpEnsureIdPoolModeFromPool?.();
                 this._hostHydrateOwnedFromBoard?.(uid);
                 const owned = [...(this._mpOwned[uid] || [])];
                 const idx = owned.findIndex((o) => o.id === tileId);
                 if (idx < 0) return { ok: false, reason: 'tile-not-found' };
                 const min = typeof BananaRules !== 'undefined' ? BananaRules.DUMP_DRAW_COUNT : 3;
                 if ((this._tilePool?.length ?? 0) < min) return { ok: false, reason: 'short-pool' };
-        
-                const removed = owned[idx];
-                const nextPool = [...this._tilePool];
-                const drawn = BananaRules.dumpTile(nextPool, removed.letter, 3);
-                if (drawn.length < 3) return { ok: false, reason: 'short-pool' };
 
+                const removed = owned[idx];
+                const beforePoolSig = this._mpLetterSigFromPool?.(this._tilePool)
+                    ?? this._mpLetterSigFromLetters?.(this._tilePool);
+                if (!this._mpAssertIdPoolForMutation?.('host-dump')) {
+                    return { ok: false, reason: 'no-id-pool' };
+                }
+                const nextPool = [...this._tilePool];
+                const drawnIds = this._mpDumpTileIdToPool(nextPool, removed.id, min);
+                if (drawnIds.length < min) return { ok: false, reason: 'short-pool' };
                 this._tilePool = nextPool;
                 owned.splice(idx, 1);
-                drawn.forEach((letter) => {
-                    owned.push({
-                        id: `t-${this._nextTileId++}`,
-                        letter,
-                        faceUp: true
-                    });
+                const drawnTiles = [];
+                drawnIds.forEach((id) => {
+                    owned.push({ id, faceUp: true });
+                    drawnTiles.push({ id, letter: this._mpLetter(id) });
                 });
+
                 this._mpOwned[uid] = owned;
-                return { ok: true };
+                this._hostRepairOwnedFromCanonical?.('host-dump');
+                this._mpPoolAudit?.('dump', {
+                    beforePoolSig,
+                    returnedTile: {
+                        id: removed.id,
+                        runtimeLetter: removed.letter,
+                        canonicalLetter: this._mpLetter(removed.id)
+                    },
+                    drawnTiles,
+                    afterPoolSig: this._mpLetterSigFromPool?.(this._tilePool)
+                        ?? this._mpLetterSigFromLetters?.(this._tilePool),
+                    ownedSig: this._mpCombinedOwnedSig?.(),
+                    combinedSig: `${this._mpLetterSigFromPool?.(this._tilePool) ?? ''}+${this._mpCombinedOwnedSig?.()}`
+                });
+                return { ok: true, removedId: removed.id };
             },
 
             /** Host local bunch during play; guests read synced global/board pool. */
@@ -273,44 +313,22 @@
                 return [...new Set(party)].sort();
             },
 
-            /** Mirror host peel draw order so guest peel tiles spawn before RTDB echo. */
+            /** Guest: align local bunch with host board pool before optimistic peel draws. */
+            _guestAdoptAuthoritativePoolForPeel() {
+                if (this.isHost?.() || !this._isMultiplayerMode?.()) return;
+                const board = this._mpBoardFromRoom?.(this.roomData);
+                if (!Array.isArray(board?.pool)) return;
+                const local = this._tilePool?.length ?? 0;
+                const remote = board.pool.length;
+                if (remote < local || local === 0) {
+                    this._tilePool = [...board.pool];
+                    if (Number.isFinite(board.nextTileId)) this._nextTileId = board.nextTileId;
+                }
+            },
+
+            /** Guest peel: board sync is authoritative (no local pool draw or id minting). */
             _guestApplyOptimisticPeel() {
-                if (this.isHost?.() || !this._isMultiplayerMode?.()) return false;
-                if (typeof BananaRules === 'undefined') return false;
-                const me = this._myUid();
-                const uids = this._peelPartyUids(me);
-                if (!uids.length || this._tilePool.length < uids.length) return false;
-
-                const pool = [...this._tilePool];
-                let nextId = this._nextTileId || 1;
-                const drawn = {};
-                const drawnIds = {};
-                uids.forEach((u) => {
-                    const letters = BananaRules.drawFromPool(pool, 1);
-                    if (!letters.length) return;
-                    const id = `t-${nextId++}`;
-                    drawn[u] = letters[0];
-                    drawnIds[u] = id;
-                });
-                const letter = drawn[me];
-                const id = drawnIds[me];
-                if (!letter || !id) return false;
-
-                const spots = this._planDrawnTileSpots(this.tiles, [letter]);
-                if (!spots || spots.length !== 1) return false;
-
-                this._tilePool = pool;
-                this._nextTileId = nextId;
-                this.tiles.push({
-                    id,
-                    letter,
-                    x: spots[0].x,
-                    y: spots[0].y,
-                    faceUp: true
-                });
-                this._persistMpLayout?.();
-                this.requestRender();
-                return true;
+                return false;
             },
 
             /** Flush latest MP layouts/inventory before host registers win (real peel-win or dev /win). */
@@ -328,24 +346,21 @@
                 if (typeof this._hostCancelPendingBoardSync === 'function') {
                     this._hostCancelPendingBoardSync();
                 }
-                if (typeof this._hostWriteBoard === 'function') {
-                    this._hostWriteBoard('playing');
-                } else {
-                    this._hostSyncBoard({ immediate: true });
-                }
+                // Do not publish a playing-phase board here — it races review transition and can
+                // flash/wipe post-game review on host and guest when seq advances past review.
             },
 
             _hostBananasForPlayer(uid, guestLayout = null) {
                 if (!this._checker || !BananaGrid) return false;
-                if (this._winnerUid || this._victoryRegistered
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
-                    return false;
-                }
+                if (!this.canMutatePlayingBoard?.()) return false;
                 if (this._tilePool.length) return false;
                 const myUid = this._myUid();
-                const hand = uid === myUid
+                let hand = uid === myUid
                     ? this.tiles
                     : (guestLayout ? this._handFromOwnedAndPositions(uid, guestLayout) : null);
+                if (typeof this._snapHandForValidation === 'function') {
+                    hand = this._snapHandForValidation(hand);
+                }
                 if (!this._handQualifiesForBananasWin(hand)) return false;
                 this._hostSyncLayoutBeforeWin(uid, guestLayout);
                 this._onPlayerWins(uid);
@@ -355,10 +370,7 @@
             /** Dev /win — same host transition as bananas win (sync + review), skip peel validation. */
             _hostDevWinForPlayer(uid, guestLayout = null) {
                 if (!this.isHost()) return false;
-                if (this._winnerUid || this._victoryRegistered
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
-                    return false;
-                }
+                if (!this.canMutatePlayingBoard?.()) return false;
                 this._tilePool = [];
                 this._hostSyncLayoutBeforeWin(uid, guestLayout);
                 this._onPlayerWins(uid);
@@ -367,10 +379,7 @@
 
             _hostPeelForPlayer(uid, guestLayout = null) {
                 if (!this._checker || !BananaGrid) return false;
-                if (this._winnerUid || this._victoryRegistered
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
-                    return false;
-                }
+                if (!this.canMutatePlayingBoard?.()) return false;
                 this._hostEnsureMpStores();
                 const myUid = this._myUid();
                 if (guestLayout && uid !== myUid) {
@@ -381,9 +390,10 @@
                     });
                     this._mpPlayerLayouts[uid] = positions;
                 }
-                const hand = uid === myUid
+                const handRaw = uid === myUid
                     ? this.tiles
                     : (guestLayout ? this._handFromOwnedAndPositions(uid, guestLayout) : null);
+                const hand = this._snapHandForValidation?.(handRaw) || handRaw;
                 if (!hand?.length || hand.length < 3) return false;
                 const result = BananaGrid.validateGrid(hand, this._checker);
                 if (!result.ok || !this._allTilesPlacedOn(hand)) return false;
@@ -395,58 +405,63 @@
                 const roomOwned = board?.tilesOwnedByPlayer || {};
                 const ownedByUid = {};
                 // Peel uses an explicit in-memory baseline to avoid room snapshot races.
+                // Prefer in-memory owned; fall back to board only when local is empty.
                 uids.forEach((u) => {
                     const remote = Array.isArray(roomOwned?.[u])
-                        ? roomOwned[u].map((t) => ({ id: t.id, letter: t.letter, faceUp: !!t.faceUp }))
+                        ? this._mpNormalizeBoardOwned?.(roomOwned[u], true)
+                            || roomOwned[u].map((t) => ({ id: t.id, faceUp: !!t.faceUp }))
                         : [];
                     const local = Array.isArray(this._mpOwned?.[u])
-                        ? this._mpOwned[u].map((t) => ({ id: t.id, letter: t.letter, faceUp: !!t.faceUp }))
+                        ? this._mpOwned[u].map((t) => ({ id: t.id, faceUp: !!t.faceUp }))
                         : [];
-                    ownedByUid[u] = local.length ? local : remote;
-                });
-                if (guestLayout && uid !== myUid && ownedByUid[uid]?.length) {
-                    const letterById = {};
-                    ownedByUid[uid].forEach((t) => { letterById[t.id] = t.letter; });
-                    const fallback = ownedByUid[uid];
-                    ownedByUid[uid] = guestLayout.map((p, idx) => ({
-                        id: p.id,
-                        letter: letterById[p.id] || fallback[idx % Math.max(fallback.length, 1)]?.letter || 'A',
-                        faceUp: true
+                    if (local.length) {
+                        ownedByUid[u] = local;
+                        return;
+                    }
+                    if (remote.length) {
+                        ownedByUid[u] = remote;
+                        return;
+                    }
+                    this._hostHydrateOwnedFromBoard?.(u);
+                    ownedByUid[u] = (this._mpOwned?.[u] || []).map((t) => ({
+                        id: t.id,
+                        faceUp: !!t.faceUp
                     }));
-                }
+                });
                 const playerCount = uids.length;
                 if (!this._tilePool.length || this._tilePool.length < playerCount) return false;
+                if (!this._mpAssertIdPoolForMutation?.('host-peel')) return false;
+                const beforePoolSig = this._mpLetterSigFromPool?.(this._tilePool)
+                    ?? this._mpLetterSigFromLetters?.(this._tilePool);
                 const drawn = {};
                 const drawnIds = {};
+                const drawnTiles = [];
                 uids.forEach((u) => {
-                    const letters = BananaRules.drawFromPool(this._tilePool, 1);
-                    if (!letters.length) return;
-                    const id = `t-${this._nextTileId++}`;
+                    const ids = this._mpDrawIdsFromPool(this._tilePool, 1);
+                    if (!ids.length) return;
+                    const id = ids[0];
                     if (!ownedByUid[u]) ownedByUid[u] = [];
-                    ownedByUid[u].push({ id, letter: letters[0], faceUp: true });
-                    drawn[u] = letters[0];
+                    const letter = this._mpLetter(id);
+                    ownedByUid[u].push({ id, faceUp: true });
+                    drawn[u] = letter;
                     drawnIds[u] = id;
+                    drawnTiles.push({ id, letter, player: u });
                 });
                 if (Object.keys(drawn).length !== playerCount) return false;
-                if (guestLayout && uid !== myUid) {
-                    const letterById = {};
-                    (hand || []).forEach((t) => {
-                        if (t?.id) letterById[t.id] = t.letter;
-                    });
-                    const rebuilt = guestLayout
-                        .filter((p) => p?.id != null)
-                        .map((p) => ({
-                            id: p.id,
-                            letter: letterById[p.id] || 'A',
-                            faceUp: true
-                        }));
-                    if (drawnIds[uid] && drawn[uid]) {
-                        rebuilt.push({ id: drawnIds[uid], letter: drawn[uid], faceUp: true });
-                    }
-                    ownedByUid[uid] = rebuilt;
-                }
                 uids.forEach((u) => {
                     this._mpOwned[u] = ownedByUid[u] || [];
+                });
+                if (uids.includes(myUid)) {
+                    this._hostApplyLocalOwnedToTiles?.(myUid);
+                }
+                this._mpPoolAudit?.('peel', {
+                    beforePoolSig,
+                    returnedTile: null,
+                    drawnTiles,
+                    afterPoolSig: this._mpLetterSigFromPool?.(this._tilePool)
+                        ?? this._mpLetterSigFromLetters?.(this._tilePool),
+                    ownedSig: this._mpCombinedOwnedSig?.(),
+                    combinedSig: `${this._mpLetterSigFromPool?.(this._tilePool) ?? ''}+${this._mpCombinedOwnedSig?.()}`
                 });
                 this._lastPeelDraws = drawn;
                 this._peelSeq = (this._peelSeq || 0) + 1;
@@ -455,11 +470,20 @@
                 if (typeof this._hostCancelPendingBoardSync === 'function') {
                     this._hostCancelPendingBoardSync();
                 }
+                this._hostRepairOwnedFromCanonical?.('host-peel');
                 if (typeof this._hostWriteBoard === 'function') {
                     this._hostWriteBoard('playing');
                 } else {
                     this._hostSyncBoard({ immediate: true });
                 }
+                const poolEl = document.getElementById('banana-pool-count');
+                if (poolEl) poolEl.textContent = String(this._tilePool.length);
+                this.requestRender?.();
+                if (this.roomData?.global?.board && Array.isArray(this._tilePool)) {
+                    this._syncHostPoolOnRoomCaches?.();
+                }
+                this._mpDistributionInvariantCheck?.('host-peel');
+                this._mpLetterIntegrityCheck?.('host-peel');
                 return true;
             },
 
@@ -468,8 +492,7 @@
              */
             _hostHandleBananaInteraction(uid, msg) {
                 if (!msg || !this.isHost() || uid === this._myUid()) return 'drop';
-                const postWin = !!(this._winnerUid || this._victoryRegistered
-                    || (typeof this._isBoardInReview === 'function' && this._isBoardInReview()));
+                const postWin = !this.canMutatePlayingBoard?.();
                 if (postWin && msg.type !== 'victory-layout') return 'drop';
                 if (msg.type === 'dev-win' && msg.uid) {
                     const layout = Array.isArray(msg.positions) ? msg.positions : null;
@@ -486,30 +509,19 @@
                     return 'handled';
                 }
                 if (msg.type === 'dump' && msg.tileId) {
+                    this._mpLetterIntegrityCheck?.('host-dump-reconcile');
+                    this._mpDistributionInvariantCheck?.('host-dump-reconcile');
                     if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
-                    if (Array.isArray(msg.owned) && msg.owned.length) {
-                        this._hostSetOwned(uid, msg.owned, false);
-                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
-                        if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
-                    }
                     console.warn('[Bananagrams] guest dump failed on host for', uid, msg.tileId);
                     return 'retry';
                 }
                 if (msg.type === 'peel') {
                     const layout = Array.isArray(msg.positions) ? msg.positions : null;
-                    if (Array.isArray(msg.owned) && msg.owned.length) {
-                        this._hostSetOwned(uid, msg.owned, false);
-                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
-                    }
                     if (this._hostPeelForPlayer(uid, layout)) return 'handled';
                     return 'drop';
                 }
                 if (msg.type === 'bananas') {
                     const layout = Array.isArray(msg.positions) ? msg.positions : null;
-                    if (Array.isArray(msg.owned) && msg.owned.length) {
-                        this._hostSetOwned(uid, msg.owned, false);
-                        if (!this._mpInventorySeq?.[uid]) this._mpInventorySeq[uid] = 1;
-                    }
                     if (this._hostBananasForPlayer(uid, layout)) return 'handled';
                     return 'drop';
                 }
@@ -522,36 +534,32 @@
                             || this._endingLayoutsCache?.[uid]?.length)) {
                         return 'handled';
                     }
-                    const owned = this._mpOwned?.[uid]
-                        || this.roomData?.global?.board?.tilesOwnedByPlayer?.[uid]
-                        || [];
-                    const ownedIds = new Set(owned.map((o) => o.id));
-                    let filtered = ownedIds.size
-                        ? msg.tiles.filter((t) => t?.id && ownedIds.has(t.id))
-                        : msg.tiles;
-                    if (!filtered.length && msg.tiles.length
-                        && typeof this._isBoardInReview === 'function'
-                        && !this._isBoardInReview()) {
-                        filtered = msg.tiles.filter((t) => t?.id);
-                    }
+                    const filtered = msg.tiles.filter((t) => t?.id);
                     if (!filtered.length) return 'drop';
+                    this._hostSetOwned(uid, filtered.map((t) => ({
+                        id: t.id,
+                        faceUp: !!t.faceUp
+                    })), false, {
+                        source: 'review',
+                        action: 'review',
+                        ctx: `host-set-owned:${uid}`,
+                        msgType: 'victory-layout'
+                    });
                     if (!this._reviewLayouts) this._reviewLayouts = {};
-                    this._reviewLayouts[uid] = filtered;
+                    this._reviewLayouts[uid] = filtered.map((t) => ({
+                        ...t,
+                        letter: this._mpCanonicalLetter(t.id, t.letter, 'victory-layout-tile')
+                    }));
                     if (typeof this._logReviewBoards === 'function') {
                         this._logReviewBoards('host-received-ending', { [uid]: filtered });
                     }
                     if (this._hostMaySyncReview?.()) {
-                        const display = this._displayReviewLayoutsFromOrig(
-                            this._ensureReviewLayoutsSnapshot()
-                        );
+                        this._ensureReviewLayoutsSnapshot();
+                        const display = this._displayReviewLayoutsFromOrig(this._reviewLayouts);
                         const fp = this._reviewLayoutsFingerprint(display);
-                        const board = this._boardReviewSnapshot?.() || null;
-                        const boardFp = board?.reviewLayouts
-                            ? this._reviewLayoutsFingerprint(board.reviewLayouts)
-                            : null;
-                        if (!fp || (fp !== this._reviewLayoutsSyncedFp && fp !== boardFp)) {
+                        if (!fp || fp !== this._reviewLayoutsSyncedFp) {
                             this._reviewLayoutsSyncedFp = fp;
-                            this._hostSyncReviewState();
+                            this._hostSyncReviewState({ processBananaInteractions: false });
                         }
                     }
                     return 'handled';
@@ -579,6 +587,10 @@
             },
 
             _materializeDrawnTiles(spots, faceUp = true) {
+                if (this._isMultiplayerMode?.()) {
+                    console.error('[Bananagrams] _materializeDrawnTiles must not run in MP');
+                    return [];
+                }
                 return (spots || []).map((spot) => ({
                     id: `t-${this._nextTileId++}`,
                     letter: spot.letter,
@@ -589,6 +601,7 @@
             },
 
             _applyDrawnLettersToHand(letters, handTiles = this.tiles) {
+                if (this._isMultiplayerMode?.()) return null;
                 if (!letters?.length) return null;
                 const spots = this._planDrawnTileSpots(handTiles, letters);
                 if (!spots || spots.length !== letters.length) return null;

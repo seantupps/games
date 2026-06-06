@@ -1,13 +1,13 @@
 /**
- * Unified RunSpec — mode, players, topology, game filter, scenario.
- * Env fallbacks: FIVE_RUN_MODE, FIVE_GAME, FIVE_SCENARIO, FIVE_PLAYERS, etc.
+ * Unified RunConfig — parsed once from argv only.
+ * Run flags are not read from env; use getActiveRunConfig() downstream.
  */
 const MODES = new Set(['all', 'hub', 'sp', 'mp']);
 const TOPOLOGIES = new Set(['desktop', 'mobile', 'mixed', 'all']);
 const SUPPORTED_MP_PLAYER_COUNTS = [2, 3];
 
 /**
- * @typedef {object} RunSpec
+ * @typedef {object} RunConfig
  * @property {'all'|'hub'|'sp'|'mp'} mode
  * @property {number[]} playerCounts — MP counts to run (default [2] for mp)
  * @property {number} players — primary count (first entry; backward compat)
@@ -22,8 +22,15 @@ const SUPPORTED_MP_PLAYER_COUNTS = [2, 3];
  * @property {boolean} freshContext
  * @property {boolean} headed
  * @property {boolean} keepBrowserOpen
+ * @property {boolean} manualTest — --test: boot session only, skip all audits
  * @property {number|null} slowMo
  * @property {'host'|'guest'|null} winSide — MP AI play-to-win; null = random
+ * @property {number} rounds — full games per party session (default 1)
+ * @property {boolean} pause — wait in post-game review for manual Done between rounds
+ * @property {boolean} [headedLayout] — tile headed MP windows (default true when headed)
+ * @property {boolean} [headedCenter] — center game viewport in headed mode
+ * @property {boolean} [headedChat] — enable headed hub chat helper
+ * @property {boolean} [headedMobileViewportProbe] — assert emulated mobile viewport in headed runs
  */
 
 /**
@@ -71,29 +78,30 @@ function formatPlayerCountsLabel(playerCounts) {
 
 /**
  * @param {string[]} [argv]
- * @returns {RunSpec}
+ * @returns {RunConfig}
  */
 function parseRunSpec(argv = process.argv.slice(2)) {
-    let mode = process.env.FIVE_RUN_MODE || 'all';
-    let game = process.env.FIVE_GAME || process.env.npm_config_game || null;
-    let scenario = process.env.FIVE_SCENARIO || process.env.npm_config_scenario || null;
-    let skipPlatform = process.env.FIVE_MP_SKIP_PLATFORM === '1';
-    let playerCounts = parsePlayerCounts(process.env.FIVE_PLAYER_COUNTS
-        || process.env.FIVE_PLAYERS
-        || process.env.npm_config_players
-        || null);
-    let topology = process.env.FIVE_TOPOLOGY || process.env.npm_config_topology || null;
+    let mode = 'all';
+    let game = null;
+    let scenario = null;
+    let skipPlatform = false;
+    let playerCounts = null;
+    let topology = null;
     let mixedLayout = [];
-    let suite = process.env.FIVE_MP_SUITE || process.env.npm_config_suite || 'default';
-    let slimAudit = process.env.FIVE_MP_SLIM === '1' || process.env.npm_config_slim === 'true';
-    let bundle = process.env.FIVE_MP_BUNDLE !== '0';
-    let freshContext = process.env.FIVE_MP_FRESH_CONTEXT === '1';
-    let headed = isHeadedRequested(argv);
-    let keepBrowserOpen = process.env.FIVE_KEEP_BROWSER_OPEN === '1';
-    let slowMo = Number(process.env.FIVE_SLOW_MO || process.env.npm_config_slow || 0) || null;
+    let suite = 'default';
+    let slimAudit = false;
+    let bundle = true;
+    let freshContext = false;
+    let headed = false;
+    let keepBrowserOpen = false;
+    let manualTest = false;
+    let slowMo = null;
     let winSide = null;
+    let rounds = 1;
+    let pause = false;
 
-    for (const arg of argv) {
+    for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i];
         if (MODES.has(arg)) {
             mode = arg;
             continue;
@@ -170,6 +178,14 @@ function parseRunSpec(argv = process.argv.slice(2)) {
             keepBrowserOpen = true;
             continue;
         }
+        if (arg === '--test') {
+            manualTest = true;
+            headed = true;
+            keepBrowserOpen = true;
+            scenario = null;
+            skipPlatform = true;
+            continue;
+        }
         if (arg === '--help' || arg === '-?') {
             return { help: true };
         }
@@ -189,6 +205,31 @@ function parseRunSpec(argv = process.argv.slice(2)) {
         if (arg === '--win') {
             throw new Error('Missing value for --win (use --win=host or --win=guest)');
         }
+        if (arg.startsWith('--rounds=')) {
+            const n = parseInt(arg.slice('--rounds='.length), 10);
+            if (!Number.isFinite(n) || n < 1) {
+                throw new Error(`Invalid --rounds=${arg.slice('--rounds='.length)}. Use a positive integer.`);
+            }
+            rounds = n;
+            continue;
+        }
+        if (arg === '--rounds') {
+            const next = argv[i + 1];
+            if (!next || next.startsWith('-')) {
+                throw new Error('Missing value for --rounds (use --rounds=2 or --rounds 2)');
+            }
+            const n = parseInt(next, 10);
+            if (!Number.isFinite(n) || n < 1) {
+                throw new Error(`Invalid --rounds ${next}. Use a positive integer.`);
+            }
+            rounds = n;
+            i += 1;
+            continue;
+        }
+        if (arg === '--pause') {
+            pause = true;
+            continue;
+        }
 
         if (arg.startsWith('-')) {
             throw new Error(`Unknown flag: ${arg} (try --help)`);
@@ -202,8 +243,6 @@ function parseRunSpec(argv = process.argv.slice(2)) {
     if (!TOPOLOGIES.has(topology)) {
         throw new Error(`Invalid --topology=${topology}. Use: ${[...TOPOLOGIES].join(', ')}`);
     }
-    if (topology !== 'all' && process.env.FIVE_MOBILE === '1') topology = 'mobile';
-
     if (!playerCounts) {
         if (mode === 'sp') playerCounts = [1];
         else if (mode === 'mp') playerCounts = [2];
@@ -214,13 +253,14 @@ function parseRunSpec(argv = process.argv.slice(2)) {
         mixedLayout = ['desktop', 'desktop', 'mobile'];
     }
 
-    if (!winSide && process.env.npm_config_win) {
-        const { parseWinSideValue } = require('../../games/bananagrams/scenarios/registry');
-        winSide = parseWinSideValue(process.env.npm_config_win);
-    }
-
     if (game) {
         game = normalizeGameFilterString(game) || null;
+    }
+
+    ({ headed, keepBrowserOpen, manualTest } = finalizeDisplayFlags({ headed, keepBrowserOpen, manualTest }));
+    if (manualTest) {
+        scenario = null;
+        skipPlatform = true;
     }
 
     return {
@@ -238,8 +278,15 @@ function parseRunSpec(argv = process.argv.slice(2)) {
         freshContext,
         headed,
         keepBrowserOpen,
+        manualTest,
         slowMo,
-        winSide
+        winSide,
+        rounds,
+        pause,
+        headedLayout: true,
+        headedCenter: true,
+        headedChat: true,
+        headedMobileViewportProbe: false
     };
 }
 
@@ -302,8 +349,10 @@ function formatAuditLabel(spec) {
     const game = spec.game ? ` game=${spec.game}` : '';
     const scenario = spec.scenario ? ` scenario=${spec.scenario}` : '';
     const win = spec.winSide ? ` win=${spec.winSide}` : '';
+    const rounds = spec.rounds > 1 ? ` rounds=${spec.rounds}` : '';
+    const pause = spec.pause ? ' pause' : '';
     const players = formatPlayerCountsLabel(spec.playerCounts || [spec.players || 2]);
-    return `${players} ${topo}${game}${scenario}${win}`;
+    return `${players} ${topo}${game}${scenario}${win}${rounds}${pause}`;
 }
 
 function printRunHelp() {
@@ -326,61 +375,72 @@ Options:
   --headed / -h     Show browser
   --open            Headed run; leave browser tabs open after tests (implies --headed)
   --keep-open       Same as --open (alias)
+  --test            Manual test — boot party/solo only; skip scenarios, hub, and audits (implies --headed --open)
   --slow[=MS]       Slow down browser actions (default 50ms)
   --win=host|guest  MP AI play-to-win: force winner (default: random)
+  --rounds=N        Play N full games in the same session (default: 1; also --rounds N)
+                    Bananagrams MP: N>1 implies --scenario=actions (AI playthrough only)
+  --pause           Pause in post-game review; press Done on host to continue (--rounds)
   --slim / --smoke  Shorter audits (smoke)
   --help
 
 Examples:
   node ptests/run.js sp --game=bananagrams --scenario=actions
-  node ptests/run.js sp --game=bananagrams --scenario=actions --headed --slow=100
-  node ptests/run.js sp --game=bananagrams --scenario=placement,peel
-  node ptests/run.js mp --players=2,3
-  node ptests/run.js mp --game=bananagrams --players=3
+  node ptests/run.js mp --game=bananagrams --players=2 --scenario=actions
   node ptests/run.js mp --game=bananagrams --scenario=actions --win=host
+  node ptests/run.js mp --game=bananagrams --scenario=actions --rounds=2 --pause --headed --open
   node ptests/run.js hub
-  node ptests/run.js mp piles-line
 
-Mobile (same audits, emulated phone — no separate suite required for simple games):
-  node ptests/run.js sp --game=line --topology=mobile
-  node ptests/run.js sp --game=line --topology=all
-  npm run sp:mobile --game=line
-  npm run phone:path          real-device smoke (stack must be running)`);
+Blessed npm scripts (flags baked into package.json — use these with npm):
+  npm run mp:banana:actions
+  npm run mp:banana:desktop:actions
+  npm run mp:banana:mobile:actions
+  npm run mp:headed          (add --headed via script; combine with :banana:* scripts)
+
+Note: npm run mp --game=foo does NOT pass flags on Windows — use node ... or a :banana:* script.`);
 }
 
-const { applyPlaywrightHeadedMode, isHeadedRequested } = require('./env-defaults');
-
-function applyRunSpecEnv(spec) {
-    applyPlaywrightHeadedMode(!!spec.headed);
-    if (spec.keepBrowserOpen) process.env.FIVE_KEEP_BROWSER_OPEN = '1';
-    else delete process.env.FIVE_KEEP_BROWSER_OPEN;
-    process.env.FIVE_RUN_MODE = spec.mode;
-    if (spec.game) {
-        process.env.FIVE_GAME = spec.game;
-        delete process.env.FIVE_MP_ONLY;
-        delete process.env.FIVE_AUDIT_ONLY;
-    } else {
-        delete process.env.FIVE_GAME;
+/**
+ * Display rules (dead simple):
+ *   default → headless, close
+ *   --headed → visible, still close
+ *   --open → visible, keep open
+ *   --test → visible, keep open, manual boot
+ * @param {{ headed: boolean, keepBrowserOpen: boolean, manualTest: boolean }} flags
+ */
+function finalizeDisplayFlags(flags) {
+    if (flags.manualTest) {
+        return { headed: true, keepBrowserOpen: true, manualTest: true };
     }
-    if (spec.scenario) process.env.FIVE_SCENARIO = spec.scenario;
-    else delete process.env.FIVE_SCENARIO;
-    if (spec.skipPlatform) process.env.FIVE_MP_SKIP_PLATFORM = '1';
-    else delete process.env.FIVE_MP_SKIP_PLATFORM;
-    process.env.FIVE_PLAYER_COUNTS = spec.playerCounts.join(',');
-    process.env.FIVE_PLAYERS = String(spec.playerCounts[0]);
-    process.env.FIVE_TOPOLOGY = spec.topology;
-    process.env.FIVE_MP_SUITE = spec.suite;
-    if (spec.topology === 'mobile') process.env.FIVE_MOBILE = '1';
-    else delete process.env.FIVE_MOBILE;
-    if (spec.slimAudit) process.env.FIVE_MP_SLIM = '1';
-    else delete process.env.FIVE_MP_SLIM;
-    if (spec.freshContext) process.env.FIVE_MP_FRESH_CONTEXT = '1';
-    else delete process.env.FIVE_MP_FRESH_CONTEXT;
+    if (flags.keepBrowserOpen) {
+        return { headed: true, keepBrowserOpen: true, manualTest: false };
+    }
+    if (flags.headed) {
+        return { headed: true, keepBrowserOpen: false, manualTest: false };
+    }
+    return { headed: false, keepBrowserOpen: false, manualTest: false };
+}
 
-    if (spec.slowMo) process.env.FIVE_SLOW_MO = String(spec.slowMo);
-    else delete process.env.FIVE_SLOW_MO;
-    if (spec.winSide) process.env.FIVE_MP_WIN_SIDE = spec.winSide;
-    else delete process.env.FIVE_MP_WIN_SIDE;
+/** Infer scenario side effects on spec (no env writes). */
+function finalizeRunConfig(spec) {
+    if (spec.manualTest) {
+        spec.scenario = null;
+        spec.skipPlatform = true;
+        return spec;
+    }
+    if (!spec.scenario) {
+        try {
+            const { inferBananagramsMpScenario } = require('../../games/bananagrams/scenarios/registry');
+            const inferred = inferBananagramsMpScenario(spec);
+            if (inferred) spec.scenario = inferred;
+        } catch (_) { /* registry optional */ }
+    }
+    return spec;
+}
+
+/** @deprecated use finalizeRunConfig + setActiveRunConfig — does not touch process.env */
+function applyRunConfigEnv(spec) {
+    return finalizeRunConfig(spec);
 }
 
 module.exports = {
@@ -399,5 +459,9 @@ module.exports = {
     matchesGameFilter,
     formatAuditLabel,
     printRunHelp,
-    applyRunSpecEnv
+    finalizeDisplayFlags,
+    finalizeRunConfig,
+    applyRunConfigEnv,
+    /** @deprecated use finalizeRunConfig */
+    applyRunSpecEnv: applyRunConfigEnv
 };

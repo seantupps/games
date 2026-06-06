@@ -1,6 +1,6 @@
 /**
  * Structured state logging for MP actions playthrough debugging.
- * Enable: FIVE_MP_ACTIONS_DEBUG=1 (default on for this scenario).
+ * Enable: set DEBUG = true below for stall diagnostics.
  */
 const {
     log,
@@ -8,7 +8,7 @@ const {
     captureBothMpStates
 } = require('../../lib/mp-lib');
 
-const DEBUG = process.env.FIVE_MP_ACTIONS_DEBUG !== '0';
+const DEBUG = false;
 
 function enabled() {
     return DEBUG;

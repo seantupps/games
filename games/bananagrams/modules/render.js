@@ -200,8 +200,11 @@
         
                 const inset = BananagramsGame.TILE_HIT_INSET;
                 const hitSize = 40 + inset * 2;
-        
-                this.tiles.forEach((tile) => {
+
+                const tilesToRender = this._mpHydrateTiles?.(this.tiles) || this.tiles;
+                this.tiles = tilesToRender;
+
+                tilesToRender.forEach((tile) => {
                     let el = surface.querySelector(`[data-tile-id="${tile.id}"]`);
                     if (!el) {
                         el = document.createElement('div');

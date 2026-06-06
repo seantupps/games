@@ -1,7 +1,7 @@
 /**
  * Create Playwright contexts/pages for SP/MP audits by topology.
  */
-const DESKTOP_VIEWPORT = { width: 1280, height: 720 };
+const { DESKTOP_VIEWPORT } = require('./viewport-constants');
 
 /**
  * @param {'desktop'|'mobile'|'mixed'} topology
@@ -31,6 +31,13 @@ async function createAuditSession(browser, options = {}) {
     const { getDeviceContextOptions } = require('../../platform/mobile/lib/device-presets');
     const { applyTouchDeviceMedia } = require('../../platform/mobile/lib/mobile-utils');
     const { enableMobileHub } = require('../../platform/mobile/lib/mobile_assertions');
+    const {
+        isMpHeaded,
+        mpHeadedContextOpts,
+        layoutMpHeadedWindows,
+        layoutMpHeadedMobileWindows,
+        layoutMpHeadedMixedWindows
+    } = require('../platform/mp-headed-view');
 
     const contexts = [];
     const pages = [];
@@ -43,12 +50,14 @@ async function createAuditSession(browser, options = {}) {
 
         const contextOpts = mobile
             ? getDeviceContextOptions(options.deviceOverrides)
-            : { viewport: DESKTOP_VIEWPORT };
+            : (isMpHeaded() ? mpHeadedContextOpts({ players }) : { viewport: DESKTOP_VIEWPORT });
 
         const context = await browser.newContext(contextOpts);
         if (mobile) await applyTouchDeviceMedia(context);
         const page = await context.newPage();
-        const mpMs = Number(process.env.FIVE_MP_READY_MS || 1200);
+        const mpMs = Number(process.env.FIVE_MOBILE_MP_PAGE_MS
+            || process.env.FIVE_MP_READY_MS
+            || 15000);
         page.setDefaultTimeout(mpMs);
 
         contexts.push(context);
@@ -63,12 +72,6 @@ async function createAuditSession(browser, options = {}) {
         ));
     }
 
-    const {
-        isMpHeaded,
-        layoutMpHeadedWindows,
-        layoutMpHeadedMobileWindows,
-        layoutMpHeadedMixedWindows
-    } = require('../platform/mp-headed-view');
     if (isMpHeaded()) {
         if (topology === 'mobile') {
             await layoutMpHeadedMobileWindows(pages);

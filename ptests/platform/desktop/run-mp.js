@@ -3,6 +3,12 @@
  * Prefer: node ptests/run.js mp  |  slim: node ptests/run.js mp piles-line
  */
 require('../../shared/infra/bootstrap');
+const { ensureRunConfig, getActiveRunConfig } = require('../../shared/infra/run-config');
+ensureRunConfig(process.argv.slice(2));
+
+function resolveSpec(options = {}) {
+    return options.spec || getActiveRunConfig();
+}
 
 const { chromium } = require('playwright');
 const { runMultiplayerAudit } = require('../../shared/infra/multiplayer_base');
@@ -11,14 +17,22 @@ const { ensureTestStack } = require('../../shared/infra/emulator-utils');
 const { buildMultiplayerAudits, partitionMpBySuite } = require('../../shared/infra/test-manifest');
 const { filterAuditsByGame } = require('../../shared/infra/run-spec');
 const { runPartyLimitTest } = require('./mp/mp_party_limit');
-const { playwrightHeadless, shouldCloseBrowser, playwrightSlowMo } = require('../../shared/infra/env-defaults');
+const {
+    playwrightHeadless,
+    shouldCloseBrowser,
+    playwrightSlowMo,
+    registerKeepOpenBrowser
+} = require('../../shared/infra/env-defaults');
+const { DESKTOP_VIEWPORT } = require('../../shared/infra/viewport-constants');
+const { mpHeadedContextOpts, layoutMpHeadedWindows } = require('../../shared/platform/mp-headed-view');
 const { resolveMpAuditTimeoutMs } = require('../../shared/infra/mp-audit-timeout');
 const { runnerLog, printSuiteHeader, printBenchmarkResults } = require('../../shared/infra/runner-results');
 const { captureAuditFailure } = require('../../shared/infra/test-logger');
+const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/mp-failure-snapshot');
 
-function canUseMpBundle(tests) {
+function canUseMpBundle(tests, spec = getActiveRunConfig()) {
     return tests.length > 0
-        && Number(process.env.FIVE_PLAYERS || 2) === 2
+        && (spec.playerCounts || [spec.players || 2]).includes(2)
         && !tests.some((t) => t.customRunner);
 }
 
@@ -35,10 +49,17 @@ async function runFreshContextAudit(browser, test) {
     let context1;
     let context2;
     try {
-        context1 = await browser.newContext();
-        context2 = await browser.newContext();
+        const headless = playwrightHeadless();
+        const contextOpts = headless
+            ? { viewport: DESKTOP_VIEWPORT }
+            : mpHeadedContextOpts({ players: 2 });
+        context1 = await browser.newContext(contextOpts);
+        context2 = await browser.newContext(contextOpts);
         const page1 = await context1.newPage();
         const page2 = await context2.newPage();
+        if (!headless) {
+            await layoutMpHeadedWindows([page1, page2]);
+        }
 
         await Promise.race([
             runMultiplayerAudit(test.gameId, {
@@ -65,7 +86,12 @@ async function runFreshContextAudit(browser, test) {
             name: test.name,
             success: false,
             duration: ((Date.now() - start) / 1000).toFixed(2),
-            ...captureAuditFailure(err)
+            ...(await captureAuditFailureWithMpSnapshot(err, {
+                page1,
+                page2,
+                testName: test.name,
+                gameId: test.gameId
+            }))
         };
     } finally {
         if (context1 && shouldCloseBrowser()) await context1.close().catch(() => { });
@@ -75,6 +101,7 @@ async function runFreshContextAudit(browser, test) {
 
 async function runMpSuite(options = {}) {
     const { summarize = true } = options;
+    const spec = resolveSpec(options);
     const totalStart = Date.now();
     if (summarize) {
         printSuiteHeader('DESKTOP MULTIPLAYER SUITE');
@@ -90,9 +117,10 @@ async function runMpSuite(options = {}) {
         headless: playwrightHeadless(),
         slowMo: playwrightSlowMo()
     });
+    registerKeepOpenBrowser(browser);
 
-    const gameFilter = process.env.FIVE_GAME || null;
-    let allTests = buildMultiplayerAudits({ players: 2, topology: 'desktop' });
+    const gameFilter = spec.game || null;
+    let allTests = buildMultiplayerAudits({ players: 2, topology: 'desktop', suite: spec.suite });
     allTests = filterAuditsByGame(allTests, gameFilter);
     if (!allTests.length) {
         if (shouldCloseBrowser()) await browser.close().catch(() => { });
@@ -104,10 +132,10 @@ async function runMpSuite(options = {}) {
         throw err;
     }
 
-    const skipPlatform = process.env.FIVE_MP_SKIP_PLATFORM === '1';
-    const slim = process.env.FIVE_MP_SLIM === '1';
-    const scenario = process.env.FIVE_SCENARIO || null;
-    const useMpBundle = skipPlatform && canUseMpBundle(allTests);
+    const skipPlatform = !!spec.skipPlatform;
+    const slim = !!spec.slimAudit;
+    const scenario = spec.scenario || null;
+    const useMpBundle = skipPlatform && canUseMpBundle(allTests, spec);
 
     const results = [];
     let suiteFailed = false;
@@ -137,8 +165,8 @@ async function runMpSuite(options = {}) {
             if (!bundle.allPassed) failSuite('Desktop MP bundle had failures');
         } else {
             const { defaultTier, extendedTier } = partitionMpBySuite(allTests);
-            const freshContext = process.env.FIVE_MP_FRESH_CONTEXT === '1';
-            const suite = require('../../shared/infra/test-manifest').resolveMpSuiteFilter();
+            const freshContext = !!spec.freshContext;
+            const suite = require('../../shared/infra/test-manifest').resolveMpSuiteFilter({ suite: spec.suite });
             runnerLog(`[RUNNER] suite=${suite} | default=${defaultTier.length} bundled=${!freshContext} | extended=${extendedTier.length}`);
 
             const partyStart = Date.now();
@@ -229,11 +257,11 @@ async function main() {
 module.exports = { main, runMpSuite };
 
 if (require.main === module) {
-    const { awaitBrowserDismissal } = require('../../shared/infra/env-defaults');
+    const { endPlaywrightRun } = require('../../shared/infra/env-defaults');
     main()
         .catch((err) => {
             console.error(err.message || err);
             process.exitCode = 1;
         })
-        .finally(() => awaitBrowserDismissal());
+        .finally(() => endPlaywrightRun());
 }

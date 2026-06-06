@@ -61,7 +61,7 @@ async function syncGuestInventoryToHost(hostPage, guestPage, guestUid) {
         }));
         const onGrid = synced.every((t) => typeof t.x === 'number' && typeof t.y === 'number');
         if (onGrid && typeof g._hostSetPlayerTiles === 'function') {
-            g._hostSetPlayerTiles(uid, synced, false);
+            g._hostSetPlayerTiles(uid, synced, false, { allowTilesToOwned: true });
         } else {
             g._hostSetOwned(uid, synced, false);
         }
@@ -91,6 +91,9 @@ async function syncGuestPoolFromHost(hostPage, guestPage) {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         if (!g || g.isHost?.()) return;
         g._tilePool = [...pool];
+        if (g.roomData?.global?.board) {
+            g.roomData.global.board.pool = [...pool];
+        }
         if (Number.isFinite(nextTileId)) g._nextTileId = nextTileId;
     }, hostState);
 }
@@ -132,6 +135,38 @@ async function flushHostBananaInteractions(hostPage) {
         g._processBananaInteractions?.(g.roomData?.interactions?.banana);
     });
     await hostPublishPartyBoard(hostPage);
+}
+
+/**
+ * Stage guest tile positions on the host (_mpPlayerLayouts only — no owned/membership writes).
+ * Matches real play where peel/drag banana messages carry layout snapshots.
+ */
+async function publishGuestLayoutToHost(hostPage, guestPage, guestUid) {
+    const layout = await guestPage.evaluate(() => {
+        const g = document.getElementById('game-frame')?.contentWindow?.game;
+        const out = {};
+        (g?.tiles || []).forEach((t) => {
+            if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                out[t.id] = { x: Math.round(t.x), y: Math.round(t.y) };
+            }
+        });
+        return out;
+    });
+    if (!Object.keys(layout).length) {
+        throw new Error('publishGuestLayoutToHost: guest has no positioned tiles');
+    }
+    await hostPage.evaluate(({ uid, positions }) => {
+        const g = document.getElementById('game-frame')?.contentWindow?.game;
+        if (!g?.isHost?.()) return;
+        g._hostEnsureMpStores?.();
+        if (!g._mpPlayerLayouts) g._mpPlayerLayouts = {};
+        g._mpPlayerLayouts[uid] = positions;
+        if (typeof g._hostSyncBoard === 'function') {
+            g._hostSyncBoard({ immediate: true });
+        } else if (typeof g._hostWriteBoard === 'function') {
+            g._hostWriteBoard('playing');
+        }
+    }, { uid: guestUid, positions: layout });
 }
 
 async function waitGuestDumpResult(guestPage, hostPage, role, beforeIds, mp) {
@@ -221,6 +256,7 @@ module.exports = {
     syncGuestLettersFromHost,
     syncGuestFromHost,
     flushHostBananaInteractions,
+    publishGuestLayoutToHost,
     waitGuestDumpResult,
     waitDumpResult
 };

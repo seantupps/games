@@ -22,6 +22,9 @@
     --hub-turn-gap: 1px;
     --hub-turn-indent: 0px;
     --hub-turn-font: 0.8rem;
+
+    /* Hub win banner: CSS default anchor — JS sets --win-banner-top after layout (see hub/ui.js). */
+    --win-banner-top-default: 10%;
 }
 
 
@@ -353,11 +356,11 @@ body {
     color: white;
 }
 
-/* Hub victory banner (fitWinBanner may shrink font to stay in viewport) */
+/* Hub victory banner — placement via --win-banner-top (computed in hub/ui.js). */
 #global-win-banner {
     position: fixed;
-    top: 15%;
-    left: 50%;
+    top: var(--win-banner-top, var(--win-banner-top-default, 15%));
+    left: var(--win-banner-left, 50%);
     transform: translateX(-50%) translateY(-20px);
     z-index: 10030;
     box-sizing: border-box;
@@ -402,12 +405,4 @@ body {
     pointer-events: none;
     white-space: nowrap;
     overflow: hidden;
-}
-
-/* Bananagrams: Done is fixed top-center in the game iframe — keep win text below it */
-body[data-hub-game="bananagrams"] #global-win-banner {
-    top: max(
-        15%,
-        calc(var(--hub-score-top, 28px) + 10px + 3.5rem + 18px)
-    );
 }

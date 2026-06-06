@@ -4,7 +4,10 @@ const { chromium } = require('playwright');
 const { ensureTestStack, buildAppUrl, buildHubUrl } = require('./emulator-utils');
 const { STEP_MS } = require('./timeouts');
 const { playwrightHeadless, playwrightSlowMo, shouldCloseBrowser } = require('./env-defaults');
+const { DESKTOP_VIEWPORT } = require('./viewport-constants');
 const {
+    isMpHeaded,
+    mpHeadedContextOpts,
     layoutMpHeadedWindows,
     layoutMpHeadedMobileWindows,
     centerMpViewerOnPages,
@@ -38,6 +41,15 @@ async function runMultiplayerAudit(gameId, options = {}) {
     const envHeadless = playwrightHeadless();
     const fastMp = isFastMpProfile(options);
     const mpOptimized = isMpOptimized(options) && !fastMp;
+    let slimAudit = false;
+    let configScenario = null;
+    let configRounds = 1;
+    try {
+        const { isSlimAudit, getScenario, getRounds } = require('./run-config');
+        slimAudit = isSlimAudit();
+        configScenario = getScenario();
+        configRounds = getRounds();
+    } catch (_) { /* run-config optional */ }
     const {
         headless = envHeadless,
         maxMoves: maxMovesOption,
@@ -59,8 +71,8 @@ async function runMultiplayerAudit(gameId, options = {}) {
         skipGameLoop = false,
         skipCleanup = false,
         skipScoreVerify = false,
-        skipRefresh = options.skipRefresh ?? (fastMp || process.env.FIVE_MP_SLIM === '1'),
-        skipPostVictory = options.skipPostVictory ?? (fastMp || process.env.FIVE_MP_SLIM === '1'),
+        skipRefresh = options.skipRefresh ?? (fastMp || slimAudit),
+        skipPostVictory = options.skipPostVictory ?? (fastMp || slimAudit),
         expectedScores = null
     } = options;
 
@@ -92,8 +104,18 @@ async function runMultiplayerAudit(gameId, options = {}) {
         ownsBrowser = true;
     }
 
-    if (!context1) context1 = await browser.newContext();
-    if (!context2) context2 = await browser.newContext();
+    if (!context1) {
+        const desktopOpts = !headless && isMpHeaded()
+            ? mpHeadedContextOpts({ players: 2 })
+            : { viewport: DESKTOP_VIEWPORT };
+        context1 = await browser.newContext(desktopOpts);
+    }
+    if (!context2) {
+        const desktopOpts = !headless && isMpHeaded()
+            ? mpHeadedContextOpts({ players: 2 })
+            : { viewport: DESKTOP_VIEWPORT };
+        context2 = await browser.newContext(desktopOpts);
+    }
     if (!page1) page1 = await context1.newPage();
     if (!page2) page2 = await context2.newPage();
 
@@ -287,7 +309,7 @@ async function runMultiplayerAudit(gameId, options = {}) {
             mpOptimized,
             gameId,
             gameMode,
-            scenario: process.env.FIVE_SCENARIO || null
+            scenario: options.scenario ?? configScenario
         }, slots);
 
         if (deferBootstrapWait && beforeLoop) {
@@ -378,8 +400,9 @@ async function runMultiplayerAudit(gameId, options = {}) {
         await Promise.all([injectVictoryDwell(page1), injectVictoryDwell(page2)]);
         if (!headless) {
             if (isMobile) {
-                await Promise.all([page1, page2].map((p) => syncMpHeadedMobileViewport(p)));
+                await layoutMpHeadedMobileWindows([page1, page2]);
             } else {
+                await layoutMpHeadedWindows([page1, page2]);
                 await centerMpViewerOnPages([page1, page2]);
             }
         }
@@ -392,12 +415,23 @@ async function runMultiplayerAudit(gameId, options = {}) {
                 await Promise.all(mobilePages.map((p) =>
                     p.evaluate(() => window.FiveViewport?.syncHubViewport?.()).catch(() => { })
                 ));
+                if (!headless) {
+                    await Promise.all(mobilePages.map((p) =>
+                        syncMpHeadedMobileViewport(p, { relayoutPages: mobilePages })
+                    ));
+                }
             } else if (isMobile) {
                 await Promise.all([enableMobileHub(page1), enableMobileHub(page2)]);
                 await Promise.all([
                     page1.evaluate(() => window.FiveViewport?.syncHubViewport?.()),
                     page2.evaluate(() => window.FiveViewport?.syncHubViewport?.())
                 ]);
+                if (!headless) {
+                    await Promise.all([
+                        syncMpHeadedMobileViewport(page1, { relayoutPages: [page1, page2] }),
+                        syncMpHeadedMobileViewport(page2, { relayoutPages: [page1, page2] })
+                    ]);
+                }
             }
         }
 
@@ -422,19 +456,40 @@ async function runMultiplayerAudit(gameId, options = {}) {
             return;
         }
 
-        log(`[TEST] Starting ${gameId.toUpperCase()} Move Loop...`);
-        let isOver = false;
-        let victoryBannerSnap = null;
-        let victoryWinner = null;
-        let moveCount = fastMp ? 0 : (options.initialMoveCount || 0);
-        let consecutiveNoProgress = 0;
-        let lastStateStr = '';
-        const pollMs = fastMp ? 25 : mpOptimized ? 40 : 50;
-        const stuckLimit = fastMp ? 18 : (isMobile ? 24 : 35);
-        const refreshPollMs = mpOptimized ? 30 : 100;
-        const refreshPollMax = mpOptimized ? 30 : 40;
+        const sessionRounds = Math.max(1, Number(options.rounds ?? configRounds ?? 1));
+        const sessionWinCounts = { P1: 0, P2: 0 };
 
-        while (!isOver && moveCount < maxMoves) {
+        for (let sessionRound = 1; sessionRound <= sessionRounds; sessionRound++) {
+            const isLastSessionRound = sessionRound === sessionRounds;
+            const roundSkipScoreVerify = skipScoreVerify || !isLastSessionRound;
+            const roundSkipCleanup = skipCleanup || !isLastSessionRound;
+
+            if (sessionRound > 1) {
+                log(`[TEST] Session round ${sessionRound}/${sessionRounds} — waiting for next game in party...`);
+                await Promise.all([
+                    waitForGameReady(page1, 'P1'),
+                    waitForGameReady(page2, 'P2')
+                ]);
+                const nextBaseline = await page1.evaluate(() => {
+                    const g = document.getElementById('game-frame')?.contentWindow?.game;
+                    return g?.roomData?.global?.resetCount ?? g?.roomData?.meta?.resetCount ?? null;
+                });
+                if (nextBaseline != null) mpAuditCtx.baselineResetCount = nextBaseline;
+            }
+
+            log(`[TEST] Starting ${gameId.toUpperCase()} Move Loop (round ${sessionRound}/${sessionRounds})...`);
+            let isOver = false;
+            let victoryBannerSnap = null;
+            let victoryWinner = null;
+            let moveCount = fastMp ? 0 : (options.initialMoveCount || 0);
+            let consecutiveNoProgress = 0;
+            let lastStateStr = '';
+            const pollMs = fastMp ? 25 : mpOptimized ? 40 : 50;
+            const stuckLimit = fastMp ? 18 : (isMobile ? 24 : 35);
+            const refreshPollMs = mpOptimized ? 30 : 100;
+            const refreshPollMax = mpOptimized ? 30 : 40;
+
+            while (!isOver && moveCount < maxMoves) {
             // Retrieve current active turn and state from P1's game view
             const stateSnapshot = await page1.evaluate(() => {
                 const frame = document.getElementById('game-frame');
@@ -795,7 +850,7 @@ async function runMultiplayerAudit(gameId, options = {}) {
         }
 
         if (skipPostVictory) {
-            if (!skipCleanup) {
+            if (!roundSkipCleanup) {
                 await page1.evaluate((rId) => {
                     const db = window.NetworkEngine?.db;
                     if (db) {
@@ -806,6 +861,10 @@ async function runMultiplayerAudit(gameId, options = {}) {
                     }
                 }, roomId).catch(() => { });
             }
+            if (!isLastSessionRound) {
+                log(`[TEST] Session round ${sessionRound}/${sessionRounds} complete (fast audit).`);
+                continue;
+            }
             log(`SUCCESS: MULTIPLAYER ${gameId.toUpperCase()} (${gameMode.toUpperCase()}) FAST AUDIT OK`);
             return;
         }
@@ -815,6 +874,9 @@ async function runMultiplayerAudit(gameId, options = {}) {
                 const g = document.getElementById('game-frame')?.contentWindow?.game;
                 return g?.winner || null;
             });
+        }
+        if (actualWinner && sessionWinCounts[actualWinner] != null) {
+            sessionWinCounts[actualWinner] += 1;
         }
         log(`[TEST] Actual winner before post-victory checks: ${actualWinner}`);
 
@@ -912,12 +974,14 @@ async function runMultiplayerAudit(gameId, options = {}) {
                 );
             }
 
-            if (!skipScoreVerify) {
-                const scoresExpected = expectedScores || (() => {
-                    const base = { P1: 0, P2: 0 };
-                    if (actualWinner) base[actualWinner] = (base[actualWinner] || 0) + 1;
-                    return base;
-                })();
+            if (!roundSkipScoreVerify) {
+                const scoresExpected = expectedScores || (sessionRounds > 1
+                    ? { ...sessionWinCounts }
+                    : (() => {
+                        const base = { P1: 0, P2: 0 };
+                        if (actualWinner) base[actualWinner] = (base[actualWinner] || 0) + 1;
+                        return base;
+                    })());
 
                 if (p1Scores.P1 !== scoresExpected.P1 || p1Scores.P2 !== scoresExpected.P2) {
                     throw new Error(
@@ -932,7 +996,7 @@ async function runMultiplayerAudit(gameId, options = {}) {
             log('[TEST] Skipping scoreboard post-reset (supportsScoreboard=false).');
         }
 
-        if (!skipCleanup) {
+        if (!roundSkipCleanup) {
             // Delete firebase data for room cleanup
             await page1.evaluate((rId) => {
                 const db = window.NetworkEngine?.db;
@@ -945,7 +1009,13 @@ async function runMultiplayerAudit(gameId, options = {}) {
             }, roomId).catch(() => { });
         }
 
+        if (!isLastSessionRound) {
+            log(`[TEST] Session round ${sessionRound}/${sessionRounds} complete.`);
+            continue;
+        }
+
         log(`SUCCESS: MULTIPLAYER ${gameId.toUpperCase()} (${gameMode.toUpperCase()}) AUDIT COMPLETED SUCCESSFULLY`);
+        }
 
     } catch (err) {
         throw err;

@@ -4,10 +4,12 @@
  * MP state ownership (one writer per kind of truth):
  * - Firebase `global/board`: lifecycle, inventory, review layouts, tile positions (MP).
  * - localStorage: solo tile persistence only; MP positions come from global/board.
- * - Runtime `this.tiles`: render + drag; `_postGameReview` is UI-only (viewport, drag lock).
+ * - Runtime `this.tiles`: UI projection only — playing hand from inventory merge OR
+ *   review merge from board.reviewLayouts; never both. `_postGameReview` is UI chrome only.
  *
  * Inventory changes (peel/dump/deal) only touch host `_mpOwned` → board sync.
- * Clients refresh hands only via `_rebuildHandFromBoard()` (merge inventory + layout).
+ * Clients refresh playing hands only via `_rebuildHandFromBoard()` when
+ * `_shouldProjectPlayingInventory()` allows. Review uses `_applyReviewLayouts()` only.
  */
 class BananagramsGame extends BaseGame {
     static TILE_HIT_INSET = 0;
@@ -78,6 +80,8 @@ class BananagramsGame extends BaseGame {
         this._rmbMarqueeUsed = false;
         this._rmbMarqueeUsedTimer = 0;
         this._postGameReview = false;
+        /** Host-authoritative derived phase mirror ('playing'|'win-pending'|'review'|'done'). */
+        this._gamePhase = 'playing';
         /** Host only: true while writing the first review board (before board.phase is review). */
         this._hostReviewTransitionActive = false;
         this._reviewLayouts = null;
@@ -129,6 +133,12 @@ class BananagramsGame extends BaseGame {
         this.identitySynced = true;
         this.requestRender();
         this._syncViewportAfterLayout();
+    }
+
+    /** Dev hooks (games/bananagrams/dev/). No-op when dev bundle is not loaded. */
+    _bananaDevHook(name, ...args) {
+        const fn = typeof BananaDev !== 'undefined' && BananaDev[name];
+        return fn ? fn(this, ...args) : undefined;
     }
 }
 if (typeof window !== 'undefined') window.BananagramsGame = BananagramsGame;

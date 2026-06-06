@@ -13,7 +13,7 @@
 
 const STANDARD_SCENARIOS = ['smoke', 'default', 'full', 'focus'];
 
-/** npm_config / CLI aliases */
+/** CLI aliases */
 const SCENARIO_ALIASES = {
     ci: 'smoke'
 };
@@ -40,13 +40,16 @@ function parseScenarioSlices(argv, fallback = 'default') {
             .map((s) => normalizeScenario(s.trim()))
             .filter(Boolean);
     }
-    const fromEnv = process.env.FIVE_SCENARIO;
-    if (fromEnv) {
-        return String(fromEnv)
-            .split(',')
-            .map((s) => normalizeScenario(s.trim()))
-            .filter(Boolean);
-    }
+    try {
+        const { getScenario } = require('../infra/run-config');
+        const fromConfig = getScenario();
+        if (fromConfig) {
+            return String(fromConfig)
+                .split(',')
+                .map((s) => normalizeScenario(s.trim()))
+                .filter(Boolean);
+        }
+    } catch (_) { /* run-config optional */ }
     return [normalizeScenario(fallback)];
 }
 
@@ -56,7 +59,12 @@ function parseScenarioSlices(argv, fallback = 'default') {
 function isSmokeScenario(scenario) {
     const slices = Array.isArray(scenario) ? scenario : [scenario].filter(Boolean);
     if (!slices.length) {
-        return process.env.FIVE_MP_SLIM === '1';
+        try {
+            const { isSlimAudit } = require('../infra/run-config');
+            return isSlimAudit();
+        } catch (_) {
+            return false;
+        }
     }
     return slices.some((s) => normalizeScenario(s) === 'smoke');
 }

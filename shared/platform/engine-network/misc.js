@@ -54,6 +54,15 @@
             }
             return true;
         }
+        const solveType = typeof HubProtocol !== 'undefined'
+            ? (HubProtocol.MSG?.BOARD_SOLVE || 'board-solve')
+            : 'board-solve';
+        if (type === solveType || type === 'board-solve') {
+            if (typeof game.applyDevBoardSolve === 'function') {
+                game.applyDevBoardSolve(e.data.stragglerCount);
+            }
+            return true;
+        }
         if (type === 'keydown') {
             game._handleKeyDown(e.data);
             return true;

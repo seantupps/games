@@ -194,6 +194,18 @@
                     content: parts.length ? parts.join('\n') : 'Board state unavailable.'
                 });
             },
+            [H.BOARD_SOLVE_RESULT || 'board-solve-result']: (e) => {
+                const payload = e.data || {};
+                const lines = Array.isArray(payload.lines) ? payload.lines : [];
+                const parts = [payload.message, ...lines].filter(Boolean);
+                if (!payload.ok && payload.phase) {
+                    parts.push(`(phase=${payload.phase}, boardSeq=${payload.boardSeq ?? '?'})`);
+                }
+                global.ChatEngine.append({
+                    sender: 'System',
+                    content: parts.length ? parts.join('\n') : 'Board solve failed.'
+                });
+            },
             [H.DICT_ADJUST_RESULT || 'dict-adjust-result']: (e) => {
                 const payload = e.data || {};
                 const added = Array.isArray(payload.effectiveAdded) ? payload.effectiveAdded : [];

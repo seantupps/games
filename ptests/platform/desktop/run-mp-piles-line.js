@@ -3,7 +3,8 @@
  * Full MP audits: npm run test:mp or node ptests/run.js mp --game=piles,line
  */
 require('../../shared/infra/bootstrap');
-process.env.FIVE_MP_SLIM = '1';
+const { setActiveRunConfig, createDefaultRunConfig } = require('../../shared/infra/run-config');
+setActiveRunConfig({ ...createDefaultRunConfig(), mode: 'mp', slimAudit: true });
 
 const { runMpAuditBundle } = require('../../shared/infra/mp-bundle-runner');
 const { buildMultiplayerAudits } = require('../../shared/infra/test-manifest');

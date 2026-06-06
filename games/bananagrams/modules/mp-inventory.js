@@ -10,7 +10,6 @@
             _splitTiles(tiles) {
                 const owned = (tiles || []).map((t) => ({
                     id: t.id,
-                    letter: t.letter,
                     faceUp: !!t.faceUp
                 }));
                 const positions = {};
@@ -22,16 +21,68 @@
                 return { owned, positions };
             },
 
+            _boardInventorySeq(board, uid) {
+                return board?.inventorySeq?.[uid] ?? 0;
+            },
+
+            /** Host: prefer live _mpOwned when board echo lags (partial RTDB merge). */
+            _mpOwnedForInventoryApply(board, uid) {
+                const fromBoard = this._mpNormalizeBoardOwned?.(
+                    board?.tilesOwnedByPlayer?.[uid] || board?.hands?.[uid]
+                ) || [];
+                if (!this.isHost?.() || !uid) return fromBoard;
+                this._hostEnsureMpStores?.();
+                const local = this._mpNormalizeBoardOwned?.(this._mpOwned?.[uid])
+                    || (this._mpOwned?.[uid] || []);
+                if (!local.length) return fromBoard;
+                if (!fromBoard.length) return local;
+                const localSeq = this._mpInventorySeq?.[uid] || 0;
+                const boardSeq = this._boardInventorySeq(board, uid);
+                if (localSeq > boardSeq) return local;
+                if (local.length > fromBoard.length) return local;
+                return fromBoard;
+            },
+
+            _ownedMembershipDrift(board, uid, owned = null) {
+                const list = owned
+                    || this._mpNormalizeBoardOwned?.(
+                        board?.tilesOwnedByPlayer?.[uid] || board?.hands?.[uid]
+                    )
+                    || [];
+                if (!list.length || !(this.tiles || []).length) return false;
+                const ownedIds = new Set(list.map((o) => o.id));
+                const runtimeIds = new Set((this.tiles || []).map((t) => t.id));
+                if (ownedIds.size !== runtimeIds.size) return true;
+                return list.some((o) => !runtimeIds.has(o.id));
+            },
+
+            _finishMergedHand(placed, owned) {
+                const hydrated = this._mpHydrateTiles?.(placed) || placed;
+                const want = (owned || []).length;
+                if (want && hydrated.length !== want) {
+                    return this._rackTilesFromOwned(owned);
+                }
+                return hydrated;
+            },
+
             _mergeInventoryWithLayout(owned, layout, runtimeTiles) {
+                const tileLetter = (id) => {
+                    if (this._mpPoolUsesTileIds?.()) return this._mpLetter(id) || '';
+                    return '';
+                };
                 if (!owned?.length) {
+                    if (this._isMultiplayerMode?.()) return [];
                     if (runtimeTiles?.length) {
-                        return runtimeTiles.map((t) => ({
-                            id: t.id,
-                            letter: t.letter,
-                            faceUp: !!t.faceUp,
-                            x: t.x,
-                            y: t.y
-                        }));
+                        return this._finishMergedHand(
+                            runtimeTiles.map((t) => ({
+                                id: t.id,
+                                letter: t.letter,
+                                faceUp: !!t.faceUp,
+                                x: t.x,
+                                y: t.y
+                            })),
+                            []
+                        );
                     }
                     return [];
                 }
@@ -48,9 +99,7 @@
 
                 const tileFromOwnedAndRuntime = (o, rt, pos) => ({
                     id: o.id,
-                    // Keep runtime letters when merging live tiles — stale board owned can
-                    // echo a redeal/shuffle with the same ids but different letters.
-                    letter: rt?.letter || o.letter,
+                    letter: tileLetter(o.id),
                     faceUp: !!(o.faceUp || rt?.faceUp),
                     x: pos.x,
                     y: pos.y
@@ -86,7 +135,7 @@
                         const hand = handById[o.id];
                         placed.push({
                             id: o.id,
-                            letter: hand?.letter || o.letter,
+                            letter: tileLetter(o.id),
                             faceUp: !!(hand?.faceUp ?? o.faceUp),
                             x: layoutMap[o.id].x,
                             y: layoutMap[o.id].y
@@ -96,15 +145,17 @@
                     }
                 });
         
-                if (!needSpawn.length) return placed;
+                if (!needSpawn.length) return this._finishMergedHand(placed, owned);
         
                 if (needSpawn.length === (owned || []).length) {
-                    return this._rackTilesFromOwned(owned);
+                    return this._finishMergedHand(this._rackTilesFromOwned(owned), owned);
                 }
         
-                if (typeof BananaRules === 'undefined') return placed;
+                if (typeof BananaRules === 'undefined') {
+                    return this._finishMergedHand(this._rackTilesFromOwned(owned), owned);
+                }
         
-                const letters = needSpawn.map((o) => o.letter);
+                const letters = needSpawn.map((o) => tileLetter(o.id));
                 const viewport = this._getVisibleWorldBounds();
                 const visOpts = { visibilityBounds: viewport };
                 const bounds = BananaRules.spawnEffectiveBounds(placed, viewport);
@@ -127,7 +178,7 @@
                     needSpawn.forEach((o, i) => {
                         placed.push({
                             id: o.id,
-                            letter: o.letter,
+                            letter: tileLetter(o.id),
                             faceUp: !!o.faceUp,
                             x: spots[i].x,
                             y: spots[i].y
@@ -185,7 +236,7 @@
                         const tile = found
                             ? {
                                 id: o.id,
-                                letter: o.letter,
+                                letter: tileLetter(o.id),
                                 faceUp: !!o.faceUp,
                                 x: found.x,
                                 y: found.y
@@ -201,26 +252,39 @@
                     }
                     forceVisible.forEach((t) => placed.push(t));
                 }
-                return placed;
+                return this._finishMergedHand(placed, owned);
             },
 
             _handFromOwnedAndPositions(uid, positions) {
-                return (positions || []).map((p) => {
+                const hand = (positions || []).map((p) => {
                     const o = this._mpOwned?.[uid]?.find((t) => t.id === p.id);
                     return {
                         id: p.id,
-                        letter: o?.letter || '?',
+                        letter: this._mpLetter?.(p.id) || '?',
                         x: p.x,
                         y: p.y,
                         faceUp: o?.faceUp ?? true
                     };
+                });
+                if (typeof this._snapHandForValidation === 'function') {
+                    return this._snapHandForValidation(hand);
+                }
+                return hand;
+            },
+
+            _hostRepairOwnedFromCanonical(context = 'repair-owned-canonical') {
+                if (!this.isHost?.()) return;
+                this._hostEnsureMpStores();
+                Object.keys(this._mpOwned || {}).forEach((uid) => {
+                    const list = this._mpOwned[uid];
+                    if (!Array.isArray(list)) return;
+                    this._mpOwned[uid] = list.map((t) => this._mpStripOwnedEntry(t)).filter(Boolean);
                 });
             },
 
             _hostEnsureMpStores() {
                 if (!this._mpOwned) this._mpOwned = {};
                 if (!this._mpInventorySeq) this._mpInventorySeq = {};
-                if (!this._mpLastKnownOwned) this._mpLastKnownOwned = {};
             },
 
             _hostBumpInventorySeq(uid) {
@@ -228,37 +292,104 @@
                 this._mpInventorySeq[uid] = (this._mpInventorySeq[uid] || 0) + 1;
             },
 
-            _hostSetOwned(uid, owned, bumpInventory = true) {
+            _hostSetOwned(uid, owned, bumpInventory = true, meta = {}) {
                 this._hostEnsureMpStores();
-                this._mpOwned[uid] = (owned || []).map((t) => ({
-                    id: t.id,
-                    letter: t.letter,
-                    faceUp: !!t.faceUp
-                }));
-                if (this._mpOwned[uid].length) {
-                    this._mpLastKnownOwned[uid] = this._mpOwned[uid].map((t) => ({ ...t }));
+                const source = meta.source || 'unknown';
+                const action = meta.action || this._mpTraceParseAction?.(meta.ctx || source) || 'sync';
+                const ctx = meta.ctx || `host-set-owned:${uid}`;
+                const incoming = owned || [];
+                const prev = this._mpOwned?.[uid] || [];
+                if (this.isHost?.() && uid !== this._myUid?.() && incoming.length < prev.length
+                    && meta.msgType === 'dump') {
+                    console.warn('[HOST_SET_OWNED] guest dump snapshot shorter than host owned', {
+                        player: String(uid).slice(-14),
+                        incoming: incoming.length,
+                        prev: prev.length
+                    });
                 }
+                if (this.isHost?.() && uid !== this._myUid?.()) {
+                    const bad = (owned || []).filter((t) => {
+                        const c = this._mpCanonicalById?.[t.id];
+                        const observed = this._mpNormLetter(t.letter);
+                        return c && observed && /^[A-Z]$/.test(observed) && observed !== c;
+                    });
+                    if (bad.length) {
+                        console.error('[HOST_SET_OWNED]', {
+                            player: String(uid).slice(-14),
+                            source,
+                            action,
+                            msgType: meta.msgType || null,
+                            n: (owned || []).length,
+                            drift: bad.slice(0, 4).map((t) => `${t.id}:${t.letter}≠${this._mpCanonicalById[t.id]}`)
+                        });
+                    }
+                }
+                (owned || []).forEach((t) => {
+                    this.traceTileLetter?.({
+                        ctx,
+                        playerId: uid,
+                        tileId: t.id,
+                        observedLetter: t.letter || this._mpLetter?.(t.id),
+                        canonicalLetter: this._mpCanonicalById?.[t.id],
+                        source,
+                        round: this._mpTraceRound?.()
+                    });
+                });
+                const normalized = this._mpIngressNormalizeOwned?.(owned, ctx, {
+                    source,
+                    playerId: uid,
+                    registerIfMissing: meta.registerIfMissing === true
+                }) || owned;
+                this._mpOwned[uid] = normalized;
                 if (bumpInventory) this._hostBumpInventorySeq(uid);
+                this._hostRepairOwnedFromCanonical?.(`after-set-owned:${uid}`);
             },
 
             /** Restore one player's host inventory from RTDB when local _mpOwned was lost. */
             _hostHydrateOwnedFromBoard(uid) {
                 if (!this.isHost() || !uid) return false;
                 if (this._mpOwned?.[uid]?.length) return true;
+                if (typeof this._isRecentProgrammaticReset === 'function'
+                    && this._isRecentProgrammaticReset()) {
+                    return false;
+                }
                 const board = this._mpBoardFromRoom(this.roomData);
                 const remote = board?.tilesOwnedByPlayer?.[uid];
                 if (!Array.isArray(remote) || !remote.length) return false;
-                this._hostSetOwned(uid, remote, false);
+                if (this._mpIdPoolActive) {
+                    remote.forEach((t) => {
+                        if (t?.id) this._mpAssertIdDealEpoch?.(t.id, `hydrate-board:${uid}`);
+                    });
+                }
+                this._hostSetOwned(uid, remote, false, {
+                    source: 'rtdb',
+                    action: 'sync',
+                    ctx: `host-set-owned:${uid}`,
+                    msgType: 'hydrate-board'
+                });
                 return true;
             },
 
-            _hostSetPlayerTiles(uid, tiles, bumpInventory = true) {
+            _hostSetPlayerTiles(uid, tiles, bumpInventory = true, meta = {}) {
+                if (this._isMultiplayerMode?.() && !meta.allowTilesToOwned) {
+                    throw new Error('[MP] _hostSetPlayerTiles forbidden — update layout only, not membership');
+                }
                 const { owned, positions } = this._splitTiles(tiles);
-                this._hostSetOwned(uid, owned, bumpInventory);
+                if (meta.allowTilesToOwned && this.isHost?.() && this._mpPoolIsIdBased?.()) {
+                    const prevOwned = this._mpOwned?.[uid] || [];
+                    const nextIds = new Set(owned.map((t) => t.id));
+                    prevOwned.forEach((t) => {
+                        if (!t?.id || nextIds.has(t.id)) return;
+                        this._mpAssertIdDealEpoch?.(t.id, 'evict-to-pool');
+                        this._tilePool.push(t.id);
+                    });
+                }
+                this._hostSetOwned(uid, owned, bumpInventory, meta);
                 if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
                 this._mpPlayerLayouts[uid] = positions;
                 if (uid === this._myUid()) {
                     this.tiles = this._mergeInventoryWithLayout(owned, positions, null);
+                    this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                 }
             },
 
@@ -277,9 +408,49 @@
                 return this.isDragging || Date.now() < this._localDragUntil;
             },
 
+            /** Host: mirror _mpOwned onto live tiles immediately after peel/dump inventory commit. */
+            _hostApplyLocalOwnedToTiles(uid, removedTileId = null) {
+                if (!this.isHost?.() || uid !== this._myUid()) return;
+                if (!this.canMutatePlayingBoard?.()) return;
+                this._hostEnsureMpStores();
+                const owned = this._mpNormalizeBoardOwned?.(this._mpOwned?.[uid])
+                    || (this._mpOwned?.[uid] || []);
+                if (!owned.length) return;
+                if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
+                if (removedTileId && this._mpPlayerLayouts[uid]) {
+                    const next = { ...this._mpPlayerLayouts[uid] };
+                    delete next[removedTileId];
+                    this._mpPlayerLayouts[uid] = next;
+                }
+                const runtime = removedTileId
+                    ? (this.tiles || []).filter((t) => t.id !== removedTileId)
+                    : (this.tiles || []);
+                const posList = Object.entries(this._mpPlayerLayouts[uid] || {}).map(([id, p]) => ({
+                    id,
+                    x: p.x,
+                    y: p.y
+                }));
+                const board = { tilePositionsByPlayer: { [uid]: posList }, gameStarted: this.gameStarted };
+                const layout = this._layoutMapForPlayer(board, uid, owned);
+                const keepRuntime = this._shouldKeepRuntimeTiles(board, owned);
+                this.tiles = this._mergeInventoryWithLayout(
+                    owned,
+                    layout,
+                    keepRuntime ? runtime : null
+                );
+                if (this.tiles.length !== owned.length) {
+                    this.tiles = this._mergeInventoryWithLayout(owned, layout, null);
+                }
+                this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
+                this._localInventorySeq = this._mpInventorySeq?.[uid] || 0;
+                this.started = this.tiles.length > 0;
+                this._persistMpLayout?.();
+                this.requestRender?.();
+            },
+
             _shouldKeepRuntimeTiles(board, owned) {
                 const ownedIds = new Set((owned || []).map((o) => o.id));
-                const runtime = this.tiles || [];
+                const runtime = (this.tiles || []).filter((t) => ownedIds.has(t.id));
                 const runtimeMatchesOwned = ownedIds.size > 0
                     && runtime.length === ownedIds.size
                     && runtime.every((t) => ownedIds.has(t.id)
@@ -290,7 +461,6 @@
                 const inventoryGrew = runtimeSubsetOfOwned && owned.length > runtime.length;
                 if (board?.gameStarted || this.gameStarted) {
                     if (runtimeMatchesOwned) return true;
-                    // Peel/dump draw: keep live board positions; only new ids need spawning.
                     return inventoryGrew;
                 }
                 if (!ownedIds.size || !runtime.length) return false;
@@ -301,6 +471,14 @@
             _flushDeferredBoardApply() {
                 const board = this._mpDeferredBoard;
                 if (!board || this._isDraggingHand()) return;
+                if (!this.canMutatePlayingBoard?.() || this._reviewUiActive?.()) {
+                    this._mpDeferredBoard = null;
+                    return;
+                }
+                if (!this._shouldProjectPlayingInventory?.(board, { force: true })) {
+                    this._mpDeferredBoard = null;
+                    return;
+                }
                 if (this.gameStarted && !board.gameStarted) {
                     this._mpDeferredBoard = null;
                     return;
@@ -327,9 +505,7 @@
 
             _rebuildHandFromBoard(board, options = {}) {
                 const uid = this._myUid();
-                const owned = board.tilesOwnedByPlayer?.[uid]
-                    || board.hands?.[uid]
-                    || [];
+                const owned = this._mpOwnedForInventoryApply(board, uid);
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                 if (!options.reset && !owned.length && !this.isHost()) {
                     const cachedRec = this._loadLocalHandRecord?.() || { resetCount: null, hand: [] };
@@ -338,27 +514,25 @@
                         ? []
                         : (cachedRec.hand || []);
                     if (cached.length) {
-                        this.tiles = cached.map((t) => ({
-                            id: t.id,
-                            letter: t.letter,
-                            faceUp: !!t.faceUp,
-                            x: t.x,
-                            y: t.y
-                        }));
-                        this.started = this.tiles.length > 0;
-                        this._persistMpLayout();
-                        return true;
+                        // Layout-only cache — letters require board owned; wait for sync.
+                        return false;
                     }
                 }
                 if (!options.reset && inPlay && !owned.length && (this.tiles?.length > 0)) {
                     return false;
                 }
                 if (options.reset) this._clearLocalLayout();
+                const devSolvePending = this._bananaDevHook('pendingSolveLayout', board) === true;
+                if (devSolvePending) this._clearLocalLayout();
                 const layout = this._layoutMapForPlayer(board, uid, owned);
-                const runtime = (options.keepRuntime || this._shouldKeepRuntimeTiles(board, owned))
-                    ? this.tiles
-                    : null;
+                const runtime = devSolvePending
+                    ? null
+                    : ((options.keepRuntime || this._shouldKeepRuntimeTiles(board, owned))
+                        ? this.tiles
+                        : null);
                 this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
+                this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
+                if (devSolvePending) this._bananaDevHook('noteSolveBoardApplied', board);
                 this.started = this.tiles.length > 0;
                 this._localInventorySeq = this._boardInventorySeq(board, uid);
                 if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
@@ -373,18 +547,26 @@
 
             _mirrorHostInventoryFromBoard(board) {
                 if (!this.isHost() || !board) return;
+                if (typeof this._isRecentProgrammaticReset === 'function'
+                    && this._isRecentProgrammaticReset()) {
+                    return;
+                }
                 this._hostEnsureMpStores();
-                // Host is authoritative for _mpOwned; RTDB echoes can be partial — merge in, never
-                // wipe players missing from a stale board snapshot.
+                const inReview = this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW;
+                // Host is authoritative for _mpOwned during play; RTDB echoes can lag behind
+                // in-memory peel/dump/dump-reconcile — never clobber live owned from board echo.
                 if (board.tilesOwnedByPlayer) {
                     Object.entries(board.tilesOwnedByPlayer).forEach(([playerUid, owned]) => {
-                        if (Array.isArray(owned) && owned.length) {
-                            this._mpOwned[playerUid] = owned.map((t) => ({
-                                id: t.id,
-                                letter: t.letter,
-                                faceUp: !!t.faceUp
-                            }));
-                        }
+                        if (!Array.isArray(owned) || !owned.length) return;
+                        if (!inReview && this._mpOwned[playerUid]?.length) return;
+                        const normalized = this._mpIngressNormalizeOwned?.(owned, 'mirror-board', {
+                            source: 'mirror-board',
+                            playerId: playerUid
+                        }) || owned;
+                        this._mpOwned[playerUid] = this._mpCanonicalRepairOwned(
+                            normalized,
+                            `mirror-board:${playerUid}`
+                        );
                     });
                 }
                 if (board.inventorySeq) {
@@ -396,6 +578,10 @@
                     if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
                     Object.entries(board.tilePositionsByPlayer).forEach(([playerUid, list]) => {
                         if (!Array.isArray(list)) return;
+                        if (!inReview && this._mpPlayerLayouts[playerUid]
+                            && Object.keys(this._mpPlayerLayouts[playerUid]).length) {
+                            return;
+                        }
                         this._mpPlayerLayouts[playerUid] = this._positionsMapFromList(list);
                     });
                 }
@@ -405,9 +591,9 @@
                 if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW && !options.reset) {
                     return false;
                 }
-                const remoteOwned = board.tilesOwnedByPlayer?.[uid]
-                    || board.hands?.[uid]
-                    || [];
+                const remoteOwned = this._mpNormalizeBoardOwned?.(
+                    board.tilesOwnedByPlayer?.[uid] || board.hands?.[uid]
+                ) || [];
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                 if (!options.reset && !options.force && inPlay
                     && !remoteOwned.length && (this.tiles?.length > 0)) {
@@ -418,24 +604,44 @@
                     return true;
                 }
                 const remote = this._boardInventorySeq(board, uid);
-                const owned = board.tilesOwnedByPlayer?.[uid]
-                    || board.hands?.[uid]
-                    || [];
+                const owned = this._mpNormalizeBoardOwned?.(
+                    board.tilesOwnedByPlayer?.[uid] || board.hands?.[uid]
+                ) || [];
                 const runtimeIds = new Set((this.tiles || []).map((t) => t.id));
                 const ownedChanged = owned.length !== (this.tiles?.length || 0)
                     || owned.some((o) => !runtimeIds.has(o.id));
-                if (remote <= (this._localInventorySeq || 0) && !ownedChanged) return false;
+                if (remote <= (this._localInventorySeq || 0) && !ownedChanged) {
+                    return false;
+                }
+                const devSolvePending = this._bananaDevHook('pendingSolveLayout', board) === true;
+                if (devSolvePending) this._clearLocalLayout();
                 const layout = this._layoutMapForPlayer(board, uid, owned);
-                const runtime = this._shouldKeepRuntimeTiles(board, owned) ? this.tiles : null;
+                const runtime = devSolvePending
+                    ? null
+                    : (this._shouldKeepRuntimeTiles(board, owned) ? this.tiles : null);
                 this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
+                this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                 this._localInventorySeq = remote;
+                if (this._isMultiplayerMode?.() && !this.isHost?.()) {
+                    this._mpLetterIntegrityCheck?.('guest-sync-apply');
+                    this._mpDistributionInvariantCheck?.('guest-sync-apply');
+                }
+                if (devSolvePending) this._bananaDevHook('noteSolveBoardApplied', board);
                 if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
                     this._persistMpLayout();
                 }
                 return true;
             },
 
+            _isRecentProgrammaticReset() {
+                return !!(this._resetAcknowledgedAt
+                    && (Date.now() - this._resetAcknowledgedAt) < 8000);
+            },
+
             _applyMpInventoryFromBoard(board, uid, options = {}) {
+                if (!this._shouldProjectPlayingInventory?.(board, options)) {
+                    return false;
+                }
                 if (this._mpAwaitReset && board && !this._isFreshPostResetBoard?.(board)) {
                     return false;
                 }
@@ -459,9 +665,9 @@
                 }
                 // Guest: ignore duplicate reset-class applies once a hand is visible.
                 if (options.reset && !this.isHost?.() && (this.tiles?.length || 0) > 0) {
-                    const ownedCheck = board.tilesOwnedByPlayer?.[uid]
-                        || board.hands?.[uid]
-                        || [];
+                    const ownedCheck = this._mpNormalizeBoardOwned?.(
+                        board.tilesOwnedByPlayer?.[uid] || board.hands?.[uid]
+                    ) || [];
                     const lettersWouldShuffle = ownedCheck.some((o) => {
                         const rt = this.tiles.find((t) => t.id === o.id);
                         return rt && rt.letter !== o.letter;
@@ -474,9 +680,7 @@
                 let layoutChanged = false;
                 if (options.reset || options.force) {
                     const hadTiles = (this.tiles?.length || 0) > 0;
-                    const ownedForce = board.tilesOwnedByPlayer?.[uid]
-                        || board.hands?.[uid]
-                        || [];
+                    const ownedForce = this._mpOwnedForInventoryApply(board, uid);
                     const inPlayForce = !!(this.gameStarted || board.gameStarted || this.started);
                     if (options.force && !options.reset && inPlayForce
                         && !ownedForce.length && (this.tiles?.length > 0)) {
@@ -487,7 +691,9 @@
                         reset: options.reset,
                         // Force-applies during active play should preserve live runtime tiles
                         // to prevent full-board translations on peel/dump sync.
-                        keepRuntime: !options.reset && this._shouldKeepRuntimeTiles(board, ownedForce)
+                        keepRuntime: !options.reset
+                            && this._bananaDevHook('pendingSolveLayout', board) !== true
+                            && this._shouldKeepRuntimeTiles(board, ownedForce)
                     })) {
                         layoutChanged = true;
                         this._mpAwaitReset = false;
@@ -502,9 +708,7 @@
                     }
                 } else {
                     const remote = this._boardInventorySeq(board, uid);
-                    const owned = board.tilesOwnedByPlayer?.[uid]
-                        || board.hands?.[uid]
-                        || [];
+                    const owned = this._mpOwnedForInventoryApply(board, uid);
                     const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                     if (!options.reset && !options.force && inPlay
                         && !owned.length && (this.tiles?.length > 0)) {
@@ -513,24 +717,45 @@
                     const runtimeIds = new Set((this.tiles || []).map((t) => t.id));
                     const ownedChanged = owned.length !== (this.tiles?.length || 0)
                         || owned.some((o) => !runtimeIds.has(o.id));
-                    const ownedLettersChanged = !ownedChanged && (this.tiles || []).length
-                        && owned.some((o) => {
-                            const rt = (this.tiles || []).find((t) => t.id === o.id);
-                            return rt && rt.letter !== o.letter;
-                        });
                     const localSeq = this._localInventorySeq || 0;
-                    if (this.isHost?.() && remote < localSeq) return false;
-                    if (this.isHost?.() && remote === localSeq && ownedChanged) return false;
-                    if (ownedLettersChanged && this._shouldKeepRuntimeTiles(board, owned)) {
-                        if (!this._hasSavedLocalLayoutForOwned?.(owned)) {
-                            return false;
-                        }
+                    const recentReset = this._isRecentProgrammaticReset();
+                    if (this.isHost?.() && recentReset) {
+                        if ((board.peelSeq || 0) > 0 || (board.dumpSeq || 0) > 0) return false;
+                        const freshDeal = (this._mpInventorySeq?.[uid] || 0) <= 1
+                            && owned.length >= (this._handSizeForParty?.() || 1);
+                        if (remote > localSeq && remote > 1 && freshDeal) return false;
                     }
-                    if (remote > localSeq || ownedChanged) {
+                    if (this.isHost?.() && remote < localSeq) {
+                        const allowFresh = recentReset && this._isFreshPostResetBoard?.(board);
+                        if (!allowFresh) return false;
+                    }
+                    if (this.isHost?.() && remote === localSeq && ownedChanged) {
+                        const runtimeIdSet = new Set((this.tiles || []).map((t) => t.id));
+                        const boardHasNewIds = owned.some((o) => !runtimeIdSet.has(o.id));
+                        if (!boardHasNewIds) return false;
+                    }
+                    const devSolvePending = this._bananaDevHook('pendingSolveLayout', board) === true;
+                    const runtimeIdSet = new Set((this.tiles || []).map((t) => t.id));
+                    const ownedIdSet = new Set((owned || []).map((o) => o.id));
+                    const extraRuntime = (this.tiles || []).some((t) => !ownedIdSet.has(t.id));
+                    const countMismatch = owned.length !== (this.tiles?.length || 0);
+                    if (remote > localSeq || ownedChanged || devSolvePending) {
+                        if (devSolvePending) this._clearLocalLayout();
                         const layout = this._layoutMapForPlayer(board, uid, owned);
-                        const runtime = this._shouldKeepRuntimeTiles(board, owned) ? this.tiles : null;
+                        const keepRuntime = this._shouldKeepRuntimeTiles(board, owned);
+                        const forceFullMerge = devSolvePending
+                            || (countMismatch && extraRuntime);
+                        const runtime = forceFullMerge
+                            ? null
+                            : (keepRuntime ? this.tiles : null);
                         this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
+                        this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                         this._localInventorySeq = remote;
+                        if (this._isMultiplayerMode?.() && !this.isHost?.()) {
+                            this._mpLetterIntegrityCheck?.('guest-sync-apply');
+                            this._mpDistributionInvariantCheck?.('guest-sync-apply');
+                        }
+                        if (devSolvePending) this._bananaDevHook('noteSolveBoardApplied', board);
                         if (this._shouldPersistMpLayout?.(owned, layout) !== false) {
                             this._persistMpLayout();
                         }

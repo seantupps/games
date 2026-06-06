@@ -72,10 +72,13 @@
                 if (idx < 0) return { ok: false, reason: 'tile-not-found' };
         
                 const removed = tiles[idx];
+                const removedLetter = this._isMultiplayerMode?.()
+                    ? this._mpCanonicalLetter(removed.id, removed.letter, 'guest-dump')
+                    : removed.letter;
                 // Compute dump once on a pool copy, then commit that snapshot.
                 // This avoids RNG divergence between preview and commit.
                 const nextPool = [...this._tilePool];
-                const drawn = BananaRules.dumpTile(nextPool, removed.letter, 3);
+                const drawn = BananaRules.dumpTile(nextPool, removedLetter, 3);
                 if (drawn.length < 3) return { ok: false, reason: 'short-pool' };
         
                 const handAfterRemove = tiles.filter((t) => t.id !== tileId);
@@ -87,30 +90,39 @@
                 this._tilePool = nextPool;
                 tiles.splice(idx, 1);
                 const added = this._materializeDrawnTiles(spots, true);
+                if (this._isMultiplayerMode?.()) {
+                    added.forEach((t) => {
+                        this._mpCanonicalRegister?.(t.id, t.letter, 'guest-dump-draw');
+                    });
+                }
                 added.forEach((t) => tiles.push(t));
                 return { ok: true, added, removedId: removed.id };
             },
 
             _handleDump(tile) {
-                if (this._inReviewExperience?.()) return false;
+                if (!this.canMutatePlayingBoard?.()) return false;
                 if (!tile || !this._canDumpFromBunch()) return false;
                 if (this._isMultiplayerMode()) {
                     const me = this._myUid();
                     if (this.isHost()) {
                         const ok = this._hostApplyDump(me, tile.id);
-                        // Match peel behavior: show immediate local action feedback.
                         if (ok) this._showBanner('Dump!', 2200, { actorUid: me });
                         return ok;
                     }
-                    const ownedSnapshot = (this.tiles || []).map((t) => ({
-                        id: t.id,
-                        letter: t.letter,
-                        faceUp: !!t.faceUp
-                    }));
+                    (this.tiles || []).forEach((t) => {
+                        this.traceTileLetter?.({
+                            ctx: 'guest-dump-snapshot',
+                            playerId: me,
+                            tileId: t.id,
+                            observedLetter: t.letter,
+                            canonicalLetter: this._mpCanonicalById?.[t.id],
+                            source: 'dump-snapshot',
+                            round: this._mpTraceRound?.()
+                        });
+                    });
                     this._sendBananaInteraction({
                         type: 'dump',
-                        tileId: tile.id,
-                        owned: ownedSnapshot
+                        tileId: tile.id
                     });
                     // Optimistic local feedback; host board sync reinforces banner + inventory.
                     this._showBanner('Dump!', 2200, { actorUid: me });
@@ -168,19 +180,52 @@
                 return this._allTilesPlacedOn(this.tiles);
             },
 
-            /** Bunch empty + full connected valid grid (MP win / solo win). */
-            _handQualifiesForBananasWin(hand) {
-                if (!this._checker || !BananaGrid) return false;
-                if (!hand?.length || hand.length < 3) return false;
-                const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
-                    ? this._mpAuthoritativeBunchLen()
-                    : this._tilePool.length;
-                if (bunchLen) return false;
+            /** Snap drag-release positions to grid cells before peel/win validation. */
+            _snapHandForValidation(hand) {
+                if (!hand?.length || !BananaGrid) return hand || [];
+                const tiles = hand.map((t) => ({ ...t }));
+                let others = [];
+                tiles.forEach((t) => {
+                    const snap = BananaGrid.snapTilePosition(t, others);
+                    if (snap.snapped) {
+                        t.x = snap.x;
+                        t.y = snap.y;
+                    } else if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                        t.x = Math.round(t.x);
+                        t.y = Math.round(t.y);
+                    }
+                    others = [...others, t];
+                });
+                return tiles;
+            },
+
+            /** Connected valid crossword with every tile on the grid (ignores bunch). */
+            _mpWinGridReady(hand) {
+                if (!this._checker || !BananaGrid || !hand?.length || hand.length < 3) return false;
                 const result = BananaGrid.validateGrid(hand, this._checker);
                 if (!result.ok || !this._allTilesPlacedOn(hand)) return false;
                 if (!BananaGrid.eachTileOccupiesUniqueCell(hand)) return false;
                 if (!BananaGrid.isConnected(hand)) return false;
                 return (result.words || []).some((w) => String(w || '').length >= 3);
+            },
+
+            /** True when local and/or synced MP bunch is empty (win, not peel). */
+            _mpBunchEmptyForWin() {
+                const local = this._tilePool?.length ?? 0;
+                if (!local) return true;
+                if (!this._isMultiplayerMode?.()) return false;
+                const auth = typeof this._mpAuthoritativeBunchLen === 'function'
+                    ? this._mpAuthoritativeBunchLen()
+                    : local;
+                return auth === 0;
+            },
+
+            /** Bunch empty + full connected valid grid (MP win / solo win). */
+            _handQualifiesForBananasWin(hand) {
+                if (!hand?.length) return false;
+                if (!this._mpBunchEmptyForWin()) return false;
+                const snapped = this._snapHandForValidation(hand);
+                return this._mpWinGridReady(snapped);
             },
 
             _isHandDragActive() {
@@ -211,8 +256,8 @@
                         lines
                     }, '*');
                 };
-                if (this._inReviewExperience?.()) {
-                    post('Board is in post-game review — no live crossword to check.');
+                if (!this.canMutatePlayingBoard?.()) {
+                    post('Board is not in active play — no live crossword to check.');
                     return;
                 }
                 if (!this._dictReady || !this._checker || !BananaGrid) {
@@ -283,15 +328,15 @@
             },
 
             _checkPeel() {
-                if (this._inReviewExperience?.()) return false;
-                if (this._winnerUid || this._victoryRegistered) return false;
-                if (typeof this._isBoardInReview === 'function' && this._isBoardInReview()) return false;
+                if (!this.canMutatePlayingBoard?.()) return false;
                 if (this._isHandDragActive()) return false;
                 if (!this._checker || !BananaGrid) return false;
                 if ((this.tiles?.length || 0) < 3) return false;
-                if (!this._allTilesPlaced()) return false;
-        
-                const result = BananaGrid.validateGrid(this.tiles, this._checker);
+
+                const snappedHand = this._snapHandForValidation(this.tiles);
+                if (!this._allTilesPlacedOn(snappedHand)) return false;
+
+                const result = BananaGrid.validateGrid(snappedHand, this._checker);
                 if (!result.ok) return false;
                 const hasThreeTileWord = (result.words || []).some((w) => String(w || '').length >= 3);
                 if (!hasThreeTileWord) return false;
@@ -301,28 +346,35 @@
                     const partySize = (typeof this._peelPartyUids === 'function'
                         ? this._peelPartyUids(me)
                         : this._getPlayerUids()).filter(Boolean).length || 2;
+                    const localPoolLen = this._tilePool?.length ?? 0;
+                    const bunchEmpty = this._mpBunchEmptyForWin();
+                    const winReady = bunchEmpty && this._mpWinGridReady(snappedHand);
 
-                    if (this._handQualifiesForBananasWin(this.tiles)) {
+                    if (winReady) {
                         if (this.isHost()) {
                             if (this._hostBananasForPlayer(me)) return true;
-                        } else if (this._mpAuthoritativeBunchLen() === 0) {
-                            const ownedSnapshot = (this.tiles || []).map((t) => ({
-                                id: t.id,
-                                letter: t.letter,
-                                faceUp: !!t.faceUp
-                            }));
+                        } else {
+                            const ownedSnapshot = this._mpGuestOwnedSnapshot?.('guest-bananas-snapshot')
+                                || (this.tiles || []).map((t) => ({
+                                    id: t.id,
+                                    letter: t.letter,
+                                    faceUp: !!t.faceUp
+                                }));
                             this._sendBananaInteraction({
                                 type: 'bananas',
-                                positions: this._serializePositions(),
+                                positions: this._serializePositions(snappedHand),
                                 owned: ownedSnapshot
                             });
                             return true;
                         }
                     }
 
+                    // Empty bunch means win or nothing — never peel (avoids bogus optimistic peel tile).
+                    if (localPoolLen === 0 || bunchEmpty) return false;
+
                     const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
                         ? this._mpAuthoritativeBunchLen()
-                        : this._tilePool.length;
+                        : localPoolLen;
                     if (bunchLen < partySize) return false;
 
                     if (this.isHost()) {
@@ -330,20 +382,11 @@
                         if (ok && !this._winnerUid) this._showBanner('Peel!', 2200, { actorUid: me });
                         return ok;
                     }
-                    const ownedSnapshot = (this.tiles || []).map((t) => ({
-                        id: t.id,
-                        letter: t.letter,
-                        faceUp: !!t.faceUp
-                    }));
-                    const positionsSnapshot = this._serializePositions();
-                    this._guestApplyOptimisticPeel?.();
+                    const positionsSnapshot = this._serializePositions(snappedHand);
                     this._sendBananaInteraction({
                         type: 'peel',
-                        positions: positionsSnapshot,
-                        owned: ownedSnapshot
+                        positions: positionsSnapshot
                     });
-                    // Optimistic tile + banner; host board sync reconciles inventory.
-                    this._showBanner('Peel!', 2200, { actorUid: me });
                     return true;
                 }
         
@@ -422,7 +465,7 @@
                         tile.y = Math.round(tile.y);
                     }
                 });
-        
+                this._ensurePlayStartedFromBoardActivity?.();
             },
 
             _bindTileDrag(el, tile) {
@@ -460,7 +503,7 @@
                     },
                     this,
                     () => {
-                        if (this._inReviewExperience?.()) return false;
+                        if (!this.canMutatePlayingBoard?.()) return false;
                         this.beginGame();
                         if (this._isMultiplayerMode()) this._markLocalDrag();
                         return true;

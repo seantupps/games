@@ -8,12 +8,13 @@ const { STEP_MS } = require('./timeouts');
 /** @type {Record<string, Record<string, string>>} */
 const PROFILES = {
     ci: {
-        FIVE_BANANA_BANNER_INSTANT_MS: '100',
-        FIVE_MP_VICTORY_MS: '300',
-        FIVE_MP_REVIEW_SYNC_MS: '400',
-        FIVE_MP_ACTIONS_POLL_MS: '30',
-        FIVE_MP_PEEL_STABILITY_SETTLE_MS: '60',
-        FIVE_VICTORY_DWELL_MS: '100'
+        FIVE_BANANA_BANNER_INSTANT_MS: '50',
+        FIVE_MP_VICTORY_MS: '500',
+        FIVE_MP_REVIEW_SYNC_MS: '350',
+        FIVE_MP_ACTIONS_POLL_MS: '20',
+        FIVE_MP_ACTIONS_DEBUG: '0',
+        FIVE_MP_PEEL_STABILITY_SETTLE_MS: '40',
+        FIVE_VICTORY_DWELL_MS: '50'
     },
     dev: {
         FIVE_STEP_TIMEOUT_MS: '3000',

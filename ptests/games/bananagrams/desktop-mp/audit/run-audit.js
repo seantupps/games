@@ -3,13 +3,21 @@
  */
 const lib = require('../../lib/mp-lib');
 const {
-    centerMpViewerOnPages, isMpHeaded, syncMpHeadedMobileViewport
+    centerMpViewerOnPages,
+    isMpHeaded,
+    relayoutMpHeadedForReview,
+    syncMpHeadedMobileViewport,
+    syncMpHeadedReviewViewport
 } = require('../../../../shared/platform/mp-headed-view');
 
-async function syncMpHeadedView(pages, mobile) {
+async function syncMpHeadedView(pages, mobile, { review = false } = {}) {
     if (!isMpHeaded()) return;
-    if (mobile) {
-        await Promise.all(pages.map((p) => syncMpHeadedMobileViewport(p)));
+    if (mobile && review) {
+        await relayoutMpHeadedForReview(pages, { mobile: true });
+    } else if (mobile) {
+        await Promise.all(pages.map((p) => syncMpHeadedMobileViewport(p, { relayoutPages: pages })));
+    } else if (review) {
+        await relayoutMpHeadedForReview(pages, { mobile: false });
     } else {
         await centerMpViewerOnPages(pages);
     }
@@ -52,6 +60,13 @@ const {
 } = lib;
 const { assertDumpSpawnQuick } = require('../../assertions/bananagrams_dump_spawn_assertions');
 const { parseScenarioArgv } = require('../../scenarios/registry');
+const { solveAndApplyAiMove } = require('./mp-ai-playthrough');
+const { peelGridInFrame } = require('../../assertions/bananagrams_peel_fixture');
+const {
+    assertConverged,
+    assertPeelAccounting,
+    captureActionPair
+} = require('../../assertions/bananagrams_mp_board_assertions');
 
 /** Desktop: world-bounds spawn rules. Mobile: DOM visibility (pan/zoom-safe). */
 async function assertAuditDumpSpawn(frame, beforeIds, label, { mobile, hostPage, dumpSeqBefore, hostUid } = {}) {
@@ -78,26 +93,99 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
     const focusRounds = 6;
     const focusJitterMs = 140;
 
+    if (scenario === 'solve') {
+        const { runMpBoardSolveScenarios } = require('../../scenarios/board-solve');
+        const { bootMpPlaySession } = require('./mp-play-boot');
+        const { resolveSessionRounds } = require('./mp-ai-playthrough');
+        const rounds = resolveSessionRounds(options);
+        if (rounds > 1) {
+            log(`Note: --rounds=${rounds} on --scenario=solve runs the full solve suite once (use --scenario=review for solve-2 win loops).`);
+        }
+        if (!options.skipSeed) {
+            const { joinBananaPartyViaInvite } = lib;
+            await joinBananaPartyViaInvite(page1, page2, roomId);
+        }
+        await bootMpPlaySession(page1, page2, { mobile });
+        await runMpBoardSolveScenarios(page1, page2);
+        return;
+    }
+
+    if (scenario === 'review' || scenario === 'last-bunch') {
+        const { runReviewScenarioAudit } = require('../../scenarios/review');
+        const { parseWinSideArgv } = require('../../scenarios/registry');
+        const { resolveSessionRounds, resolveSessionPause } = require('./mp-ai-playthrough');
+        await runReviewScenarioAudit(page1, page2, {
+            ...options,
+            roomId,
+            mobile,
+            winSide: options.winSide ?? parseWinSideArgv(),
+            rounds: resolveSessionRounds(options),
+            pause: resolveSessionPause(options)
+        });
+        return;
+    }
+
+    if (scenario === 'sync') {
+        const { runMpSyncInvariantAudit } = require('../../scenarios/mp/sync-invariants');
+        if (!options.skipSeed) {
+            const { joinBananaPartyViaInvite } = lib;
+            await joinBananaPartyViaInvite(page1, page2, roomId);
+        }
+        await runMpSyncInvariantAudit(page1, page2, {
+            ...options,
+            roomId,
+            mobile,
+            mp
+        });
+        return;
+    }
+
     if (scenario === 'actions') {
         const {
             runBananagramsMpActionsAudit,
             withActionsTimeout,
             ACTIONS_TIMEOUT_MS
         } = require('./actions-audit');
-        page1.setDefaultTimeout(ACTIONS_TIMEOUT_MS);
-        page2.setDefaultTimeout(ACTIONS_TIMEOUT_MS);
+        const { STEP_MS } = require('../../../../shared/infra/timeouts');
+        page1.setDefaultTimeout(STEP_MS);
+        page2.setDefaultTimeout(STEP_MS);
         return withActionsTimeout((async () => {
             if (!options.skipSeed) {
-                await seedBananaRoom(page1, roomId);
-                await joinGuest(page2, roomId);
+                const { joinBananaPartyViaInvite } = require('../../lib/mp-lib');
+                await joinBananaPartyViaInvite(page1, page2, roomId);
             }
             return runBananagramsMpActionsAudit(page1, page2, { ...options, skipSeed: true });
         })(), 'MP Actions');
     }
 
+    let frame1;
+    let frame2;
+    let poolAfterDeal;
+
+    if (scenario === 'focus') {
+        const { bootMpPlaySession } = require('./mp-play-boot');
+        const { resetMpForAiPlaythrough } = require('./mp-ai-playthrough');
+        if (!options.skipSeed) {
+            const { joinBananaPartyViaInvite, assertHostDealPool, EXPECTED_MP_2P_POOL } = lib;
+            await joinBananaPartyViaInvite(page1, page2, roomId);
+            await assertHostDealPool(page1, EXPECTED_MP_2P_POOL, 'focus host deal bunch', mp);
+            await bootMpPlaySession(page1, page2, { mobile });
+        } else {
+            frame1 = await getGameFrame(page1);
+            frame2 = await getGameFrame(page2);
+            const reset = await resetMpForAiPlaythrough({
+                page1, page2, frame1, frame2, mp, mobile
+            });
+            frame1 = reset.frame1;
+            frame2 = reset.frame2;
+        }
+        frame1 = frame1 || await getGameFrame(page1);
+        frame2 = frame2 || await getGameFrame(page2);
+    } else {
     if (!options.skipSeed) {
-        await seedBananaRoom(page1, roomId);
-        await joinGuest(page2, roomId);
+        const { joinBananaPartyViaInvite, assertHostDealPool, EXPECTED_MP_2P_POOL } = lib;
+        await joinBananaPartyViaInvite(page1, page2, roomId);
+        await assertHostDealPool(page1, EXPECTED_MP_2P_POOL, 'host deal bunch after invite', mp);
     }
 
     log(`Bananagrams MP audit in room ${roomId}${mobile ? ' (mobile)' : ''}...`);
@@ -119,7 +207,7 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
     }
 
     const dealInfo = await getHandAndPool(page1);
-    const poolAfterDeal = dealInfo.poolAfterDeal;
+    poolAfterDeal = dealInfo.poolAfterDeal;
 
     log('SUCCESS: Deal â€” tiles dealt per player (2-player MP).');
 
@@ -198,8 +286,8 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
     if (!hubOnly) throw new Error('Hub should not duplicate iframe scoreboard');
 
     log('SPLIT: host drag starts game; guest syncs face-up + timer...');
-    let frame1 = await getGameFrame(page1);
-    let frame2 = await getGameFrame(page2);
+    frame1 = await getGameFrame(page1);
+    frame2 = await getGameFrame(page2);
     await Promise.all([enableFastBanners(frame1), enableFastBanners(frame2)]);
     const splitHost = await splitViaDrag(frame1, { mobile });
     if (!splitHost.ok || !splitHost.hasTimer) {
@@ -232,78 +320,10 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
     }
     log('SUCCESS: SPLIT synced (timer on, no turns).');
     await syncMpHeadedView([page1, page2], mobile);
+    } // scenario !== 'focus'
 
-    if (mobile) {
-        const { runBananagramsMpMobilePeelSpawnSync } = require('../../mobile/bananagrams_mobile_peel_spawn_sync');
-        await runBananagramsMpMobilePeelSpawnSync({
-            page1,
-            page2,
-            frame1,
-            frame2,
-            mp,
-            log
-        });
-
-        const runTileStability = process.env.FIVE_MP_MOBILE_TILE_STABILITY === '1';
-        if (runTileStability) {
-            const { runBananagramsMpMobilePeelDumpTileStability } = require('../../mobile/bananagrams_mobile_peel_dump_stability');
-            await runBananagramsMpMobilePeelDumpTileStability({
-                page1,
-                page2,
-                frame1,
-                frame2,
-                mp,
-                log
-            });
-        } else {
-            log('MP mobile: skip peel/dump tile stability (set FIVE_MP_MOBILE_TILE_STABILITY=1 to enable).');
-        }
-    }
-
-    const assertBoardStatesHealthy = async (label, expectedPool = null) => {
-        const states = await Promise.all([page1, page2].map((page, idx) => page.evaluate(({ hostUid, guestUid, player }) => {
-            const g = document.getElementById('game-frame')?.contentWindow?.game;
-            const room = g?.roomData;
-            const board = (typeof RtdbSchema !== 'undefined' && room)
-                ? RtdbSchema.readBoardFromRoom(room)
-                : room?.global?.board;
-            const activeUids = board?.playerUids || [];
-            const owned = board?.tilesOwnedByPlayer || board?.hands || {};
-            return {
-                player,
-                localPool: g?._tilePool?.length ?? -1,
-                boardPool: Array.isArray(board?.pool) ? board.pool.length : -1,
-                boardSeq: board?.seq ?? null,
-                peelSeq: board?.peelSeq ?? null,
-                dumpSeq: board?.dumpSeq ?? null,
-                phase: board?.phase ?? null,
-                activeUids,
-                hostOwned: Array.isArray(owned?.[hostUid]) ? owned[hostUid].length : 0,
-                guestOwned: Array.isArray(owned?.[guestUid]) ? owned[guestUid].length : 0,
-                hostLocalTiles: g?._myUid?.() === hostUid ? (g.tiles?.length ?? 0) : null,
-                guestLocalTiles: g?._myUid?.() === guestUid ? (g.tiles?.length ?? 0) : null
-            };
-        }, { hostUid: HOST_UID, guestUid: GUEST_UID, player: idx + 1 })));
-
-        const [s1, s2] = states;
-        const poolLocalMatch = s1.localPool === s2.localPool;
-        const poolBoardMatch = s1.boardPool === s2.boardPool;
-        const seqMatch = s1.boardSeq === s2.boardSeq;
-        if (!poolLocalMatch || !poolBoardMatch || !seqMatch) {
-            throw new Error(`${label} board mismatch (${JSON.stringify(states)})`);
-        }
-        if (expectedPool != null && (s1.localPool !== expectedPool || s1.boardPool !== expectedPool)) {
-            throw new Error(`${label} expected pool=${expectedPool}, got ${JSON.stringify(states)}`);
-        }
-        // Host-authoritative board can transiently omit guest owned list while guest local hand remains stable.
-        const guestVisibleLocally = (s2.guestLocalTiles ?? 0) > 0;
-        if (s1.hostOwned <= 0 || (!guestVisibleLocally && s1.guestOwned <= 0)) {
-            throw new Error(`${label} missing owned/local tiles for a player (${JSON.stringify(states)})`);
-        }
-        if (!s1.activeUids.includes(HOST_UID) || !s1.activeUids.includes(GUEST_UID)) {
-            throw new Error(`${label} board missing active players (${JSON.stringify(states)})`);
-        }
-    };
+    const boardAssertOpts = { hostUid: HOST_UID, guestUid: GUEST_UID };
+    const capturePair = (action) => captureActionPair(page1, page2, action, boardAssertOpts);
 
     const capturePlayerBoardSignature = async (page) => page.evaluate(() => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
@@ -364,93 +384,10 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
         }
     };
 
-    const captureActionState = async (page, client, action) => page.evaluate(({ c, a, hostUid, guestUid }) => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const doc = document.getElementById('game-frame')?.contentDocument;
-        const room = g?.roomData;
-        const board = (typeof RtdbSchema !== 'undefined' && room)
-            ? RtdbSchema.readBoardFromRoom(room)
-            : room?.global?.board;
-        const me = g?._myUid?.() || null;
-        const owned = board?.tilesOwnedByPlayer || board?.hands || {};
-        const boardPos = board?.tilePositionsByPlayer || {};
-        const boardTileIds = Object.values(boardPos)
-            .flat()
-            .map((p) => p?.id)
-            .filter(Boolean)
-            .sort();
-        const handIds = (g?.tiles || []).map((t) => t.id);
-        const banner = doc?.getElementById('banana-banner');
-        const doneBtn = doc?.querySelector('button#done-button,[data-action="done"],.done-button');
-        return {
-            client: c,
-            uid: me,
-            action: a,
-            handIds,
-            boardTileIds,
-            pileCount: g?._tilePool?.length ?? -1,
-            boardPileCount: Array.isArray(board?.pool) ? board.pool.length : -1,
-            ownedCountsByUid: {
-                [hostUid]: Array.isArray(owned?.[hostUid]) ? owned[hostUid].length : 0,
-                [guestUid]: Array.isArray(owned?.[guestUid]) ? owned[guestUid].length : 0
-            },
-            boardSeq: board?.seq ?? null,
-            inventorySeq: g?._localInventorySeq ?? null,
-            boardInventorySeq: board?.inventorySeq?.[me || ''] ?? null,
-            peelSeq: board?.peelSeq ?? 0,
-            dumpSeq: board?.dumpSeq ?? 0,
-            bannerVisible: !!(banner && banner.classList.contains('is-visible')),
-            bannerText: banner?.textContent?.trim() || '',
-            winner: g?._winnerUid ?? board?.winnerUid ?? null,
-            isOver: !!g?.isOver,
-            reviewPhase: board?.phase ?? null,
-            doneVisible: !!(doneBtn && doneBtn.offsetParent !== null)
-        };
-    }, { c: client, a: action, hostUid: HOST_UID, guestUid: GUEST_UID });
-
-    const capturePair = async (action) => {
-        const [host, guest] = await Promise.all([
-            captureActionState(page1, 'host', action),
-            captureActionState(page2, 'guest', action)
-        ]);
-        return { action, host, guest };
-    };
-
     const waitJitter = async () => {
         if (!focusJitterMs) return;
         const ms = 30 + Math.floor(Math.random() * focusJitterMs);
         await Promise.all([page1.waitForTimeout(ms), page2.waitForTimeout(ms)]);
-    };
-
-    const assertConverged = (pair, label) => {
-        const { host, guest } = pair;
-        const problems = [];
-        if (host.boardSeq !== guest.boardSeq) problems.push('boardSeq mismatch');
-        if (host.pileCount !== guest.pileCount) problems.push('local pile mismatch');
-        if (host.boardPileCount !== guest.boardPileCount) problems.push('board pile mismatch');
-        if (host.ownedCountsByUid[HOST_UID] !== guest.ownedCountsByUid[HOST_UID]) problems.push('host owned mismatch');
-        if (host.ownedCountsByUid[GUEST_UID] !== guest.ownedCountsByUid[GUEST_UID]) problems.push('guest owned mismatch');
-        if (host.reviewPhase !== guest.reviewPhase) problems.push('phase mismatch');
-        if (host.winner !== guest.winner) problems.push('winner mismatch');
-        if (problems.length) {
-            throw new Error(`${label} divergence: ${problems.join(', ')}\n${JSON.stringify(pair, null, 2)}`);
-        }
-    };
-
-    const assertPeelAccounting = (beforePair, afterPair, label) => {
-        const beforeHostOwned = beforePair.host.ownedCountsByUid?.[HOST_UID] ?? 0;
-        const beforeGuestOwned = beforePair.host.ownedCountsByUid?.[GUEST_UID] ?? 0;
-        const afterHostOwned = afterPair.host.ownedCountsByUid?.[HOST_UID] ?? 0;
-        const afterGuestOwned = afterPair.host.ownedCountsByUid?.[GUEST_UID] ?? 0;
-        const deltaHost = afterHostOwned - beforeHostOwned;
-        const deltaGuest = afterGuestOwned - beforeGuestOwned;
-        const poolDelta = (afterPair.host.pileCount ?? -1) - (beforePair.host.pileCount ?? -1);
-        if (deltaHost !== 1 || deltaGuest !== 1 || poolDelta !== -2) {
-            throw new Error(`${label} peel accounting mismatch: expected host+1 guest+1 pool-2, got host${deltaHost >= 0 ? '+' : ''}${deltaHost} guest${deltaGuest >= 0 ? '+' : ''}${deltaGuest} pool${poolDelta}\n${JSON.stringify({
-                before: beforePair,
-                after: afterPair
-            }, null, 2)}`);
-        }
     };
 
     const captureTileOffsets = async (page, ids) => page.evaluate(({ idList }) => {
@@ -645,39 +582,19 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
             return true;
         })));
 
-        const setGuestPeelFixture = async (suffix) => {
-            await frame1.evaluate(({ guestUid, s }) => {
-                const g = window.game;
-                const src = [...(g._mpOwned?.[guestUid] || [])].slice(0, 3);
-                const letters = (src.length === 3
-                    ? src
-                    : [{ letter: 'A' }, { letter: 'B' }, { letter: 'C' }])
-                    .map((t) => t.letter || 'A');
-                const tiles = letters.map((letter, idx) => ({
-                    id: `gfix-focus-${s}-${idx}`,
-                    letter,
-                    x: 2400,
-                    y: idx === 0 ? 2200 : idx === 1 ? 2240 : 2280,
-                    faceUp: true
-                }));
-                g._hostSetOwned(guestUid, tiles.map((t) => ({ id: t.id, letter: t.letter, faceUp: true })), true);
-                g._hostSyncBoard({ immediate: true });
-            }, { guestUid: GUEST_UID, s: suffix });
-            await waitForDiag(page2, `focus guest peel fixture ${suffix}`, () => {
-                const g = document.getElementById('game-frame')?.contentWindow?.game;
-                return (g?.tiles?.length ?? 0) === 3;
-            }, {}, WAIT_MS, mp);
-            await frame2.evaluate(() => {
-                const g = window.game;
-                const pick = (g.tiles || []).slice(0, 3);
-                if (pick.length < 3) return false;
-                pick[0].x = 2400; pick[0].y = 2200;
-                pick[1].x = 2400; pick[1].y = 2240;
-                pick[2].x = 2400; pick[2].y = 2280;
-                g._persistMpLayout();
-                return true;
-            });
-        };
+        const {
+            setGuestPeelFixtureOnHost,
+            prepareGuestPeelGridOnClient
+        } = require('../../lib/mp-peel-spawn-sync');
+
+        const setGuestPeelFixture = (suffix) => setGuestPeelFixtureOnHost({
+            frame1,
+            page2,
+            mp,
+            suffix,
+            source: 'focus-guest-peel',
+            waitLabel: `focus guest peel fixture ${suffix}`
+        });
 
         for (let i = 1; i <= focusRounds; i++) {
             log(`FOCUS round ${i}/${focusRounds}: host dump`);
@@ -754,16 +671,24 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
             const hostPeelRes = await frame1.evaluate(() => {
                 const g = window.game;
                 g._bannerText = '';
-                g._checkPeel();
-                return { banner: g._bannerText };
+                const peeled = g._checkPeel();
+                return { peeled, banner: g._bannerText };
             });
-            if (hostPeelRes.banner !== 'Peel!') throw new Error(`focus host peel failed r${i}: ${JSON.stringify(hostPeelRes)}`);
+            await flushHostBananaInteractions(page1);
+            if (!hostPeelRes.peeled && hostPeelRes.banner !== 'Peel!') {
+                throw new Error(`focus host peel failed r${i}: ${JSON.stringify(hostPeelRes)}`);
+            }
             await waitForDiag(page2, `focus host peel seq r${i}`, ({ seq }) => {
                 const g = document.getElementById('game-frame')?.contentWindow?.game;
                 const room = g?.roomData;
                 const board = (typeof RtdbSchema !== 'undefined' && room) ? RtdbSchema.readBoardFromRoom(room) : room?.global?.board;
                 return (board?.peelSeq || 0) > seq && board?.peelActorUid === 'u_banana_host';
             }, { seq: hostPeelBeforeSeq }, WAIT_MS, mp);
+            await flushHostBananaInteractions(page1);
+            const expectedPoolAfterHostPeel = (beforeHostPeel.host.pileCount ?? -1) - 2;
+            if (expectedPoolAfterHostPeel >= 0) {
+                await waitPoolBoth(page1, page2, expectedPoolAfterHostPeel, WAIT_MS);
+            }
             const nonHostSpawnMs = await measureSpawnLatencyMs(page2, [...nonHostBeforeHand], WAIT_MS);
             await page2.waitForTimeout(620);
             const afterHostPeel = await capturePair(`r${i}-after-host-peel`);
@@ -815,10 +740,9 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
             assertConverged(afterHostPeel, `host peel r${i}`);
 
             log(`FOCUS round ${i}/${focusRounds}: guest peel`);
-            const guestPeelSetup = await solveAndApplyAiMove(frame2);
-            if (!guestPeelSetup.ok) {
-                throw new Error(`focus guest peel solve failed r${i}: ${JSON.stringify(guestPeelSetup)}`);
-            }
+            await setGuestPeelFixture(`r${i}`);
+            await prepareGuestPeelGridOnClient(frame2);
+            await flushHostBananaInteractions(page1);
             await Promise.all([settleRender(page1), settleRender(page2)]);
             const beforeGuestPeel = await capturePair(`r${i}-before-guest-peel`);
             const guestPeelBeforeSeq = beforeGuestPeel.host.peelSeq;
@@ -833,16 +757,24 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
             const guestPeelRes = await frame2.evaluate(() => {
                 const g = window.game;
                 g._bannerText = '';
-                g._checkPeel();
-                return { banner: g._bannerText };
+                const peeled = g._checkPeel();
+                return { peeled, banner: g._bannerText };
             });
-            if (guestPeelRes.banner !== 'Peel!') throw new Error(`focus guest peel failed r${i}: ${JSON.stringify(guestPeelRes)}`);
+            await flushHostBananaInteractions(page1);
+            if (!guestPeelRes.peeled && guestPeelRes.banner !== 'Peel!') {
+                throw new Error(`focus guest peel failed r${i}: ${JSON.stringify(guestPeelRes)}`);
+            }
             await waitForDiag(page1, `focus guest peel seq r${i}`, ({ seq }) => {
                 const g = document.getElementById('game-frame')?.contentWindow?.game;
                 const room = g?.roomData;
                 const board = (typeof RtdbSchema !== 'undefined' && room) ? RtdbSchema.readBoardFromRoom(room) : room?.global?.board;
                 return (board?.peelSeq || 0) > seq && board?.peelActorUid === 'u_banana_guest';
             }, { seq: guestPeelBeforeSeq }, WAIT_MS, mp);
+            await flushHostBananaInteractions(page1);
+            const expectedPoolAfterGuestPeel = (beforeGuestPeel.host.pileCount ?? -1) - 2;
+            if (expectedPoolAfterGuestPeel >= 0) {
+                await waitPoolBoth(page1, page2, expectedPoolAfterGuestPeel, WAIT_MS);
+            }
             await waitJitter();
             const afterGuestPeel = await capturePair(`r${i}-after-guest-peel`);
             const hostAfterOffsets2 = await captureTileOffsets(page1, beforeGuestPeel.host.handIds);
@@ -893,6 +825,21 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
             await dismissBanners(page1, page2);
         }
         log('SUCCESS: Focus dump/peel stress finished with converged states.');
+        await Promise.all([page1, page2].map((p) => p.evaluate(() => {
+            const g = document.getElementById('game-frame')?.contentWindow?.game;
+            if (!g) return;
+            const defZoom = typeof g.getDefaultZoomForViewport === 'function'
+                ? g.getDefaultZoomForViewport()
+                : 1;
+            g.zoom = defZoom;
+            g.targetZoom = defZoom;
+            g.canvasPanX = 0;
+            g.canvasPanY = 0;
+            g._viewportFocal = null;
+            g._fitZoomInitialized = false;
+            g.requestRender?.();
+        })));
+        await syncMpHeadedView([page1, page2], mobile);
         return true;
     }
 
@@ -1036,15 +983,33 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
     }
     log('SUCCESS: No peel on rack.');
 
-    log('AI: solver-driven host + guest playthrough (placement, peel, dump)...');
-    const { runMpAiPlaythrough, resetMpForAiPlaythrough } = require('./mp-ai-playthrough');
+    const {
+        runMpAiPlaythrough,
+        resetMpForAiPlaythrough,
+        resolveSessionRounds,
+        resolveSessionPause,
+        advanceActionsRoundAfterReview,
+        finishPausedReviewSession,
+        exitReviewAfterActionsSession
+    } = require('./mp-ai-playthrough');
+    const rounds = resolveSessionRounds(options);
+    const pause = resolveSessionPause(options);
+    const { getWinSide } = require('../../../../shared/infra/run-config');
+    const winSide = options.winSide ?? getWinSide() ?? null;
+    const usePlayToWin = true;
+
+    log(
+        `AI: play-to-win host + guest playthrough `
+        + `(${rounds} round${rounds > 1 ? 's' : ''}`
+        + `${pause ? ', pause in review' : ''})...`
+    );
     if (mobile) {
         const { ensureWinBannerDwellForAudit } = require('../../assertions/bananagrams_hub_layout');
         const { enableMobileHub } = require('../../../../platform/mobile/lib/mobile_assertions');
         await ensureWinBannerDwellForAudit([page1, page2]);
         await Promise.all([page1, page2].map((p) => enableMobileHub(p)));
     }
-    await resetMpForAiPlaythrough({
+    const reset = await resetMpForAiPlaythrough({
         page1,
         page2,
         frame1,
@@ -1053,67 +1018,63 @@ async function runBananagramsMpAudit(page1, page2, options = {}) {
         mobile,
         expectedPool: poolAfterDeal
     });
-    await runMpAiPlaythrough({
-        page1,
-        page2,
-        frame1,
-        frame2,
-        mp,
-        mobile,
-        assertBoardStatesHealthy,
-        assertWinBanner: !!mobile,
-        winSide: options.winSide ?? process.env.FIVE_MP_WIN_SIDE ?? null
-    });
-    log('SUCCESS: AI playthrough complete.');
+    frame1 = reset.frame1;
+    frame2 = reset.frame2;
+
+    for (let round = 1; round <= rounds; round++) {
+        log(`AI playthrough round ${round}/${rounds}...`);
+        await runMpAiPlaythrough({
+            page1,
+            page2,
+            frame1,
+            frame2,
+            mp,
+            mobile,
+            playToWin: usePlayToWin,
+            assertActionsWinInvariants: true,
+            assertWinBanner: !!mobile,
+            winSide,
+            winDrag: false,
+            instantBanners: true,
+            aggressiveDumping: !!options.aggressiveDumping,
+            aggressiveDumpsPerPlayer: Number(options.aggressiveDumpsPerPlayer) || 10
+        });
+        log(`SUCCESS: AI playthrough round ${round}/${rounds} complete.`);
+
+        if (round < rounds) {
+            const next = await advanceActionsRoundAfterReview(
+                page1, page2, frame1, frame2, mp, mobile, `round ${round}`,
+                { pause }
+            );
+            frame1 = next.frame1;
+            frame2 = next.frame2;
+            continue;
+        }
+
+        if (pause) {
+            await finishPausedReviewSession(page1, page2, { mobile });
+            console.log(
+                `SUCCESS: Bananagrams MP full 2-player audit passed `
+                + `(${rounds} round${rounds > 1 ? 's' : ''}, paused in review).`
+            );
+            return true;
+        }
+    }
 
     frame1 = await getGameFrame(page1);
     frame2 = await getGameFrame(page2);
-    await flushHostBananaInteractions(page1);
-    await syncGuestInventoryToHost(page1, page2, GUEST_UID);
-    const endingSnapshots = await frame1.evaluate(() => {
-        const g = window.game;
-        const board = g?.roomData?.global?.board || g?.roomData?.state?.board;
-        const orig = board?.reviewLayoutsOrig || board?.reviewLayouts || g._reviewLayouts || {};
-        const out = {};
-        Object.entries(orig).forEach(([uid, tiles]) => {
-            if (!uid || !Array.isArray(tiles) || !tiles.length) return;
-            out[uid] = {
-                uid,
-                color: g.roomData?.playerData?.[uid]?.color || null,
-                tiles: tiles.map((t) => ({
-                    id: t.id,
-                    letter: t.letter,
-                    x: Math.round(t.x),
-                    y: Math.round(t.y)
-                }))
-            };
-        });
-        return out;
+    await exitReviewAfterActionsSession(page1, page2, frame1, frame2, mp, 'play-to-win');
+
+    const { assertHostSplitSyncsBothAfterPostGameReset } = require('../../assertions/bananagrams_post_done_split_assertions');
+    await assertHostSplitSyncsBothAfterPostGameReset(page1, page2, lib, {
+        label: 'full audit post-Done host SPLIT',
+        mobile
     });
 
-    log('Post-game review: crosswords, win, host Done → face-down redeal...');
-    const { runBananagramsMpMobilePostGame2p } = require('../../mobile/bananagrams_mp_postgame');
-    const reviewSyncMs = mobile
-        ? Number(process.env.FIVE_MP_REVIEW_SYNC_MS || 1200)
-        : undefined;
-    await syncMpHeadedView([page1, page2], mobile);
-    await runBananagramsMpMobilePostGame2p(page1, page2, {
-        hostUid: HOST_UID,
-        guestUid: GUEST_UID,
-        frame1,
-        frame2,
-        resetMs: RESET_WAIT_MS,
-        reviewSyncMs,
-        skipTouch: !mobile,
-        assertWinBanner: false,
-        endingSnapshots,
-        minTilesPerPlayer: 6,
-        skipPlayableAfterReset: true,
-        naturalWin: true,
-        mobile: !!mobile
-    });
-
-    console.log('SUCCESS: Bananagrams MP full 2-player audit passed.');
+    console.log(
+        `SUCCESS: Bananagrams MP full 2-player audit passed`
+        + `${rounds > 1 ? ` (${rounds} rounds)` : ''}.`
+    );
     return true;
 }
 module.exports = { runBananagramsMpAudit };

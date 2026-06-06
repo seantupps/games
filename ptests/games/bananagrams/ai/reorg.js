@@ -3,7 +3,7 @@
 const { Board, validateFull } = require('./grid');
 const { coordsForWord, findBestPlacement, applyPlacement } = require('./solver');
 
-function rebuild(letters, dictionary, maxOpeners = 24, maxPlaces = 64) {
+function rebuild(letters, dictionary, maxOpeners = 24, maxPlaces = 64, shouldAbort = null) {
     if (letters.length < 2 || letters.length > 144) return null;
 
     const openers = dictionary.rackWords(letters, maxOpeners + 4).slice(0, maxOpeners);
@@ -14,6 +14,7 @@ function rebuild(letters, dictionary, maxOpeners = 24, maxPlaces = 64) {
     let bestLeft = 999;
 
     for (const opener of openers) {
+        if (shouldAbort?.()) break;
         const board = new Board();
         let rack = letters.map((c) => c.toUpperCase());
         const w = opener.toUpperCase();
@@ -28,6 +29,7 @@ function rebuild(letters, dictionary, maxOpeners = 24, maxPlaces = 64) {
         applyPlacement(board, w, coordsForWord(w, 0, 0, 0, true));
 
         for (let i = 0; i < maxPlaces; i++) {
+            if (shouldAbort?.()) break;
             const hit = findBestPlacement(board, rack, dictionary);
             if (!hit) break;
             const [word, coords] = hit;

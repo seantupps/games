@@ -1,7 +1,9 @@
 /**
- * Hub chat dictionary commands (/w, /b state) while Bananagrams is loaded.
+ * Hub chat dictionary commands (/w, /b state, /b solve N) while Bananagrams is loaded.
  */
-const TIMEOUT_MS = Number(process.env.FIVE_BANANA_DICT_CMD_TIMEOUT_MS || 10000);
+const { runSpBoardSolveScenarios } = require('./board-solve');
+const { STEP_MS } = require('../../../shared/infra/timeouts');
+const TIMEOUT_MS = STEP_MS;
 
 async function waitForDictReady(page) {
     await page.waitForFunction(() => {
@@ -66,6 +68,8 @@ async function runDictCommandScenarios(page) {
     lines = await getSystemLineCount(page);
     await runCommand(page, '/b state');
     await waitForSystemLineContaining(page, 'starting rack', lines);
+
+    await runSpBoardSolveScenarios(page);
 }
 
-module.exports = { runDictCommandScenarios };
+module.exports = { runDictCommandScenarios, runSpBoardSolveScenarios };

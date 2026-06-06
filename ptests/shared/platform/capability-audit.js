@@ -168,7 +168,7 @@ async function capabilityMpBeforeLoop(page1, page2, gameId, ctx = {}) {
 function buildMpBeforeLoop(gameId, options = {}) {
     const { mpScenarioSkipFlags } = require('../infra/mp-player-utils');
     const scenarioSlices = options.scenarioSlices
-        || parseScenarioSlices(process.argv.slice(2), process.env.FIVE_SCENARIO || 'default');
+        || parseScenarioSlices(process.argv.slice(2), 'default');
     const scenario = options.scenario || scenarioSlices[0];
     const inferred = mpScenarioSkipFlags(gameId, options.gameMode, scenario);
     const {
@@ -219,7 +219,7 @@ function buildMpBeforeLoop(gameId, options = {}) {
  * @param {Array<(page: import('playwright').Page, ctx: object) => Promise<void>>} [options.extra]
  */
 function spConfig(gameId, options = {}) {
-    const scenarioSlices = parseScenarioSlices(process.argv.slice(2), process.env.FIVE_SCENARIO || 'default');
+    const scenarioSlices = parseScenarioSlices(process.argv.slice(2), 'default');
     const scenario = normalizeScenario(scenarioSlices[0]);
     applySpeedProfile(null, { scenario });
 
@@ -253,7 +253,7 @@ function spConfig(gameId, options = {}) {
  * @param {object} [options] — passed to buildMpBeforeLoop; gameMode required for multi-mode games
  */
 function mpConfig(gameId, options = {}) {
-    const scenarioSlices = parseScenarioSlices(process.argv.slice(2), process.env.FIVE_SCENARIO || 'default');
+    const scenarioSlices = parseScenarioSlices(process.argv.slice(2), 'default');
     const scenario = normalizeScenario(scenarioSlices[0]);
     applySpeedProfile(null, { scenario });
 

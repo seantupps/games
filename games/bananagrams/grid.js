@@ -195,6 +195,42 @@
         return seen.size === map.size;
     }
 
+    function largestComponentTiles(tiles) {
+        const onBoard = (tiles || []).filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y));
+        if (!onBoard.length) return { tiles: [], disconnected: 0 };
+        const map = buildCellMap(onBoard);
+        const keys = [...map.keys()];
+        let largestKeys = new Set();
+        let largest = 0;
+        const visited = new Set();
+        for (const start of keys) {
+            if (visited.has(start)) continue;
+            const [sgx, sgy] = start.split(',').map(Number);
+            const seen = new Set([start]);
+            const q = [{ gx: sgx, gy: sgy }];
+            while (q.length) {
+                const { gx, gy } = q.pop();
+                [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+                    const k = cellKey(gx + dx, gy + dy);
+                    if (map.has(k) && !seen.has(k)) {
+                        seen.add(k);
+                        q.push({ gx: gx + dx, gy: gy + dy });
+                    }
+                });
+            }
+            seen.forEach((k) => visited.add(k));
+            if (seen.size > largest) {
+                largest = seen.size;
+                largestKeys = seen;
+            }
+        }
+        const mainTiles = onBoard.filter((t) => {
+            const { gx, gy } = toCell(t.x, t.y);
+            return largestKeys.has(cellKey(gx, gy));
+        });
+        return { tiles: mainTiles, disconnected: onBoard.length - largest };
+    }
+
     function validateGrid(tiles, checker) {
         if (!tiles.length) return { ok: false, reason: 'empty' };
         if (!isConnected(tiles)) return { ok: false, reason: 'disconnected' };
@@ -204,6 +240,47 @@
             if (!checker || !checker.isWord(w)) return { ok: false, reason: 'invalid-word', word: w };
         }
         return { ok: true, words };
+    }
+
+    /** Connected-component sizes (orthogonal), largest first. */
+    function boardIslandSizes(tiles) {
+        const onBoard = (tiles || []).filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y));
+        if (!onBoard.length) return [];
+        const map = buildCellMap(onBoard);
+        const keys = [...map.keys()];
+        const sizes = [];
+        const visited = new Set();
+        for (const start of keys) {
+            if (visited.has(start)) continue;
+            const [sgx, sgy] = start.split(',').map(Number);
+            const seen = new Set([start]);
+            const q = [{ gx: sgx, gy: sgy }];
+            while (q.length) {
+                const { gx, gy } = q.pop();
+                [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+                    const k = cellKey(gx + dx, gy + dy);
+                    if (map.has(k) && !seen.has(k)) {
+                        seen.add(k);
+                        q.push({ gx: gx + dx, gy: gy + dy });
+                    }
+                });
+            }
+            seen.forEach((k) => visited.add(k));
+            sizes.push(seen.size);
+        }
+        return sizes.sort((a, b) => b - a);
+    }
+
+    /** Validate main crossword when N isolated single-tile stragglers sit off the blob. */
+    function validateGridWithStragglers(tiles, checker, stragglerCount) {
+        const n = Number(stragglerCount) | 0;
+        if (!Number.isFinite(n) || n < 0) return { ok: false, reason: 'bad-straggler-count' };
+        if (n === 0) return validateGrid(tiles, checker);
+        const { tiles: mainTiles, disconnected } = largestComponentTiles(tiles);
+        if (disconnected !== n) return { ok: false, reason: 'disconnected', disconnected, expected: n };
+        const singles = boardIslandSizes(tiles).filter((s) => s === 1).length;
+        if (singles !== n) return { ok: false, reason: 'straggler-islands', singles, expected: n };
+        return validateGrid(mainTiles, checker);
     }
 
     /** Word list + validity for dev /b state (does not mutate the board). */
@@ -244,7 +321,10 @@
         collectWords,
         inspectBoardWords,
         isConnected,
-        validateGrid
+        largestComponentTiles,
+        boardIslandSizes,
+        validateGrid,
+        validateGridWithStragglers
     };
 
     if (typeof module !== 'undefined' && module.exports) {

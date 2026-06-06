@@ -128,7 +128,7 @@ class Game {
     /** Python _solve_attempt — returns [rackEmpty, boardChanged]. */
     solveAttempt() {
         const before = { ...this.board.cells };
-        const placedCount = this._placeWords();
+        this._placeWords();
 
         if (!this.rack.length) {
             return [true, JSON.stringify(this.board.cells) !== JSON.stringify(before)];
@@ -182,50 +182,43 @@ class Game {
         const { maxTurns = null, deadlineMs = null } = opts;
         this._deadline = deadlineMs != null ? Date.now() + deadlineMs : null;
         this.deal();
-        this.attempt = 0;
-
-        this.log?.start(this.board);
-        this.log?.separator();
-
-        while ((maxTurns == null || this.attempt < maxTurns) && !this._timedOut()) {
+        let turns = 0;
+        while (true) {
+            if (maxTurns != null && turns >= maxTurns) break;
+            if (this._timedOut()) break;
             this.attempt += 1;
-            this.log?.attempt(this.attempt);
             const [cleared, changed] = this.solveAttempt();
             if (changed) {
                 this.log?.board(this.board);
             }
 
             if (cleared) {
-                const letter = this.peel();
-                if (letter) {
-                    this.log?.peel(letter);
-                    this.log?.separator();
-                    continue;
+                if (!this.bunch.length) {
+                    return { won: true, turns, peels: this.peels, dumps: this.dumps };
                 }
-                break;
-            }
-
-            if (this._stuck()) {
-                this.log?.falseAttempt(this.attempt);
-                const hit = this.dump();
-                if (!hit) break;
-                this.log?.dump(hit[0], hit[1]);
-                this.log?.separator();
+                const peeled = this.peel();
+                if (!peeled) break;
+                turns += 1;
                 continue;
             }
 
-            break;
+            if (this._stuck()) {
+                const dumped = this.dump();
+                if (!dumped) break;
+                turns += 1;
+            } else {
+                break;
+            }
         }
-
         return {
-            rack: [...this.rack],
-            placements: boardPlacements(this.board),
+            won: false,
+            turns,
             peels: this.peels,
             dumps: this.dumps,
-            reorgs: this.reorgs,
-            attempts: this.attempt
+            rackLeft: [...this.rack],
+            board: boardPlacements(this.board)
         };
     }
 }
 
-module.exports = { Game, boardPlacements };
+module.exports = { Game };

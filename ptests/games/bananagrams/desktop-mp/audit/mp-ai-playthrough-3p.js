@@ -37,16 +37,16 @@ const {
     BANANA_3P_PLAYERS,
     createBanana3pSession
 } = require('../../../../shared/infra/scenarios/mp-3p-banana-party');
-const { centerMpViewerOnPages, isMpHeaded, layoutMpHeadedMobileWindows, layoutMpHeadedWindows, syncMpHeadedMobileViewport } = require('../../../../shared/platform/mp-headed-view');
+const {
+    centerMpViewerOnPages,
+    isMpHeaded,
+    relayoutMpHeadedForReview
+} = require('../../../../shared/platform/mp-headed-view');
 const {
     mergeGuestLayoutOnHost,
     pushHostReviewStateToClients
 } = require('../../assertions/bananagrams_postgame_assertions');
 const { assertTileDistributionInReview } = require('../../assertions/bananagrams_distribution_assertions');
-const {
-    assertHostPeelGuestDisconnectedTilesStable,
-    clearMpLocalLayouts
-} = require('../../assertions/bananagrams_mp_host_peel_guest_disconnected_assertions');
 
 const waitOpts = { timeout: WAIT_MS };
 
@@ -506,7 +506,14 @@ function resolvePlayToWin(opts) {
 
 function resolveWinSteering3p(opts, playToWin) {
     if (!playToWin) return { side: null, forced: false };
-    const raw = opts.winSide ?? process.env.FIVE_MP_WIN_SIDE ?? null;
+    const raw = opts.winSide ?? (() => {
+        try {
+            const { getWinSide } = require('../../../../shared/infra/run-config');
+            return getWinSide();
+        } catch (_) {
+            return null;
+        }
+    })();
     if (raw === 'host' || raw === 'p1') return { side: 'host', forced: true };
     if (raw === 'guest' || raw === 'p2') return { side: 'guest', forced: true };
     return { side: 'host', forced: false };
@@ -678,9 +685,15 @@ async function finishActionsWin3p(ctx) {
 
     const hostFrame = frames[0];
     const mp = { page1: hostPage, page2: pages[1] };
+    const {
+        capturePreReviewBoardsByPlayer,
+        assertReviewPreservesPreWinBoards
+    } = require('../../assertions/bananagrams_postgame_assertions');
+    const preWinByUid = await capturePreReviewBoardsByPlayer(frames);
     await pushHostReviewStateToClients(hostFrame, pages);
     await mergeGuestLayoutOnHost(hostFrame, pages);
     await assertActionsReviewLayouts(hostFrame, hostPage, mp, winLabel);
+    await assertReviewPreservesPreWinBoards(frames, preWinByUid, `${winLabel} review-boards`);
 
     const dist = await assertTileDistributionInReview(
         hostFrame,
@@ -985,6 +998,9 @@ async function awaitMpActionsReviewOpen3p({ pages, frames, mobileAll = false } =
         hostFrame
     );
     await waitForHostReviewReady(hostFrame, hostPage, reviewSyncMs);
+    if (isMpHeaded()) {
+        await relayoutMpHeadedForReview(pages, { mobile: mobileAll });
+    }
     await waitPostGameReview(pages[0], 'host', { hostOnly: true });
     await Promise.all(pages.slice(1).map((p, i) => waitPostGameReview(p, `P${i + 2}`)));
     await assertActionsReviewLayouts(hostFrame, hostPage, mp, 'actions open review 3p');
@@ -1006,9 +1022,9 @@ async function runMpAiActionsOnly3p(browser, options = {}) {
     log('Using 3 dedicated AI solver instances (P1/P2/P3).');
     process.env.BANANA_AI_QUIET = '1';
     const mobileAll = !!options.mobileAll;
-    const keepOpen = !shouldCloseBrowser();
-    log(keepOpen
-        ? 'MP 3p actions: headed open — play to win, stop in post-game review.'
+    const headedReview = isMpHeaded();
+    log(headedReview
+        ? 'MP 3p actions: headed — play to win, assert post-game review + Done.'
         : 'MP 3p actions: optimized AI playthrough (play to win)...');
 
     const { pages, frames, contexts, roomId } = await bootMpForAi3p(browser, {
@@ -1017,21 +1033,6 @@ async function runMpAiActionsOnly3p(browser, options = {}) {
     });
 
     try {
-        if (process.env.FIVE_MP_SKIP_DISCONNECTED_STABILITY !== '1') {
-            await assertHostPeelGuestDisconnectedTilesStable({
-                page1: pages[0],
-                page2: pages[1],
-                frame1: frames[0],
-                frame2: frames[1],
-                mp: { page1: pages[0], page2: pages[1] },
-                mobile: mobileAll,
-                hostUid: BANANA_3P_PLAYERS[0].uid,
-                extraPages: pages.slice(2),
-                settleMs: mobileAll ? 280 : 120,
-                log
-            });
-            await clearMpLocalLayouts(frames);
-        }
         await resetMpForAiPlaythrough3p({
             pages,
             frames,
@@ -1046,28 +1047,27 @@ async function runMpAiActionsOnly3p(browser, options = {}) {
             playToWin: true,
             assertActionsWinInvariants: true,
             mobileAll,
-            winSide: options.winSide ?? process.env.FIVE_MP_WIN_SIDE ?? null
+            winSide: options.winSide ?? null
         });
-        if (keepOpen) {
+        if (headedReview) {
             await awaitMpActionsReviewOpen3p({ pages, frames, mobileAll });
-            if (isMpHeaded()) {
-                if (mobileAll) {
-                    const { enableMobileHub } = require('../../../../platform/mobile/lib/mobile_assertions');
-                    await layoutMpHeadedMobileWindows(pages);
-                    await Promise.all(pages.map((p) => enableMobileHub(p)));
-                    await Promise.all(pages.map((p) => syncMpHeadedMobileViewport(p)));
-                } else {
-                    await layoutMpHeadedWindows(pages);
-                    await centerMpViewerOnPages(pages);
-                }
-            }
+            await relayoutMpHeadedForReview(pages, { mobile: mobileAll });
+            const hostFrame = await getGameFrame(pages[0]);
+            const { assertHeadedMpLayout } = require('../../../../shared/platform/mp-headed-assertions');
+            await assertHeadedMpLayout({
+                pages,
+                mobile: mobileAll,
+                hostPage: pages[0],
+                hostFrame,
+                log
+            });
         }
-        log(keepOpen
-            ? 'SUCCESS: MP 3p actions complete (post-game review).'
+        log(headedReview
+            ? 'SUCCESS: MP 3p actions complete (post-game review + Done verified).'
             : 'SUCCESS: MP 3p actions playthrough complete.');
         return stats;
     } finally {
-        if (!keepOpen) {
+        if (shouldCloseBrowser()) {
             await pages[0].evaluate(({ rId }) => {
                 const db = window.NetworkEngine?.db;
                 if (db) db.ref().update({ [`games/${rId}`]: null, [`gameData/${rId}`]: null });

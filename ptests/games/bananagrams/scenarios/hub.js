@@ -120,7 +120,7 @@ async function runHubScenarios(page) {
     await runScenarios([
         { name: 'Hub switch Line to Bananagrams', run: () => testHubSwitchFromLine(page) },
         { name: 'Re-click game picker reset', run: () => testReclickCurrentGameResets(page) },
-        { name: 'Chat /w dictionary commands', run: () => runDictCommandScenarios(page) }
+        { name: 'Chat /w and /b solve commands', run: () => runDictCommandScenarios(page) }
     ]);
 }
 

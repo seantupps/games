@@ -87,7 +87,7 @@ async function bootMpPlaySession(page1, page2, options = {}) {
     frame1 = await getGameFrame(page1);
     frame2 = await getGameFrame(page2);
     const { centerMpViewerOnPages } = require('../../../../shared/platform/mp-headed-view');
-    await centerMpViewerOnPages([page1, page2]);
+    await centerMpViewerOnPages([page1, page2], { mobile });
     return { frame1, frame2, mp, poolAfterDeal, mobile };
 }
 

@@ -7,10 +7,17 @@ const { chromium } = require('playwright');
 const { runMultiplayerAudit } = require('./multiplayer_base');
 const { ensureTestStack } = require('./emulator-utils');
 const { GLOBAL_MS } = require('./timeouts');
-const { applyEnvProfiles, defaultBootstrapProfiles, shouldCloseBrowser, playwrightHeadless } = require('./env-defaults');
+const {
+    applyEnvProfiles,
+    defaultBootstrapProfiles,
+    shouldCloseBrowser,
+    playwrightHeadless,
+    registerKeepOpenBrowser
+} = require('./env-defaults');
 const { createAuditSession } = require('./audit-session');
 const { resolveMpAuditTimeoutMs } = require('./mp-audit-timeout');
 const { captureAuditFailure } = require('./test-logger');
+const { captureAuditFailureWithMpSnapshot } = require('./mp-failure-snapshot');
 
 /**
  * @param {object} options
@@ -44,8 +51,16 @@ async function runMpAuditBundle(options) {
 
     const auditTimeoutMs = options.auditTimeoutMs ?? resolveMpAuditTimeoutMs({ scenario, slim });
 
-    const skipRefresh = skipRefreshOpt ?? (process.env.FIVE_MP_SLIM === '1');
-    const postVictoryOnLastOnly = postVictoryOpt ?? (process.env.FIVE_MP_SLIM === '1');
+    const slimDefault = (() => {
+        try {
+            const { isSlimAudit } = require('./run-config');
+            return isSlimAudit();
+        } catch (_) {
+            return false;
+        }
+    })();
+    const skipRefresh = skipRefreshOpt ?? slimDefault;
+    const postVictoryOnLastOnly = postVictoryOpt ?? slimDefault;
 
     if (!tests?.length) {
         throw new Error('runMpAuditBundle: tests array is required');
@@ -80,6 +95,7 @@ async function runMpAuditBundle(options) {
             browser = await chromium.launch({ headless });
         }
     }
+    registerKeepOpenBrowser(browser);
 
     let context1;
     let context2;
@@ -139,11 +155,19 @@ async function runMpAuditBundle(options) {
             });
         } catch (err) {
             clearTimeout(timeoutId);
+            const failure = await captureAuditFailureWithMpSnapshot(err, {
+                page1,
+                page2,
+                mobile,
+                scenario,
+                testName: test.name,
+                gameId: test.gameId
+            });
             results.push({
                 name: test.name,
                 success: false,
                 duration: ((Date.now() - start) / 1000).toFixed(2),
-                ...captureAuditFailure(err)
+                ...failure
             });
             break;
         }

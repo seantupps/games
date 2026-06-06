@@ -11,6 +11,7 @@ html.five-mobile {
     --hub-score-pad-block: 8px;
     --hub-score-pad-inline: 12px;
     --hub-score-line: 1;
+    --win-banner-top-default: 12%;
     --hub-turn-font: 0.7rem;
 }
 
@@ -223,17 +224,12 @@ html.five-mobile .chat-msg {
 html.five-mobile #global-win-banner {
     font-size: 1.75rem;
     padding: 0 16px;
-    top: 12%;
     max-width: min(94vw, calc(100vw - 20px));
     max-height: min(32vh, calc(100dvh - env(safe-area-inset-top, 0px) - 48px));
     white-space: normal;
     text-align: center;
     line-height: 1.15;
     overflow-wrap: anywhere;
-}
-
-html.five-mobile body[data-hub-game="bananagrams"] #global-win-banner {
-    top: max(12%, calc(env(safe-area-inset-top, 0px) + 5.5rem));
 }
 
 html.five-mobile #invite-toast {

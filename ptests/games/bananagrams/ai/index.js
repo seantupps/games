@@ -32,6 +32,9 @@ function solveAttemptFromBrowserState(state, options = {}) {
     const dict = getDictionary(options.dictPath);
     const rackLetters = state.rackLetters || [];
     const game = new Game(dict, options.rng, { handSize: Math.max(rackLetters.length, 1) });
+    if (options.deadlineMs > 0) {
+        game._deadline = Date.now() + options.deadlineMs;
+    }
     for (const { gx, gy, letter } of state.boardCells || []) {
         game.board.setCell(gx, gy, letter);
     }
@@ -131,5 +134,8 @@ module.exports = {
     makeRng,
     POOL_SIZE,
     buildShuffledPool,
+    get solveWithStragglers() {
+        return require('./stragglers').solveWithStragglers;
+    },
     Transcript: require('./transcript').Transcript
 };

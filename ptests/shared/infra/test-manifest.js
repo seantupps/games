@@ -38,12 +38,17 @@ function mpAuditPathFor(game, mode, { mobile = false } = {}) {
 /**
  * MP suite tiers (registry `mpSuite` on each game, default 'default'):
  * - default: piles, line — included in `npm run test:mp`
- * - extended: bananagrams full MP — `FIVE_MP_SUITE=extended npm run test:mp`
+ * - extended: bananagrams full MP — `node ptests/run.js mp` (full suite) or `--game=bananagrams`
  * - all: same as extended
  */
 function resolveMpSuiteFilter(opts = {}) {
-    const raw = opts.suite ?? process.env.FIVE_MP_SUITE ?? 'default';
-    return String(raw).toLowerCase();
+    if (opts.suite) return String(opts.suite).toLowerCase();
+    try {
+        const { getActiveRunConfig } = require('./run-config');
+        return String(getActiveRunConfig().suite || 'default').toLowerCase();
+    } catch (_) {
+        return 'default';
+    }
 }
 
 function includeGameInMpSuite(game, suiteFilter) {

@@ -3,9 +3,6 @@ node_modules/
 functions/node_modules/
 vendor/
 
-# Playwright tests & test infra (not app runtime code)
-scripts/
-
 # Local-only reference clones
 references/
 
@@ -33,7 +30,6 @@ ngrok.yml
 # IDE / AI tooling (not app source)
 .vscode/
 .gemini/
-tmp/
 
 # Docs & personal notes (not shipped app code)
 notes/

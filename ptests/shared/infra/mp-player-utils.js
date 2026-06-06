@@ -131,7 +131,8 @@ function defaultMpSkipFlags(gameId, gameMode) {
 function mpScenarioSkipFlags(gameId, gameMode, scenario) {
     const base = defaultMpSkipFlags(gameId, gameMode);
     const { isSmokeScenario } = require('../scenarios/registry');
-    if (!isSmokeScenario(scenario) && process.env.FIVE_MP_SLIM !== '1') {
+    const { isSlimAudit } = require('./run-config');
+    if (!isSmokeScenario(scenario) && !isSlimAudit()) {
         return base;
     }
     return {

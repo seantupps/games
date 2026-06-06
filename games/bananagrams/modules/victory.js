@@ -6,8 +6,7 @@
             _onPlayerWins(winnerUid = null) {
                 const mp = this._isMultiplayerMode();
                 if (mp && winnerUid) {
-                    if (this._winnerUid || this._victoryRegistered
-                        || (typeof this._isBoardInReview === 'function' && this._isBoardInReview())) {
+                    if (!this.canMutatePlayingBoard?.()) {
                         return;
                     }
                     this._winnerUid = winnerUid;
@@ -22,7 +21,7 @@
 
             setGameOver(winner, options = {}) {
                 if (this._isMultiplayerMode()) {
-                    if (this._victoryRegistered || this._isBoardInReview() || this._winnerUid) return;
+                    if (!this.canMutatePlayingBoard?.()) return;
                     const hostUid = this.roomData?.host || '';
                     const uid = options.winnerUid
                         || (winner === 'P1' ? hostUid : this._getPlayerUids().find((u) => u !== hostUid))
@@ -39,7 +38,7 @@
             },
 
             _finishVictory(winnerUid = null) {
-                if (this._victoryRegistered || this._isBoardInReview()) return;
+                if (this._postGameReview || this._hostReviewTransitionActive) return;
 
                 const mp = this._isMultiplayerMode();
                 const uid = mp ? winnerUid : null;
@@ -69,7 +68,7 @@
 
             /** Dev /win — host path mirrors _hostBananasForPlayer; guest sends layout to host. */
             debugTriggerWin() {
-                if (this._victoryRegistered || this._isBoardInReview()) return;
+                if (!this.canMutatePlayingBoard?.()) return;
 
                 const mp = this._isMultiplayerMode();
                 const uid = this._myUid();

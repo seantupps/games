@@ -11,7 +11,7 @@ const { getDictionary } = require('./dictionary');
 const { Game } = require('./game');
 const { validateFull } = require('./grid');
 const { makeRng } = require('./rules');
-const { solveAttemptFromRack } = require('./index');
+const { solveAttemptFromRack, solveWithStragglers } = require('./index');
 
 function pySolve(rackLetters) {
     const aiDir = path.resolve(__dirname, '../../../../build/bananagrams/ai');
@@ -80,6 +80,32 @@ function runCase(label, rack) {
     return true;
 }
 
+function runStragglerParity(label, rack, n) {
+    const dict = getDictionary();
+    const direct = solveAttemptFromRack(rack);
+    const via = solveWithStragglers(rack, n, dict, { maxSubsets: 500 });
+    if (n === 0) {
+        if (!via || !direct.cleared || !via.placements.length) {
+            console.error(`[parity] ${label}: solveWithStragglers(0) mismatch cleared=${direct.cleared}`);
+            return false;
+        }
+        const a = multisetLetters(direct.placements);
+        const b = multisetLetters(via.placements);
+        if (a !== b) {
+            console.error(`[parity] ${label}: straggler-0 multiset js=${a} str=${b}`);
+            return false;
+        }
+        console.log(`[parity] ${label}: solveWithStragglers(0) matches solveAttemptFromRack`);
+        return true;
+    }
+    if (!via) {
+        console.log(`[parity] ${label}: solveWithStragglers(${n}) no layout (ok if hand too small)`);
+        return true;
+    }
+    console.log(`[parity] ${label}: solveWithStragglers(${n}) ok (${via.placements.length} placed, ${via.stragglerIndices.length} stragglers)`);
+    return true;
+}
+
 function main() {
     let ok = true;
     ok = runCase('hand-4 EALI', 'EALI'.split('')) && ok;
@@ -88,6 +114,9 @@ function main() {
     const g = new Game(getDictionary(), makeRng(42), { handSize: 4 });
     g.deal();
     ok = runCase('deal+rack from seed42', [...g.rack]) && ok;
+
+    ok = runStragglerParity('hand-21 straggler-0', 'EALIIEEDRAADIIUZHONOL'.split(''), 0) && ok;
+    ok = runStragglerParity('hand-21 straggler-2', 'EALIIEEDRAADIIUZHONOL'.split(''), 2) && ok;
 
     process.exit(ok ? 0 : 1);
 }

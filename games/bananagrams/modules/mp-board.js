@@ -5,6 +5,7 @@
     Object.assign(G.prototype, {
             _normalizeMpBoard(board) {
                 if (!board) return board;
+                if (board.version >= 5) return board;
                 if (board.version >= 4) return board;
                 if (board.version === 3) return board;
                 if (board.version === 2 && board.hands) {
@@ -51,10 +52,77 @@
             _applyMpSharedGameState(board) {
                 const inReview = this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW;
                 const winActive = inReview || !!(board.winnerUid || this._winnerUid || this._victoryRegistered);
+                const devSolvePool = this._bananaDevHook('applyDevSolveFromBoard', board) === true;
                 if (Array.isArray(board.pool)) {
+                    const localPoolLen = this._tilePool?.length ?? 0;
+                    const remotePoolLen = board.pool.length;
                     const hostAuthoritative = this.isHost?.() && this.gameStarted && !winActive;
-                    if (!hostAuthoritative) {
-                        this._tilePool = winActive ? [] : [...board.pool];
+                    let nextPool = null;
+                    if (winActive) {
+                        nextPool = [];
+                    } else if (this.isHost?.()) {
+                        if (hostAuthoritative) {
+                            const boardPool = this._mpBoardPoolForCurrentDeal?.(board);
+                            const noHostPoolMutations = !(this._peelSeq || this._dumpSeq);
+                            if (localPoolLen === 0 && remotePoolLen > 0 && boardPool?.length
+                                && noHostPoolMutations) {
+                                nextPool = [...boardPool];
+                            } else if (remotePoolLen === 0 && localPoolLen > 0) {
+                                nextPool = null;
+                            } else if (remotePoolLen < localPoolLen) {
+                                nextPool = null;
+                            } else if (remotePoolLen > localPoolLen) {
+                                nextPool = null;
+                            }
+                        } else if (localPoolLen === 0 && remotePoolLen > 0) {
+                            const boardPool = this._mpBoardPoolForCurrentDeal?.(board);
+                            if (boardPool?.length) nextPool = [...boardPool];
+                        } else if (localPoolLen > 0 && localPoolLen > remotePoolLen) {
+                            nextPool = null;
+                        } else if (localPoolLen > 0 && remotePoolLen === 0) {
+                            nextPool = null;
+                        } else {
+                            const boardPool = this._mpBoardPoolForCurrentDeal?.(board);
+                            if (boardPool?.length) {
+                                nextPool = [...boardPool];
+                            }
+                        }
+                    } else if (!devSolvePool) {
+                        nextPool = [...board.pool];
+                    }
+                    if (nextPool !== null && !devSolvePool) {
+                        this._tilePool = nextPool;
+                        if (this.roomData?.global?.board) {
+                            this.roomData.global.board.pool = [...nextPool];
+                        }
+                    } else if (this.isHost?.() && hostAuthoritative && Array.isArray(this._tilePool)) {
+                        const roomBoard = this.roomData?.global?.board;
+                        if (roomBoard && Array.isArray(roomBoard.pool)
+                            && roomBoard.pool.length !== this._tilePool.length) {
+                            this._syncHostPoolOnRoomCaches?.();
+                        }
+                    }
+                }
+                if (board.poolUsesTileIds
+                    || (Array.isArray(board.pool) && board.pool.some((e) => this._mpParseTileId?.(e)))) {
+                    this._mpIdPoolActive = true;
+                }
+                this._mpEnsureIdPoolModeFromPool?.();
+                if (board.canonical && typeof board.canonical === 'object') {
+                    this._mpEnsureCanonicalMap?.();
+                    const entries = Object.entries(board.canonical);
+                    if (!this.isHost?.()) {
+                        entries.forEach(([id, letter]) => {
+                            this._mpCanonicalById[id] = this._mpNormLetter?.(letter) || letter;
+                        });
+                    } else {
+                        const localCount = Object.keys(this._mpCanonicalById || {}).length;
+                        entries.forEach(([id, letter]) => {
+                            if (!this._mpCanonicalEntryForCurrentDeal?.(id)) return;
+                            if (localCount === 0 || !this._mpCanonicalById[id]) {
+                                this._mpCanonicalById[id] = this._mpNormLetter?.(letter) || letter;
+                            }
+                        });
                     }
                 }
                 if (typeof board.nextTileId === 'number') this._nextTileId = board.nextTileId;
@@ -75,6 +143,11 @@
                     this._freezeTimerOnVictory();
                 } else {
                     this.gameStarted = !!board.gameStarted;
+                    if (typeof board.started === 'boolean') {
+                        this.started = board.started;
+                    } else if ((this.tiles?.length || 0) > 0) {
+                        this.started = true;
+                    }
                     if (board.startedAt) this._mpStartedAt = board.startedAt;
                     if (this.gameStarted && board.startedAt) {
                         this._syncMpTimerFromBoard(board.startedAt);
@@ -94,35 +167,61 @@
                 const dumpSeq = board.dumpSeq || 0;
                 const actionSeqAdvanced = peelSeq > (this._lastPeelSeq || 0)
                     || dumpSeq > (this._lastDumpSeq || 0);
+                const devSolvePool = this._bananaDevHook('applyDevSolveFromBoard', board) === true;
                 // Guests mirror host pool from board on peel/dump; host keeps authoritative local _tilePool.
-                if (actionSeqAdvanced && Array.isArray(board.pool) && !this.isHost?.()) {
+                let guestPoolSynced = false;
+                if (Array.isArray(board.pool) && !this.isHost?.()) {
                     const inReview = this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW;
                     const winActive = inReview || !!(board.winnerUid || this._winnerUid || this._victoryRegistered);
-                    if (!winActive) {
-                        this._tilePool = [...board.pool];
-                        if (typeof board.nextTileId === 'number') this._nextTileId = board.nextTileId;
-                    } else {
-                        this._tilePool = [];
+                    const remote = board.pool.length;
+                    const local = this._tilePool?.length ?? 0;
+                    const poolDrained = !winActive && remote < local;
+                    const poolEmpty = !winActive && remote === 0 && local > 0;
+                    if (actionSeqAdvanced || devSolvePool || poolDrained || poolEmpty) {
+                        guestPoolSynced = true;
+                        if (!winActive) {
+                            this._tilePool = [...board.pool];
+                            if (this.roomData?.global?.board) {
+                                this.roomData.global.board.pool = [...board.pool];
+                            }
+                            if (typeof board.nextTileId === 'number') this._nextTileId = board.nextTileId;
+                        } else {
+                            this._tilePool = [];
+                            if (this.roomData?.global?.board) {
+                                this.roomData.global.board.pool = [];
+                            }
+                        }
                     }
                 }
                 if (peelSeq > (this._lastPeelSeq || 0)) {
-                    this._lastPeelSeq = peelSeq;
                     const actor = board.peelActorUid;
                     this._showBanner('Peel!', 2200, {
                         actorUid: actor !== undefined && actor !== null ? actor : null
                     });
                 }
                 if (dumpSeq > (this._lastDumpSeq || 0)) {
-                    this._lastDumpSeq = dumpSeq;
                     const actor = board.dumpActorUid;
                     this._showBanner('Dump!', 2200, {
                         actorUid: actor !== undefined && actor !== null ? actor : null
                     });
                 }
-                if (actionSeqAdvanced) {
+                if (actionSeqAdvanced || devSolvePool || guestPoolSynced) {
                     const poolEl = document.getElementById('banana-pool-count');
                     if (poolEl) poolEl.textContent = String(this._tilePool.length);
                     this.requestRender?.();
+                }
+            },
+
+            /** Commit peel/dump seq after guest pool ingest (_mpIngestBoardBeforeInventory). */
+            _commitMpActionSeqFromBoard(board) {
+                if (!board) return;
+                const peelSeq = board.peelSeq || 0;
+                const dumpSeq = board.dumpSeq || 0;
+                if (peelSeq > (this._lastPeelSeq || 0)) {
+                    this._lastPeelSeq = peelSeq;
+                }
+                if (dumpSeq > (this._lastDumpSeq || 0)) {
+                    this._lastDumpSeq = dumpSeq;
                 }
             },
 
@@ -139,7 +238,6 @@
 
             _isFreshPostResetBoard(board) {
                 if (!board || board.version < 2) return false;
-                if (board.gameStarted) return false;
                 if ((board.peelSeq || 0) > 0 || (board.dumpSeq || 0) > 0) return false;
                 const hands = board.tilesOwnedByPlayer || {};
                 return Object.values(hands).some((h) => Array.isArray(h) && h.length > 0);
@@ -147,6 +245,23 @@
 
             _applyMultiplayerBoard(board, options = {}) {
                 if (!board) return;
+                const recentReset = typeof this._isRecentProgrammaticReset === 'function'
+                    && this._isRecentProgrammaticReset();
+                if (this.isHost?.() && recentReset && !options.reset) {
+                    const localWrite = (options._traceCaller || '').includes('hostWriteBoard');
+                    if (!localWrite) {
+                        if ((board.peelSeq || 0) > 0 || (board.dumpSeq || 0) > 0) return;
+                        const myUid = this._myUid();
+                        const inv = board.inventorySeq?.[myUid] ?? 0;
+                        const handSize = this._handSizeForParty?.() || 0;
+                        const ownedLen = board.tilesOwnedByPlayer?.[myUid]?.length
+                            || board.hands?.[myUid]?.length
+                            || 0;
+                        if (inv > 1 || (handSize > 0 && ownedLen > 0 && ownedLen < handSize)) {
+                            return;
+                        }
+                    }
+                }
                 const hadTilesBeforeApply = (this.tiles?.length || 0) > 0;
                 this._seedMpAppliedResetFromRoom();
                 const traceCaller = options._traceCaller
@@ -154,13 +269,14 @@
                         ? (new Error().stack || '').split('\n').slice(1, 4).join(' | ')
                         : '');
                 board = this._normalizeMpBoard(board);
-                if (this._mpAwaitReset && !this.isHost?.()) {
+                if (this._mpAwaitReset && !this.isHost?.() && !(options.force && options.reset)) {
                     if (!this._isFreshPostResetBoard(board)) {
                         return;
                     }
                     options = { ...options, reset: true, force: true };
                 }
                 this._applyMpActionBanners(board);
+                this._mpIngestBoardBeforeInventory?.(board);
                 this._traceDoneApply(board, options, traceCaller);
                 const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
                 const epoch = S ? S.readResetCount(this.roomData) : (this.roomData?.global?.resetCount ?? 0);
@@ -196,6 +312,7 @@
                             appliedRc
                         });
                     }
+                    this._commitMpActionSeqFromBoard(board);
                     return;
                 }
 
@@ -246,8 +363,25 @@
                 const leavingReview = this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW
                     && !inReview;
                 if (leavingReview) {
-                    this._exitReviewLocalState();
-                    options = { ...options, reset: true, force: true };
+                    const spuriousPlayingDuringReview = !board.winnerUid
+                        && (this._reviewUiActive?.() || this._winnerUid || this.isOver);
+                    if (spuriousPlayingDuringReview) {
+                        this._reviewDbg?.('ignore-leaving-review-echo', {
+                            boardSeq: board.seq,
+                            localSeq: this._boardSeq,
+                            gameStarted: board.gameStarted
+                        });
+                        return;
+                    }
+                    const applyLeavingReview = !board.winnerUid
+                        || board.gameStarted
+                        || (!this._winnerUid && !this.isOver && !this._hostReviewTransitionActive);
+                    if (applyLeavingReview) {
+                        this._exitReviewLocalState();
+                        options = { ...options, reset: true, force: true };
+                    } else {
+                        return;
+                    }
                 }
         
                 if (board.seq != null) this._boardSeq = board.seq;
@@ -274,9 +408,9 @@
                 }
         
                 let layoutChanged = false;
-                if (!inReview || options.reset) {
+                if (this._shouldProjectPlayingInventory?.(board, options)) {
                     layoutChanged = this._applyMpInventoryFromBoard(board, uid, options);
-                    if (leavingReview && this.tiles?.length) {
+                    if (leavingReview && this.tiles?.length && !board.gameStarted) {
                         this.tiles.forEach((t) => { t.faceUp = false; });
                         layoutChanged = true;
                     }
@@ -298,10 +432,17 @@
                 }
         
                 this._applyMpSharedGameState(board);
+                this._commitMpActionSeqFromBoard(board);
                 if (leavingReview) {
-                    this.gameStarted = false;
-                    this._mpStartedAt = null;
-                    this._stopTimer();
+                    if (board.gameStarted) {
+                        if (!this.isHost?.()) {
+                            this.tiles.forEach((t) => { t.faceUp = true; });
+                        }
+                    } else {
+                        this.gameStarted = false;
+                        this._mpStartedAt = null;
+                        this._stopTimer();
+                    }
                 }
         
                 if (inReview && board.winnerUid && board.winnerUid !== this._winnerBannerUid) {
@@ -315,7 +456,9 @@
                     }
                 } else if (!inReview && !board.winnerUid) {
                     const roomWinner = this.roomData?.global?.board?.winnerUid;
-                    if (!roomWinner && (this._victoryRegistered || this.isOver || this._winnerUid)) {
+                    const keepVictory = !this.canMutatePlayingBoard?.();
+                    if (!roomWinner && !keepVictory
+                        && (this._victoryRegistered || this.isOver || this._winnerUid)) {
                         this._victoryRegistered = false;
                         this.isOver = false;
                         this._winnerUid = null;
@@ -327,6 +470,13 @@
         
                 if (inReview) {
                     this._applyMpReviewFromBoard(board);
+                    this._ensureReviewTilesProjected?.(board);
+                } else if (layoutChanged && (this._reviewUiActive?.() || this._inReviewExperience?.())) {
+                    const snap = this._boardReviewSnapshot?.();
+                    if (snap && this._boardPhase(snap) === BananagramsGame.MP_PHASE.REVIEW) {
+                        this._applyMpReviewFromBoard(snap);
+                        this._ensureReviewTilesProjected?.(snap);
+                    }
                 }
                 this._traceDoneFlags(`apply-exit:${traceCaller.slice(0, 40)}`);
         
@@ -387,35 +537,18 @@
             _collectMpBoardPlayers() {
                 const tilesOwnedByPlayer = {};
                 if (!this.isHost()) return { tilesOwnedByPlayer };
+                this._hostRepairOwnedFromCanonical?.('board-write');
                 this._hostEnsureMpStores();
-                const roomBoard = this._mpBoardFromRoom(this.roomData) || {};
-                const roomHands = roomBoard.tilesOwnedByPlayer || {};
-                const roomInv = roomBoard.inventorySeq || {};
                 const active = new Set(this._getPlayerUids());
                 const hostUid = this.roomData?.host || this._myUid();
                 if (hostUid) active.add(hostUid);
-                const uids = new Set([
-                    ...active,
-                    ...Object.keys(this._mpOwned || {}),
-                    ...Object.keys(roomHands || {}),
-                    ...Object.keys(roomInv || {})
-                ]);
-                uids.forEach((uid) => {
-                    if (!active.has(uid)) return;
-                    let owned = this._mpOwned[uid] || [];
-                    if (!owned.length && Array.isArray(roomHands[uid]) && roomHands[uid].length) {
-                        owned = roomHands[uid];
-                    }
-                    if (!owned.length && Array.isArray(this._mpLastKnownOwned?.[uid]) && this._mpLastKnownOwned[uid].length) {
-                        owned = this._mpLastKnownOwned[uid];
-                    }
-                    if (owned.length) {
-                        tilesOwnedByPlayer[uid] = owned.map((t) => ({
-                            id: t.id,
-                            letter: t.letter,
-                            faceUp: !!t.faceUp
-                        }));
-                    }
+                active.forEach((uid) => {
+                    const owned = this._mpOwned?.[uid] || [];
+                    if (!owned.length) return;
+                    tilesOwnedByPlayer[uid] = owned.map((t) => ({
+                        id: t.id,
+                        faceUp: !!t.faceUp
+                    }));
                 });
                 return { tilesOwnedByPlayer };
             },
@@ -469,10 +602,35 @@
                 }
             },
 
+            _syncHostPoolOnRoomCaches() {
+                if (!this.isHost?.() || !Array.isArray(this._tilePool)) return;
+                const pool = [...this._tilePool];
+                if (this.roomData?.global?.board) {
+                    this.roomData.global.board.pool = pool;
+                }
+                if (this.roomData?.state?.board) {
+                    this.roomData.state.board.pool = pool;
+                }
+                const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
+                if (S?.setCanonicalBoardOnRoom && S?.readBoardFromRoom) {
+                    const board = S.readBoardFromRoom(this.roomData);
+                    if (board) {
+                        board.pool = pool;
+                        S.setCanonicalBoardOnRoom(this.roomData, board);
+                    }
+                }
+                const poolEl = document.getElementById('banana-pool-count');
+                if (poolEl) poolEl.textContent = String(pool.length);
+            },
+
             _hostPublishBoard(board, traceLabel, applyOptions = {}) {
                 if (!this.roomData) this.roomData = {};
                 if (!this.roomData.global) this.roomData.global = {};
                 this.roomData.global.board = board;
+                if (this.isHost?.() && Array.isArray(this._tilePool)) {
+                    board.pool = [...this._tilePool];
+                    this._syncHostPoolOnRoomCaches?.();
+                }
                 this._traceDoneWrite({ 'global/board': board }, traceLabel);
                 this.updateMetadata({ 'global/board': board });
                 this.renderScoreboard();
@@ -485,16 +643,17 @@
             /**
              * Single host write path for global/board (playing inventory sync or review transition).
              * @param {'playing'|'review'} mode
+             * @returns {boolean} whether the write committed (false = blocked or not host)
              */
             _hostWriteBoard(mode, options = {}) {
-                if (!this._isMultiplayerMode() || !this.isHost()) return;
+                if (!this._isMultiplayerMode() || !this.isHost()) return false;
 
                 const REVIEW = BananagramsGame.MP_PHASE.REVIEW;
                 const isReview = mode === 'review';
 
                 if (isReview) {
                     if (typeof this._hostMaySyncReview === 'function' && !this._hostMaySyncReview()) {
-                        return;
+                        return false;
                     }
                     this._hostCancelPendingBoardSync();
                     this.isOver = true;
@@ -534,7 +693,7 @@
                         if (options.processBananaInteractions !== false) {
                             this._processBananaInteractions(this.roomData?.interactions?.banana);
                         }
-                        return;
+                        return true;
                     }
                     this._boardSeq = Math.max(this._boardSeq || 0, remoteSeq) + 1;
                     if (typeof this._logReviewBoards === 'function') {
@@ -553,16 +712,22 @@
                     this._hostPublishBoard(board, 'hostWriteBoard-review', {
                         _traceCaller: 'hostWriteBoard-review'
                     });
+                    this._setGamePhase?.('review');
                     if (options.processBananaInteractions !== false) {
                         this._processBananaInteractions(this.roomData?.interactions?.banana);
                     }
-                    return;
+                    return true;
+                }
+
+                if (!this.canMutatePlayingBoard?.()) {
+                    return false;
                 }
 
                 this._hostSyncQueued = false;
                 this._boardSeq += 1;
                 const board = this._cleanBoardPayload(this.serializeBoard());
                 board.pool = [...this._tilePool];
+                this._bananaDevHook('augmentPlayingBoard', board);
                 if (board.phase !== REVIEW) {
                     board.winnerUid = null;
                     board.reviewLayouts = null;
@@ -581,6 +746,7 @@
                 this._hostPublishBoard(board, 'hostWriteBoard-playing', {
                     _traceCaller: 'hostWriteBoard-playing'
                 });
+                return true;
             },
 
             _hostSyncBoard(options = {}) {
@@ -615,6 +781,10 @@
 
             _hostReconcileOwnedFromRoomBoard() {
                 if (!this.isHost()) return;
+                if (typeof this._isRecentProgrammaticReset === 'function'
+                    && this._isRecentProgrammaticReset()) {
+                    return;
+                }
                 const board = this._mpBoardFromRoom(this.roomData);
                 const hands = board?.tilesOwnedByPlayer || {};
                 this._hostEnsureMpStores();
@@ -622,13 +792,22 @@
                     if (this._mpOwned[uid]?.length) return;
                     const owned = hands[uid];
                     if (Array.isArray(owned) && owned.length) {
-                        this._hostSetOwned(uid, owned, false);
+                        this._hostSetOwned(uid, owned, false, {
+                            source: 'rtdb',
+                            action: 'sync',
+                            ctx: `host-set-owned:${uid}`,
+                            msgType: 'reconcile-board'
+                        });
                     }
                 });
             },
 
             _flushHostSyncBoard() {
                 if (!this._isMultiplayerMode() || !this.isHost()) return;
+                if (!this.canMutatePlayingBoard?.()) {
+                    this._hostCancelPendingBoardSync();
+                    return;
+                }
                 if (this._hostSyncTimer) {
                     clearTimeout(this._hostSyncTimer);
                     this._hostSyncTimer = 0;
@@ -656,15 +835,17 @@
                     const uids = this._getPlayerUids();
                     const { tilesOwnedByPlayer } = this._collectMpBoardPlayers();
                     const payload = {
-                        version: 4,
+                        version: this._mpPoolUsesTileIds?.() ? 5 : 4,
                         seq: this._boardSeq,
                         playerUids: uids,
                         handSize: this._handSizeForParty(),
                         pool: [...this._tilePool],
+                        poolUsesTileIds: !!this._mpPoolUsesTileIds?.(),
                         gameStarted: this.gameStarted,
                         startedAt: this._mpStartedAt || null,
                         winnerUid: null,
                         nextTileId: this._nextTileId,
+                        dealEpoch: this._mpDealEpoch?.() ?? 0,
                         started: this.started,
                         peelSeq: this._peelSeq || 0,
                         peelActorUid: (this._peelSeq || 0) > 0 ? (this._peelActorUid || null) : null,
@@ -674,6 +855,9 @@
                         tilesOwnedByPlayer,
                         inventorySeq: { ...(this._mpInventorySeq || {}) }
                     };
+                    if (this._mpPoolUsesTileIds?.() && this._mpCanonicalById) {
+                        payload.canonical = { ...this._mpCanonicalById };
+                    }
                     if (this.isHost() && this._bananaAck && Object.keys(this._bananaAck).length) {
                         payload.bananaAck = { ...this._bananaAck };
                     }
@@ -736,7 +920,10 @@
                     this.tiles = board.tiles.map((t) => ({ ...t }));
                     this.started = true;
                 }
-                if (Array.isArray(board.pool)) this._tilePool = [...board.pool];
+                if (Array.isArray(board.pool)
+                    && !(this.isHost?.() && this._mpPoolIsIdBased?.())) {
+                    this._tilePool = [...board.pool];
+                }
                 if (typeof board.nextTileId === 'number') this._nextTileId = board.nextTileId;
                 if (typeof board.gameStarted === 'boolean') this.gameStarted = board.gameStarted;
                 if (typeof board.elapsedMs === 'number') this.elapsedMs = board.elapsedMs;
@@ -768,7 +955,10 @@
                             || this.sync?.shouldApplyBoard?.(appliedRc, epoch, this._boardSeq, board)
                             || (!this.sync && (!S || S.shouldApplyBoard(appliedRc, epoch, this._boardSeq, board)));
                         if (!canApply) {
+                            this._bananaDevHook('applyDevSolveFromBoard', board);
                             this._applyMpActionBanners(board);
+                            this._mpIngestBoardBeforeInventory?.(board);
+                            this._commitMpActionSeqFromBoard(board);
                             return;
                         }
                         this._applyMultiplayerBoard(board, {
@@ -794,6 +984,8 @@
             },
 
             onRemoteReset() {
+                this._bananaDevHook('resetSolveSeq', this);
+                this._setGamePhase?.('playing');
                 this._exitReviewLocalState();
                 this._closeReviewEpoch();
                 window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
@@ -812,6 +1004,7 @@
                 this._bananaAck = {};
                 this._mpDeferredBoard = null;
                 this._localInventorySeq = 0;
+                this._mpCanonicalReset?.();
                 this._clearLocalLayout();
                 this._lastPeelSeq = 0;
                 this._lastDumpSeq = 0;
@@ -832,6 +1025,11 @@
 
             onGameReset() {
                 this._stopTimer();
+                if (typeof this._hostCancelPendingBoardSync === 'function') {
+                    this._hostCancelPendingBoardSync();
+                }
+                this._bananaDevHook('resetSolveSeq', this);
+                this._setGamePhase?.('playing');
                 this._exitReviewLocalState();
                 this._victoryRegistered = false;
                 this._winnerUid = null;
@@ -851,6 +1049,7 @@
                 this.tiles = [];
                 this._tilePool = [];
                 this._mpOwned = null;
+                this._mpLastKnownOwned = null;
                 this._mpPlayerLayouts = null;
                 this._mpInventorySeq = null;
                 this._localInventorySeq = 0;
@@ -867,6 +1066,7 @@
                 this._selectionHighlight = false;
                 this._bananaHandled = {};
                 this._bananaAck = {};
+                this._boardSeq = 0;
                 this._resetAcknowledgedAt = Date.now();
                 this._bannerText = '';
                 this.canvasPanX = 0;

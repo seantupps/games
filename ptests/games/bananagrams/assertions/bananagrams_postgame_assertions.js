@@ -85,6 +85,92 @@ async function assertMpReviewShowsAllBoards(frame, playerUids, label = 'mp-revie
     }
 }
 
+/** Snapshot each client's own ending board before review transition (uid → tiles). */
+async function capturePreReviewBoardsByPlayer(frames) {
+    const byUid = {};
+    for (const frame of frames) {
+        const snap = await captureEndingLayoutFromFrame(frame);
+        if (!snap?.uid) continue;
+        byUid[snap.uid] = { uid: snap.uid, tiles: snap.tiles, color: snap.color };
+    }
+    return byUid;
+}
+
+/**
+ * Grid-cell check for connected boards: each occupied cell keeps the same tile id + letter in review.
+ * Catches letter scrambles that leave tiles on the same connected layout.
+ */
+async function assertReviewPreservesGridCells(frame, preWinByUid, label = 'review-grid') {
+    const state = await frame.evaluate(({ expected }) => {
+        const g = window.game;
+        const origin = { x: g.ORIGIN, y: g.ORIGIN };
+        const size = (typeof BananaRules !== 'undefined' && BananaRules.TILE_SIZE) || 40;
+        const issues = [];
+
+        const toGrid = (tiles, uid) => {
+            const grid = {};
+            (tiles || []).forEach((t) => {
+                const gx = Math.round((t.x - origin.x) / size);
+                const gy = Math.round((t.y - origin.y) / size);
+                grid[`${gx},${gy}`] = { id: t.id, letter: t.letter, uid };
+            });
+            return grid;
+        };
+
+        Object.entries(expected).forEach(([uid, snap]) => {
+            const preGrid = toGrid(snap.tiles, uid);
+            const onBoard = (g.tiles || []).filter((t) => (t.ownerUid || g._myUid()) === uid);
+            const postGrid = toGrid(onBoard, uid);
+
+            Object.entries(preGrid).forEach(([cell, pre]) => {
+                const post = postGrid[cell];
+                if (!post) {
+                    issues.push({ uid, cell, reason: 'missing-cell', pre });
+                    return;
+                }
+                if (post.letter !== pre.letter) {
+                    issues.push({
+                        uid, cell, reason: 'letter-scramble', want: pre.letter, have: post.letter,
+                        wantId: pre.id, haveId: post.id
+                    });
+                } else if (post.id !== pre.id) {
+                    issues.push({
+                        uid, cell, reason: 'tile-swap', wantId: pre.id, haveId: post.id
+                    });
+                }
+            });
+
+            Object.keys(postGrid).forEach((cell) => {
+                if (!preGrid[cell]) {
+                    issues.push({ uid, cell, reason: 'extra-cell', post: postGrid[cell] });
+                }
+            });
+        });
+
+        return {
+            ok: issues.length === 0,
+            issues,
+            inReview: !!g._postGameReview || g.roomData?.global?.board?.phase === 'review'
+        };
+    }, { expected: preWinByUid });
+
+    if (!state.inReview) {
+        throw new Error(`${label}: not in review (${JSON.stringify(state)})`);
+    }
+    if (!state.ok) {
+        throw new Error(`${label}: review scrambled connected boards (${JSON.stringify(state)})`);
+    }
+}
+
+/** On every client, review boards must match pre-win snapshots (relative layout + grid cells). */
+async function assertReviewPreservesPreWinBoards(frames, preWinByUid, label = 'review-preserves-pre-win') {
+    for (let i = 0; i < frames.length; i++) {
+        const clientLabel = `${label} P${i + 1}`;
+        await assertMpReviewPreservesSnapshots(frames[i], preWinByUid, `${clientLabel}-snapshots`);
+        await assertReviewPreservesGridCells(frames[i], preWinByUid, `${clientLabel}-grid`);
+    }
+}
+
 /** Each client captures its own ending layout (local board + localStorage). */
 async function captureEndingLayoutFromFrame(frame) {
     return frame.evaluate(() => {
@@ -905,10 +991,6 @@ async function waitMpClientsInReview(frames, label = 'in-review', timeout = STEP
     while (Date.now() < deadline) {
         const states = await Promise.all(frames.map((frame) => inReviewOnFrame(frame)));
         if (states.every(Boolean)) return;
-        if (hostFrame) {
-            await pushHostReviewStateToClients(hostFrame, pages);
-            await mergeGuestLayoutOnHost(hostFrame, pages, 1);
-        }
         await new Promise((r) => setTimeout(r, pollMs));
     }
 
@@ -955,16 +1037,9 @@ async function waitMpClientsPostWinReady(frames, playerUids, label = 'post-win-r
         return uids.every((u) => (counts[u] || 0) >= 6);
     }, { uids: playerUids });
 
-    const nudge = async () => {
-        if (!hostFrame) return;
-        await pushHostReviewStateToClients(hostFrame, pages);
-        await mergeGuestLayoutOnHost(hostFrame, pages, Math.max(2, playerUids.length));
-    };
-
     while (Date.now() < deadline) {
         const states = await Promise.all(frames.map((frame) => readyOnFrame(frame)));
         if (states.every(Boolean)) return;
-        await nudge();
         await new Promise((r) => setTimeout(r, pollMs));
     }
 
@@ -1016,27 +1091,33 @@ async function prepareGuestReviewViewport(page, label = 'guest-review-viewport')
     }
 }
 
-async function assertGuestReviewVisibleWithoutInteraction(page, label = 'guest-review-visible', minOwners = 2) {
+async function assertGuestReviewVisibleWithoutInteraction(
+    page,
+    label = 'guest-review-visible',
+    minOwners = 2,
+    minTilesPerOwner = 6
+) {
     await prepareGuestReviewViewport(page, `${label}-viewport`);
+    const minTotalTiles = Math.max(minTilesPerOwner, minOwners * minTilesPerOwner);
     try {
-        await page.waitForFunction(({ min }) => {
+        await page.waitForFunction(({ min, minPerOwner, minTotal }) => {
             const g = document.getElementById('game-frame')?.contentWindow?.game;
             if (!g) return false;
             const board = g.roomData?.global?.board || g.roomData?.state?.board;
             const layoutOwners = board?.reviewLayouts
-                ? Object.keys(board.reviewLayouts).filter((u) => board.reviewLayouts[u]?.length >= 6)
+                ? Object.keys(board.reviewLayouts).filter((u) => board.reviewLayouts[u]?.length >= minPerOwner)
                 : [];
             const counts = {};
             (g.tiles || []).forEach((t) => {
                 const o = t.ownerUid || (typeof g._myUid === 'function' ? g._myUid() : null);
                 if (o) counts[o] = (counts[o] || 0) + 1;
             });
-            const ownersWithTiles = Object.keys(counts).filter((u) => counts[u] >= 6);
+            const ownersWithTiles = Object.keys(counts).filter((u) => counts[u] >= minPerOwner);
             const ownerCount = Math.max(ownersWithTiles.length, layoutOwners.length);
-            return (g.tiles?.length || 0) >= 6
+            return (g.tiles?.length || 0) >= minTotal
                 && ownerCount >= min
                 && (!!g._postGameReview || !!g._reviewViewportSettled);
-        }, { min: minOwners }, { timeout: STEP_MS });
+        }, { min: minOwners, minPerOwner: minTilesPerOwner, minTotal: minTotalTiles }, { timeout: STEP_MS });
     } catch (err) {
         const diag = await page.evaluate(() => {
             const win = document.getElementById('game-frame')?.contentWindow;
@@ -1070,9 +1151,77 @@ async function assertGuestReviewVisibleWithoutInteraction(page, label = 'guest-r
     }
 }
 
+/**
+ * Poll host client during review settle — catches loser board flashing then disappearing (guest win).
+ * Run in parallel with play-to-win; holds visibility once both players' tiles are on screen.
+ *
+ * @param {import('playwright').Page} page host page (game iframe)
+ * @param {string[]} playerUids
+ * @param {string} label
+ * @param {{ minPerPlayer?: number, pollMs?: number, maxMs?: number, holdMs?: number }} [options]
+ */
+async function assertMpReviewBoardsStayVisible(page, playerUids, label = 'review-stable', options = {}) {
+    const minPerPlayer = options.minPerPlayer ?? 6;
+    const pollMs = options.pollMs ?? 40;
+    const maxMs = options.maxMs ?? 15000;
+    const holdMs = options.holdMs ?? 1500;
+    const start = Date.now();
+    let sawAll = false;
+    let holdStart = null;
+    const dips = [];
+
+    while (Date.now() - start < maxMs) {
+        const snap = await page.evaluate(({ uids, min }) => {
+            const g = document.getElementById('game-frame')?.contentWindow?.game;
+            const board = g?.roomData?.global?.board;
+            const counts = {};
+            uids.forEach((u) => { counts[u] = 0; });
+            (g?.tiles || []).forEach((t) => {
+                const o = t.ownerUid || g._myUid?.();
+                if (counts[o] != null) counts[o] += 1;
+            });
+            return {
+                inReview: !!(g?._postGameReview || board?.phase === 'review'),
+                counts,
+                tileCount: g?.tiles?.length ?? 0,
+                phase: board?.phase ?? null
+            };
+        }, { uids: playerUids, min: minPerPlayer });
+
+        if (snap.inReview) {
+            const allPresent = playerUids.every((u) => (snap.counts[u] || 0) >= minPerPlayer);
+            if (allPresent) {
+                if (!sawAll) {
+                    sawAll = true;
+                    holdStart = Date.now();
+                }
+            } else if (sawAll) {
+                dips.push({ counts: snap.counts, tileCount: snap.tileCount, phase: snap.phase });
+            }
+            if (sawAll && holdStart && Date.now() - holdStart >= holdMs) {
+                return;
+            }
+        }
+        await new Promise((r) => setTimeout(r, pollMs));
+    }
+
+    if (dips.length) {
+        throw new Error(
+            `${label}: review board disappeared on host after both were visible `
+            + `(${JSON.stringify(dips.slice(0, 3))})`
+        );
+    }
+    if (!sawAll) {
+        throw new Error(`${label}: never saw both review boards on host within ${maxMs}ms`);
+    }
+}
+
 module.exports = {
     assertTimerFrozenInReview,
     assertMpReviewShowsAllBoards,
+    capturePreReviewBoardsByPlayer,
+    assertReviewPreservesGridCells,
+    assertReviewPreservesPreWinBoards,
     assertMpReviewPreservesSnapshots,
     assertReviewViewportStable,
     assertReviewBoardsFullyVisible,
@@ -1085,6 +1234,7 @@ module.exports = {
     waitMpClientsPostWinReady,
     prepareGuestReviewViewport,
     assertGuestReviewVisibleWithoutInteraction,
+    assertMpReviewBoardsStayVisible,
     waitMpResetAfterDone,
     assertMpResetHostGuestLayoutSynced,
     assertMpPlayableAfterReset,

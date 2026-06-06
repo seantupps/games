@@ -235,7 +235,7 @@ Sync guide: games/_template/README.md#step-0--pick-sync-style-first`);
     console.log('  6. npm run check:sync');
     if (boardAuth) console.log('  7. npm run check:board-auth');
     console.log(`  8. npm run sp --game=${id}`);
-    if (mp) console.log(`  9. npm run mp --game=${id}`);
+    if (mp) console.log(`  9. node ptests/run.js mp --game=${id}`);
 }
 
 main();

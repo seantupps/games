@@ -111,6 +111,49 @@ function printBenchmarkResults(opts) {
 }
 
 /**
+ * Print the standard benchmark table and optionally throw on failure.
+ * Call once at the end of a runner path when summarize !== false.
+ *
+ * @param {{ results?: BenchmarkResult[], allPassed?: boolean, totalDuration?: string|number }} out
+ * @param {object} [opts]
+ * @param {number} [opts.namePad]
+ * @param {number|null} [opts.targetSeconds]
+ * @param {string} [opts.title]
+ * @param {string} [opts.failMessage]
+ * @param {boolean} [opts.throwOnFail]
+ * @returns {boolean}
+ */
+function emitBenchmarkSummary(out, opts = {}) {
+    const {
+        namePad = 28,
+        targetSeconds = null,
+        title = 'BENCHMARK RESULTS',
+        failMessage = 'Suite had failures',
+        throwOnFail = true
+    } = opts;
+
+    if (!out?.results?.length) {
+        if (out?.allPassed === false && throwOnFail) {
+            throw new Error(failMessage);
+        }
+        return out?.allPassed !== false;
+    }
+
+    const allPassed = printBenchmarkResults({
+        results: out.results,
+        totalDuration: out.totalDuration,
+        namePad,
+        targetSeconds,
+        title
+    });
+
+    if (!allPassed && throwOnFail) {
+        throw new Error(failMessage);
+    }
+    return allPassed;
+}
+
+/**
  * @param {Array<{ id: string, ok: boolean, ms: number }>} hubSubResults
  */
 function hubSubResultsToBenchmark(hubSubResults) {
@@ -130,6 +173,7 @@ module.exports = {
     runnerLog,
     printSuiteHeader,
     printBenchmarkResults,
+    emitBenchmarkSummary,
     hubSubResultsToBenchmark,
     formatDuration,
     prefixResults,

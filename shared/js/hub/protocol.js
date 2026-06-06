@@ -57,6 +57,8 @@
         DICT_ADJUST_RESULT: 'dict-adjust-result',
         BOARD_STATE_INSPECT: 'board-state-inspect',
         BOARD_STATE_INSPECT_RESULT: 'board-state-inspect-result',
+        BOARD_SOLVE: 'board-solve',
+        BOARD_SOLVE_RESULT: 'board-solve-result',
         /** @deprecated use BOARD_STATE_INSPECT */
         BANANA_BOARD_STATE: 'banana-board-state',
         /** @deprecated use BOARD_STATE_INSPECT_RESULT */

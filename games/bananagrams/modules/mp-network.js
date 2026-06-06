@@ -22,6 +22,7 @@
                 }
                 if (this.isHost()) {
                     this._processBananaInteractions(data?.interactions?.banana);
+                    this._syncHostPoolOnRoomCaches?.();
                 }
                 if (this._doneTraceOn()) {
                     this._traceDoneFlags('onNetworkUpdate-exit');
@@ -132,11 +133,15 @@
                     }
                     this._ackBananaInteraction(uid, msg, path);
                     ackedNew = true;
-                    if (result === 'handled' && (msg.type === 'peel' || msg.type === 'bananas')) {
+                    if (result === 'handled' && (msg.type === 'peel' || msg.type === 'bananas'
+                        || msg.type === 'victory-layout')) {
                         boardAlreadySynced = true;
                     }
                 });
                 if (ackedNew && !boardAlreadySynced) {
+                    if (!this.canMutatePlayingBoard?.()) {
+                        return;
+                    }
                     if (this._hostSyncRaf) {
                         cancelAnimationFrame(this._hostSyncRaf);
                         this._hostSyncRaf = 0;

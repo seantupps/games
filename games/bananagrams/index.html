@@ -44,6 +44,7 @@
     <script src="dictionary.js"></script>
     <script src="logic.js"></script>
     <script src="grid.js"></script>
+    <script src="ai/browser-ai.js"></script>
     <script>
         const _p = new URLSearchParams(window.location.search);
         if (_p.has('theme')) document.documentElement.style.setProperty('--theme-color', _p.get('theme'));
@@ -53,6 +54,7 @@
     <script src="modules/session.js"></script>
     <script src="modules/victory.js"></script>
     <script src="modules/mp-layout.js"></script>
+    <script src="modules/mp-canonical.js"></script>
     <script src="modules/mp-inventory.js"></script>
     <script src="modules/mp-board.js"></script>
     <script src="modules/mp-trace-done.js"></script>
@@ -60,6 +62,10 @@
     <script src="modules/mp-host.js"></script>
     <script src="modules/mp-network.js"></script>
     <script src="modules/gameplay.js"></script>
+    <script src="dev/solver.js"></script>
+    <script src="dev/mp-sync.js"></script>
+    <script src="dev/board-solve.js"></script>
+    <script src="dev/install.js"></script>
     <script src="modules/render.js"></script>
     <script src="game-boot.js"></script>
 </body>

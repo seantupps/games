@@ -48,11 +48,7 @@
             },
 
             _layoutEpoch() {
-                const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
-                return S?.readResetCount?.(this.roomData)
-                    ?? this.roomData?.global?.resetCount
-                    ?? this._mpAppliedResetCount
-                    ?? 0;
+                return this._mpReadResetCount?.() ?? 0;
             },
 
             _loadLocalHandRecord() {
@@ -81,7 +77,12 @@
                 try {
                     localStorage.setItem(this.getHandPersistKey(), JSON.stringify({
                         resetCount: this._layoutEpoch(),
-                        hand: hand || []
+                        hand: (hand || []).map((t) => ({
+                            id: t.id,
+                            x: Number.isFinite(t.x) ? Math.round(t.x) : 0,
+                            y: Number.isFinite(t.y) ? Math.round(t.y) : 0,
+                            faceUp: !!t.faceUp
+                        }))
                     }));
                 } catch (_) { /* ignore */ }
             },
@@ -112,7 +113,6 @@
                 this._saveLocalLayout(layout);
                 this._saveLocalHand((this.tiles || []).map((t) => ({
                     id: t.id,
-                    letter: t.letter,
                     faceUp: !!t.faceUp,
                     x: Number.isFinite(t.x) ? Math.round(t.x) : 0,
                     y: Number.isFinite(t.y) ? Math.round(t.y) : 0
@@ -127,7 +127,9 @@
                 const ids = new Set((owned || []).map((o) => o.id));
                 const pruned = {};
                 Object.entries(layout || {}).forEach(([id, p]) => {
-                    if (ids.has(id) && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+                    if (!ids.has(id)) return;
+                    if (this._mpIdMatchesDealEpoch?.(id) === false) return;
+                    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
                         pruned[id] = { x: p.x, y: p.y };
                     }
                 });
@@ -146,13 +148,14 @@
                 const pruned = this._pruneLayout(localLayout, ownedList);
                 if (!Object.keys(pruned).length) return false;
                 const hand = (stored.hand?.length ? stored.hand : localHand) || [];
+                const epochOk = (t) => this._mpIdMatchesDealEpoch?.(t?.id) !== false;
+                const ownedIds = ownedList.map((o) => o.id).filter(epochOk).sort();
                 if (!hand.length) {
-                    return Object.keys(pruned).length === ownedList.length;
+                    return Object.keys(pruned).length === ownedIds.length;
                 }
-                if (hand.length !== ownedList.length) return false;
-                const ownedLetters = this._letterMultisetSig(ownedList.map((o) => o.letter));
-                const localLetters = this._letterMultisetSig(hand.map((t) => t.letter));
-                return ownedLetters === localLetters;
+                const handIds = hand.map((t) => t.id).filter(epochOk).sort();
+                if (handIds.length !== ownedIds.length) return false;
+                return handIds.every((id, i) => id === ownedIds[i]);
             },
 
             _hasSavedLocalLayoutForOwned(ownedList) {
@@ -171,9 +174,26 @@
             },
 
             _layoutMapForPlayer(board, uid, owned) {
+                const ownedList = owned || [];
+                const remoteList = board?.tilePositionsByPlayer?.[uid];
+                const devSolvePending = this._bananaDevHook('pendingSolveLayout', board) === true;
+                const remoteSolveLayout = this._bananaDevHook(
+                    'preferRemoteSolveLayout',
+                    board,
+                    uid,
+                    ownedList,
+                    remoteList
+                );
+                if (remoteSolveLayout) return remoteSolveLayout;
+                // Dev /b solve: host publishes full crossword layouts — never prefer stale local rack cache.
+                if (devSolvePending) {
+                    if (Array.isArray(remoteList) && remoteList.length) {
+                        return this._pruneLayout(this._positionsMapFromList(remoteList), ownedList);
+                    }
+                    return {};
+                }
                 // Prefer local cached layout for the current player (refresh / in-play).
                 if (uid === this._myUid()) {
-                    const ownedList = owned || [];
                     if (ownedList.length) {
                         const stored = this._loadLocalHandRecord?.() || { resetCount: null, hand: [] };
                         const epoch = this._layoutEpoch();
@@ -219,7 +239,7 @@
                 const startY = origin.y + BananaRules.HAND_BELOW_CENTER;
                 return owned.map((o, idx) => ({
                     id: o.id,
-                    letter: o.letter,
+                    letter: this._mpLetter?.(o.id) || '',
                     faceUp: !!o.faceUp,
                     x: startX + (idx % cols) * gap,
                     y: startY + Math.floor(idx / cols) * gap

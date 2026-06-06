@@ -114,15 +114,18 @@
         return { soloVariant, bunchCount };
     }
 
-    function dealSoloHand(pool, origin, handSize = SOLO_HAND, nextId = 0) {
+    function dealSoloHand(pool, origin, handSize = SOLO_HAND, nextId = 0, makeTileId = null) {
         const hand = pool.splice(0, handSize);
         const startX = origin.x - ((COLS - 1) * TILE_GAP + TILE_SIZE) / 2;
         const startY = origin.y + HAND_BELOW_CENTER;
+        const idFor = typeof makeTileId === 'function'
+            ? makeTileId
+            : (i) => `t-${i}`;
         return hand.map((letter, idx) => {
             const col = idx % COLS;
             const row = Math.floor(idx / COLS);
             return {
-                id: `t-${nextId + idx}`,
+                id: idFor(nextId + idx),
                 letter,
                 x: startX + col * TILE_GAP,
                 y: startY + row * TILE_GAP,
@@ -158,8 +161,8 @@
         return variant === 'classic' ? SOLO_CLASSIC_TILE_BAG : SOLO_FAST_TILE_BAG;
     }
 
-    function dealPlayerHand(pool, origin, handSize, nextId = 0) {
-        return dealSoloHand(pool, origin, handSize, nextId);
+    function dealPlayerHand(pool, origin, handSize, nextId = 0, makeTileId = null) {
+        return dealSoloHand(pool, origin, handSize, nextId, makeTileId);
     }
 
     function originDefaults() {

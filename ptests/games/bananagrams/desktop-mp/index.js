@@ -12,26 +12,50 @@ const { chromium } = require('playwright');
 const { ensureTestStack } = require('../../../shared/infra/emulator-utils');
 const { runBananagramsMpAudit } = require('./audit/run-audit');
 const lib = require('../lib/mp-lib');
-const { layoutMpHeadedWindows, mpHeadedContextOpts } = require('../../../shared/platform/mp-headed-view');
-const { parseScenarioArgv, parseWinSideArgv, listScenarios } = require('../scenarios/registry');
+const { DESKTOP_VIEWPORT } = require('../../../shared/infra/viewport-constants');
+const { layoutMpHeadedWindows, mpHeadedContextOpts, centerMpViewerOnPages } = require('../../../shared/platform/mp-headed-view');
+const { getActiveRunConfig } = require('../../../shared/infra/run-config');
+const {
+    parseScenarioArgv,
+    parseWinSideArgv,
+    listScenarios,
+    resolveBananagramsMpScenarioPlan
+} = require('../scenarios/registry');
 const { playwrightHeadless } = require('../../../shared/infra/env-defaults');
 
 const { log } = lib;
 
 async function beforeLoop(page1, page2, ctx = {}) {
+    const cfg = getActiveRunConfig();
+    const scenarios = resolveBananagramsMpScenarioPlan(cfg);
+    if (!scenarios.length) return;
+
+    const winSide = parseWinSideArgv(process.argv);
+    const rounds = cfg.rounds || 1;
     const roomId = ctx.roomId
         || `MP_AUDIT_BANANA_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    const scenario = parseScenarioArgv(process.argv, 'full');
-    const winSide = parseWinSideArgv(process.argv);
-    await runBananagramsMpAudit(page1, page2, {
-        roomId,
-        mp: { page1, page2 },
-        mobile: !!ctx.isMobile,
-        scenario,
-        focusDumpPeel: scenario === 'focus',
-        skipSeed: ctx.skipSeed,
-        winSide
-    });
+
+    for (let i = 0; i < scenarios.length; i++) {
+        const scenario = scenarios[i];
+        if (scenarios.length > 1) {
+            log(`Bananagrams MP scenario ${i + 1}/${scenarios.length}: ${scenario}`);
+        }
+        await runBananagramsMpAudit(page1, page2, {
+            roomId,
+            mp: { page1, page2 },
+            mobile: !!ctx.isMobile,
+            scenario,
+            focusDumpPeel: scenario === 'focus',
+            // One invite per --scenario=all session; later scenarios reuse the party (re-invite after Done breaks guest deal).
+            skipSeed: i > 0 || !!ctx.skipSeed,
+            winSide,
+            rounds,
+            pause: !!cfg.pause
+        });
+        if (i + 1 < scenarios.length) {
+            await centerMpViewerOnPages([page1, page2], { mobile: !!ctx.isMobile });
+        }
+    }
 }
 
 async function runBananagramsMpTest(browser, options = {}) {
@@ -39,10 +63,10 @@ async function runBananagramsMpTest(browser, options = {}) {
     log(`Bananagrams MP full audit in room ${roomId}...`);
 
     const contextOpts = options.headless === false
-        ? mpHeadedContextOpts()
+        ? mpHeadedContextOpts({ players: 2 })
         : {
-            viewport: { width: 1920, height: 1080 },
-            screen: { width: 1920, height: 1080 },
+            viewport: DESKTOP_VIEWPORT,
+            screen: DESKTOP_VIEWPORT,
             deviceScaleFactor: 1
         };
     const ctx1 = await browser.newContext(contextOpts);

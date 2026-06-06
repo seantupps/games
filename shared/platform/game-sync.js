@@ -174,7 +174,7 @@
         }
     }
 
-    function buildHostResetUpdates(game, { wasOver = false } = {}) {
+    function buildHostResetUpdates(game, { wasOver = false, includeBoard = true } = {}) {
         if (!game) return {};
         if (wasOver) {
             const prevFirstPlayer = game.firstPlayer || 'P1';
@@ -194,8 +194,12 @@
             'global/resetCount': resetCount
         };
 
-        const board = typeof game.serializeBoard === 'function' ? game.serializeBoard() : null;
-        updates['global/board'] = capabilitiesFor(game)?.hasBoardState !== false ? board : null;
+        if (includeBoard) {
+            const board = typeof game.serializeBoard === 'function' ? game.serializeBoard() : null;
+            updates['global/board'] = capabilitiesFor(game)?.hasBoardState !== false ? board : null;
+        } else {
+            updates['global/board'] = null;
+        }
 
         const reg = registry()?.get ? registry().get(game.gameName) : null;
         (reg?.globalResetKeys || ['piecePositions', 'colors', 'pileColors']).forEach((key) => {

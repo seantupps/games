@@ -26,9 +26,10 @@ const { runHubSuite } = require('./hub/hub_suite');
 const { runMobileInviteParty } = require('./mp/mp_mobile_extras');
 const { runPartyLimitMobile } = require('./mp/mp_party_mobile');
 const { resolveMpAuditTimeoutMs, resolveMpAuditBlockMs } = require('../../shared/infra/mp-audit-timeout');
-const { shouldCloseBrowser } = require('../../shared/infra/env-defaults');
+const { shouldCloseBrowser, registerKeepOpenBrowser } = require('../../shared/infra/env-defaults');
 const { printSuiteHeader, printBenchmarkResults } = require('../../shared/infra/runner-results');
 const { captureAuditFailure } = require('../../shared/infra/test-logger');
+const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/mp-failure-snapshot');
 
 /** MP manifest player count — prefer explicit 2p/3p in playerCounts over stale spec.players. */
 function mpPlayersForSpec(spec) {
@@ -64,6 +65,7 @@ async function mainInner(specIn) {
     await runStep('ensure stack', () => ensureStackBounded(), 15000);
 
     const browser = await launchMobileBrowser();
+    registerKeepOpenBrowser(browser);
     const results = [];
 
     try {
@@ -186,6 +188,11 @@ async function runMobileSP(browser, test) {
             manageContext: false,
             isMobile: true
         });
+        if (!shouldCloseBrowser()) {
+            const { syncMpHeadedMobileViewport } = require('../../shared/platform/mp-headed-view');
+            await syncMpHeadedMobileViewport(page);
+            await page.bringToFront();
+        }
         return { name: test.name, success: true, duration: ((Date.now() - start) / 1000).toFixed(2) };
     } catch (err) {
         return {
@@ -195,7 +202,7 @@ async function runMobileSP(browser, test) {
             ...captureAuditFailure(err)
         };
     } finally {
-        await context.close().catch(() => {});
+        if (shouldCloseBrowser()) await context.close().catch(() => {});
     }
 }
 
@@ -224,7 +231,13 @@ async function runMobileMP(browser, test, pair = null) {
             name: test.name,
             success: false,
             duration: ((Date.now() - start) / 1000).toFixed(2),
-            ...captureAuditFailure(err)
+            ...(await captureAuditFailureWithMpSnapshot(err, {
+                page1: pair.page1,
+                page2: pair.page2,
+                mobile: true,
+                testName: test.name,
+                gameId: test.gameId
+            }))
         };
     } finally {
         if (ownPair && shouldCloseBrowser()) await closeMobilePair(pair);

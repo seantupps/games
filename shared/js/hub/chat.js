@@ -177,11 +177,40 @@
             handleCommand(text) {
                 const trimmed = text.trim();
                 if (/^\/b(\s|$)/i.test(trimmed)) {
-                    const arg = trimmed.substring(2).trim().toLowerCase();
-                    if (arg !== 'state') {
+                    const arg = trimmed.substring(2).trim();
+                    const argLower = arg.toLowerCase();
+                    const solveMatch = /^solve\s+(\d+)$/i.exec(arg);
+                    if (solveMatch) {
+                        const gameId = global.FiveHubCtx?.currentGame || 'piles';
+                        const mode = global.GameRegistry?.hubModeFor
+                            ? global.GameRegistry.hubModeFor(
+                                gameId,
+                                !!(global.FiveHubCtx?.roomId && global.FiveHubCtx.roomId !== 'lobby')
+                            )
+                            : (global.FiveHubCtx?.gameMode || 'classic');
+                        if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
+                            this.append({
+                                sender: 'System',
+                                content: 'Board solve is not available for this game.'
+                            });
+                            return true;
+                        }
+                        const frame = document.getElementById('game-frame');
+                        if (!frame?.contentWindow) {
+                            this.append({ sender: 'System', content: 'No game loaded.' });
+                            return true;
+                        }
+                        const H = global.HubProtocol?.MSG || {};
+                        frame.contentWindow.postMessage({
+                            type: H.BOARD_SOLVE || 'board-solve',
+                            stragglerCount: parseInt(solveMatch[1], 10)
+                        }, '*');
+                        return true;
+                    }
+                    if (argLower !== 'state') {
                         this.append({
                             sender: 'System',
-                            content: 'Usage: /b state — list invalid words or peel/win-ready status'
+                            content: 'Usage: /b state | /b solve N (dev: N = total bunch remaining; 1 straggler per player when N > 0)'
                         });
                         return true;
                     }
@@ -261,6 +290,7 @@
                         '/p leave — leave the party and return to the lobby',
                         '/w word1 -word2 ... — add/remove dictionary words',
                         '/b state — invalid words on your board, or peel/win-ready',
+                        '/b solve N — dev only: N = total bunch remaining; 1 straggler per player (not gameplay)',
                         '/clear — clear local data and reload',
                         '/win — dev win (same review + hub banner path as real MP win)',
                         '/win banner <name> — hub win banner only (dev)',

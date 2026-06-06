@@ -933,7 +933,7 @@ async function hostSetGuestThreeLetterWord(hostFrame, guestUid, word, runIndex) 
             y: y0,
             faceUp: true
         }));
-        g._hostSetPlayerTiles(uid, tiles, true);
+        g._hostSetPlayerTiles(uid, tiles, true, { allowTilesToOwned: true });
         g._hostSyncBoard({ immediate: true });
         const hand = g._handFromOwnedAndPositions(uid, tiles.map((t) => ({
             id: t.id,
@@ -1447,10 +1447,10 @@ async function runSequentialJoinOrdersAudit(browser, options = {}) {
 async function runMp3pSuite(spec = {}) {
     const summarize = spec.summarize !== false;
     const totalStart = Date.now();
-    const topology = spec.topology || process.env.FIVE_TOPOLOGY || 'desktop';
+    const topology = spec.topology || 'desktop';
     const mobileAll = topology === 'mobile' || !!spec.mobileAll;
     const mixed = topology === 'mixed' || !!spec.mixed;
-    const scenario = String(spec.scenario || process.env.FIVE_SCENARIO || '').trim().toLowerCase();
+    const scenario = String(spec.scenario || '').trim().toLowerCase();
     const actionsOnly = scenario === 'actions';
     const joinOnly = !!spec.joinOnly;
     const auditOnly = !!spec.auditOnly;
@@ -1475,7 +1475,8 @@ async function runMp3pSuite(spec = {}) {
             const { launchMobileBrowser } = require('../../../platform/mobile/lib/mobile-utils');
             browser = await launchMobileBrowser();
         } else {
-            browser = await chromium.launch({ headless: process.env.FIVE_HEADLESS !== '0' });
+            const { playwrightHeadless } = require('../../../shared/infra/env-defaults');
+            browser = await chromium.launch({ headless: playwrightHeadless() });
         }
     }
 

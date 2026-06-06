@@ -616,7 +616,41 @@ class BaseGame {
         this.broadcastSelection();
         window.parent.postMessage({ type: 'update-win-banner', visible: false }, '*');
 
-        // 2. Trigger local game logic reset (Host re-gens board locally)
+        let hostResetUpdates = null;
+        if (this.isMultiplayer && this.playerRole === 'P1') {
+            hostResetUpdates = this.sync?.buildHostResetUpdates
+                ? this.sync.buildHostResetUpdates({ wasOver, includeBoard: false })
+                : (() => {
+                    if (wasOver) {
+                        const prevFirstPlayer = this.firstPlayer || 'P1';
+                        this.firstPlayer = prevFirstPlayer === 'P1' ? 'P2' : 'P1';
+                        console.log(`HOST: Alternating first player for the next game. Prev: ${prevFirstPlayer}, Next: ${this.firstPlayer}`);
+                    } else if (!this.firstPlayer) {
+                        this.firstPlayer = 'P1';
+                    }
+                    const startTurn = this.firstPlayer;
+                    this.turn = startTurn;
+                    const resetCount = (this.roomData?.global?.resetCount || 0) + 1;
+                    this.lastResetCount = resetCount;
+                    this._resetAcknowledgedCount = resetCount;
+                    this._resetAcknowledgedAt = Date.now();
+                    return {
+                        status: 'playing',
+                        winner: null,
+                        'global/firstPlayer': this.firstPlayer,
+                        'global/turn': startTurn,
+                        'global/resetCount': resetCount,
+                        'global/board': null,
+                        lastMove: null,
+                        interactions: null
+                    };
+                })();
+            if (typeof GameSync !== 'undefined' && GameSync.applyHostResetLocally) {
+                GameSync.applyHostResetLocally(this, hostResetUpdates);
+            }
+        }
+
+        // 2. Trigger local game logic reset (Host re-gens board locally at new resetCount)
         if (this.onGameReset) this.onGameReset();
 
         if (this.isHost() && this.hasCap('supportsPileColors')) {
@@ -628,33 +662,9 @@ class BaseGame {
         }
 
         if (this.isMultiplayer && this.playerRole === 'P1') {
-            const updates = this.sync?.buildHostResetUpdates
-                ? this.sync.buildHostResetUpdates({ wasOver })
-                : (() => {
-                    if (wasOver) {
-                        const prevFirstPlayer = this.firstPlayer || 'P1';
-                        this.firstPlayer = prevFirstPlayer === 'P1' ? 'P2' : 'P1';
-                        console.log(`HOST: Alternating first player for the next game. Prev: ${prevFirstPlayer}, Next: ${this.firstPlayer}`);
-                    } else if (!this.firstPlayer) {
-                        this.firstPlayer = 'P1';
-                    }
-                    const startTurn = this.firstPlayer;
-                    this.turn = startTurn;
-                    return {
-                        status: 'playing',
-                        winner: null,
-                        'global/firstPlayer': this.firstPlayer,
-                        'global/turn': startTurn,
-                        'global/resetCount': (this.roomData?.global?.resetCount || 0) + 1,
-                        'global/board': this.capabilities?.hasBoardState !== false && typeof this.serializeBoard === 'function'
-                            ? this.serializeBoard()
-                            : null,
-                        lastMove: null,
-                        interactions: null
-                    };
-                })();
-            if (typeof GameSync !== 'undefined' && GameSync.applyHostResetLocally) {
-                GameSync.applyHostResetLocally(this, updates);
+            const updates = hostResetUpdates || {};
+            if (this.capabilities?.hasBoardState !== false && typeof this.serializeBoard === 'function') {
+                updates['global/board'] = this.serializeBoard();
             }
             this.updateMetadata(updates);
             if (this.isHost()) this.rebuildState();

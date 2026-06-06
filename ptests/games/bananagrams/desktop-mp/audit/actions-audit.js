@@ -1,13 +1,23 @@
 /**
- * Standalone MP actions scenario — AI playthrough only.
+ * Standalone MP actions scenario — solver mid-game + real drag win + natural RTDB sync.
  * Full audit calls runMpAiPlaythrough directly from run-audit.js.
  */
 const { applySpeedProfile } = require('../../../../shared/infra/speed-profiles');
+const { parseWinSideArgv } = require('../../scenarios/registry');
+const { getActiveRunConfig, getWinSide, isPaused } = require('../../../../shared/infra/run-config');
 const {
-    runMpAiActionsOnly
+    runMpAiActionsOnly,
+    resolveSessionRounds
 } = require('./mp-ai-playthrough');
 
-const ACTIONS_TIMEOUT_MS = Number(process.env.FIVE_MP_ACTIONS_TIMEOUT_MS || 600000);
+const ACTIONS_TIMEOUT_MS = Number(process.env.FIVE_MP_ACTIONS_TIMEOUT_MS || 120000);
+
+/** Stress dump sync between players — flip on to hunt MP dump bugs. */
+const AGGRESSIVE_DUMPING = false;
+const AGGRESSIVE_DUMPS_PER_PLAYER = 10;
+
+/** Real pointer drag for the last winning tile — off uses bulk apply + peel/win API. */
+const WIN_DRAG = false;
 
 /** Headless actions — ci speed tier. Override any var via env. */
 function ensureActionsFastEnv() {
@@ -31,11 +41,23 @@ async function withActionsTimeout(promise, label = 'MP Actions') {
 
 async function runBananagramsMpActionsAudit(page1, page2, options = {}) {
     ensureActionsFastEnv();
-    return runMpAiActionsOnly(page1, page2, options);
+    const cfg = getActiveRunConfig();
+    return runMpAiActionsOnly(page1, page2, {
+        ...options,
+        rounds: resolveSessionRounds({ ...options, rounds: options.rounds ?? cfg.rounds }),
+        winSide: options.winSide ?? getWinSide() ?? parseWinSideArgv() ?? null,
+        aggressiveDumping: options.aggressiveDumping ?? AGGRESSIVE_DUMPING,
+        aggressiveDumpsPerPlayer: options.aggressiveDumpsPerPlayer ?? AGGRESSIVE_DUMPS_PER_PLAYER,
+        winDrag: options.winDrag ?? WIN_DRAG,
+        pause: options.pause ?? isPaused()
+    });
 }
 
 module.exports = {
     runBananagramsMpActionsAudit,
     withActionsTimeout,
-    ACTIONS_TIMEOUT_MS
+    ACTIONS_TIMEOUT_MS,
+    AGGRESSIVE_DUMPING,
+    AGGRESSIVE_DUMPS_PER_PLAYER,
+    WIN_DRAG
 };
