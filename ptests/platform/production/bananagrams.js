@@ -22,7 +22,7 @@ const {
     cleanupRoom,
     cleanupPresence
 } = require('./prod-utils');
-const { runBananagramsMpAudit } = require('../../games/bananagrams/desktop-mp/index');
+const { runBananagramsMpAudit } = require('../../games/bananagrams/runners/mp');
 
 async function runBananagramsProdTest() {
     console.log('\n[PROD:BANANA] Bananagrams MP full audit (dump + peel + win review)...');

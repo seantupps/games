@@ -59,6 +59,31 @@ async function captureBothMpStates(page1, page2, label) {
     return { label, host, guest };
 }
 
+/**
+ * N-player diagnostic snapshot (topology-agnostic).
+ * @param {import('playwright').Page[]} pages
+ * @param {{ role?: string, uid?: string }[]} [playerMeta]
+ * @param {string} [label]
+ */
+async function captureAllMpStates(pages, playerMeta, label = 'all players') {
+    const snaps = await Promise.all(pages.map((page, i) => {
+        const role = playerMeta?.[i]?.role || `P${i + 1}`;
+        return captureMpState(page, `${label} — ${role}`);
+    }));
+    return { label, players: snaps };
+}
+
+/**
+ * @param {import('playwright').Page} page
+ * @param {object} [mpPages] — { page1, page2 } or { pages: Page[] } or MpCtx.mp
+ */
+async function resolveMpSnapshotPages(mpPages) {
+    if (!mpPages) return null;
+    if (Array.isArray(mpPages.pages)) return mpPages.pages;
+    if (mpPages.page1 && mpPages.page2) return [mpPages.page1, mpPages.page2];
+    return null;
+}
+
 function timeoutError(label, timeoutMs, snaps, cause) {
     const body = JSON.stringify(snaps, null, 2);
     const msg = `${label} timed out after ${timeoutMs}ms\n--- state ---\n${body}`;
@@ -71,9 +96,15 @@ async function waitForDiag(page, label, predicate, arg, timeoutMs = WAIT_MS, mpP
     try {
         await page.waitForFunction(predicate, arg, { timeout: timeoutMs });
     } catch (err) {
-        const snaps = mpPages?.page1 && mpPages?.page2
-            ? await captureBothMpStates(mpPages.page1, mpPages.page2, label)
-            : { label, target: await captureMpState(page, label) };
+        const pages = await resolveMpSnapshotPages(mpPages);
+        let snaps;
+        if (pages?.length >= 2) {
+            snaps = await captureAllMpStates(pages, null, label);
+        } else if (mpPages?.page1 && mpPages?.page2) {
+            snaps = await captureBothMpStates(mpPages.page1, mpPages.page2, label);
+        } else {
+            snaps = { label, target: await captureMpState(page, label) };
+        }
         throw timeoutError(label, timeoutMs, snaps, err.message);
     }
 }
@@ -94,6 +125,8 @@ module.exports = {
     waitOpts,
     captureMpState,
     captureBothMpStates,
+    captureAllMpStates,
+    resolveMpSnapshotPages,
     timeoutError,
     waitForDiag,
     getGameFrame,

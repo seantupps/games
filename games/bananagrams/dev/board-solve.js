@@ -171,7 +171,8 @@
             if (typeof BananaRules === 'undefined') return null;
             const cfg = this._bagConfig?.() || { soloVariant: 'fast', bunchCount: null };
             const mode = this._tileBagMode?.() || (this._isMultiplayerMode() ? 'multiplayer' : 'solo');
-            const bag = BananaRules.getTileBag(mode, cfg);
+            const playerCount = this._getPlayerUids?.().length || 2;
+            const bag = BananaRules.getTileBag(mode, cfg, playerCount);
             return BananaRules.poolTotal(bag);
         },
 

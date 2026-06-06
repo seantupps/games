@@ -2,8 +2,8 @@
  * Reusable MP audit scenarios — compose from registry capabilities, not game ids.
  */
 const { STEP_MS } = require('../infra/timeouts');
-const { evalGame } = require('./game-harness');
-const { runScenario } = require('./scenario-runner');
+const { evalGame } = require('../adapters/desktop-input');
+const { runScenario } = require('../infra/scenario-runner');
 const { capsFor } = require('./capability-audit');
 
 async function readPilesCounts(page) {
@@ -358,7 +358,7 @@ async function runCapabilityMpScenarios(gameId, page1, page2, ctx = {}, options 
         await capabilityMpBeforeLoop(page1, page2, gameId, merged);
     }
 
-    const { assertResetEpochSynced } = require('./mp-reset-audit');
+    const { assertResetEpochSynced } = require('../assertions/phase');
     await assertResetEpochSynced(page1, page2, merged);
 
     if (caps.boardKind === 'piles' && !skipPilesSync) {

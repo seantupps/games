@@ -2,8 +2,8 @@
  * Classic piles — game-specific ready checks (after platform capability audit).
  */
 const { STEP_MS } = require('../../../shared/infra/timeouts');
-const { evalGame, logStep, waitForGameReady } = require('../../../shared/platform/game-harness');
-const { runScenario } = require('../../../shared/platform/scenario-runner');
+const { evalGame, logStep, waitForGameReady } = require('../../../shared/adapters/desktop-input');
+const { runScenario } = require('../../../shared/infra/scenario-runner');
 
 async function assertClassicPilesReady(page) {
     await runScenario('Classic piles initialized', async () => {

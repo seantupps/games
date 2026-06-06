@@ -1,8 +1,8 @@
 /**
  * Template scenario — replace with real game checks.
  */
-const { waitForGameReady, logStep } = require('../../../shared/platform/game-harness');
-const { runScenario } = require('../../../shared/platform/scenario-runner');
+const { waitForGameReady, logStep } = require('../../../shared/adapters/desktop-input');
+const { runScenario } = require('../../../shared/infra/scenario-runner');
 
 async function runExampleScenario(page, ctx = {}) {
     await runScenario('Example game ready', async () => {

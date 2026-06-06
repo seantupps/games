@@ -1,8 +1,8 @@
 ﻿/** Hub navigation scenarios for solo Bananagrams. */
 const { STEP_MS } = require('../../../shared/infra/timeouts');
 const { buildHubUrl, buildAppUrl } = require('../../../shared/infra/emulator-utils');
-const { getGameFrame } = require('../../../shared/platform/game-harness');
-const { runScenarios } = require('../../../shared/platform/scenario-runner');
+const { getGameFrame } = require('../../../shared/adapters/desktop-input');
+const { runScenarios } = require('../../../shared/infra/scenario-runner');
 const { runDictCommandScenarios } = require('./dict-command');
 
 async function testHubSwitchFromLine(page) {

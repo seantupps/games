@@ -171,7 +171,7 @@
             logicKey: 'bananagrams',
             mpSuite: 'extended',
             mpPlayerCounts: [2, 3],
-            mpAudit3p: 'ptests/games/bananagrams/desktop-mp/mp_bananagrams_3p',
+            mpAudit3p: 'ptests/games/bananagrams/runners/mp-3p',
             modes: ['solo'],
             defaultMode: 'solo',
             maxPartyPlayers: 8,
@@ -219,10 +219,10 @@
             },
             globalResetKeys: ['board'],
             clearGameDataOnReset: true,
-            auditConfig: 'ptests/games/bananagrams/desktop-sp',
-            mobileAuditConfig: 'ptests/games/bananagrams/mobile/bananagrams_sp',
-            mpAuditConfig: 'ptests/games/bananagrams/desktop-mp/index',
-            mobileMpAuditConfig: 'ptests/games/bananagrams/mobile/bananagrams_mp'
+            auditConfig: 'ptests/games/bananagrams/runners/sp',
+            mobileAuditConfig: 'ptests/games/bananagrams/adapters/mobile-sp',
+            mpAuditConfig: 'ptests/games/bananagrams/runners/mp',
+            mobileMpAuditConfig: 'ptests/games/bananagrams/adapters/mobile-mp'
         }
         // NEW_GAME_REGISTRY_INSERT
     ];

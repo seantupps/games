@@ -2,8 +2,8 @@
  * Registry capability checks — shared platform coverage for new games.
  */
 const GameRegistry = require('../../../shared/games/registry');
-const { logStep, evalHub, waitForGameReady } = require('./game-harness');
-const { runScenario, composeBeforeLoop } = require('./scenario-runner');
+const { logStep, evalHub, waitForGameReady } = require('../adapters/desktop-input');
+const { runScenario, composeBeforeLoop } = require('../infra/scenario-runner');
 const { STEP_MS } = require('../infra/timeouts');
 const { applySpeedProfile } = require('../infra/speed-profiles');
 const { parseScenarioSlices, normalizeScenario, isSmokeScenario } = require('../scenarios/registry');
@@ -121,10 +121,10 @@ async function runCapabilityChecks(page, gameId, ctx = {}) {
         });
     }
 
-    const { runMobileLayoutPolicyChecks } = require('./mobile-layout-audit');
+    const { runMobileLayoutPolicyChecks } = require('../adapters/mobile-input');
     await runMobileLayoutPolicyChecks(page, gameId, { ...ctx, gameMode });
 
-    const { runViewportCapabilityChecks } = require('./viewport-audit');
+    const { runViewportCapabilityChecks } = require('../assertions/viewport');
     await runViewportCapabilityChecks(page, gameId, {
         ...ctx,
         gameMode,

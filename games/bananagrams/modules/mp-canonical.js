@@ -249,7 +249,10 @@
                 const cfg = typeof this._bagConfig === 'function'
                     ? this._bagConfig()
                     : { bunchCount: null };
-                const bag = BananaRules.getTileBag('multiplayer', cfg);
+                const playerCount = typeof this._getPlayerUids === 'function'
+                    ? this._getPlayerUids().length
+                    : 2;
+                const bag = BananaRules.getTileBag('multiplayer', cfg, playerCount);
                 const letters = BananaRules.buildShuffledPool(bag, cfg.bunchCount);
                 const ids = letters.map((letter, i) => {
                     const id = this._mpMakeTileId(i);
@@ -556,8 +559,11 @@
                     counts[ch] = (counts[ch] || 0) + 1;
                 };
                 seen.forEach((id) => add(canon[id]));
+                const playerCount = typeof this._getPlayerUids === 'function'
+                    ? this._getPlayerUids().length
+                    : 2;
                 const bag = typeof BananaRules !== 'undefined'
-                    ? BananaRules.SCRABBLE_TILE_BAG
+                    ? BananaRules.getMpBag(playerCount)
                     : {};
                 const mismatches = [];
                 const letters = new Set([...Object.keys(bag), ...Object.keys(counts)]);

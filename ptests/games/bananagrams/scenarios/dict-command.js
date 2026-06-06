@@ -1,7 +1,7 @@
 /**
  * Hub chat dictionary commands (/w, /b state, /b solve N) while Bananagrams is loaded.
  */
-const { runSpBoardSolveScenarios } = require('./board-solve');
+const { runSpBoardSolveScenarios } = require('./sp/solve');
 const { STEP_MS } = require('../../../shared/infra/timeouts');
 const TIMEOUT_MS = STEP_MS;
 

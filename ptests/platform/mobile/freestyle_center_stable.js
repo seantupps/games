@@ -6,15 +6,15 @@ const { applyEnvProfiles } = require('../../shared/infra/env-defaults');
 applyEnvProfiles(['stack', 'mobile']);
 
 const { buildLocalPhonePathUrl } = require('../../../scripts/test/phone-path-url');
-const { launchMobileBrowser, createMobileContext } = require('../lib/mobile-utils');
-const { ensureStackBounded } = require('../lib/mobile-timeouts');
-const { applyHubPageDefaults, waitForNetwork, NAV_MS } = require('../lib/mobile-timeouts');
-const { HUB_INIT_MS } = require('../lib/mobile-constants');
+const { launchMobileBrowser, createMobileContext } = require('./lib/mobile-utils');
+const { ensureStackBounded } = require('./lib/mobile-timeouts');
+const { applyHubPageDefaults, waitForNetwork, NAV_MS } = require('./lib/mobile-timeouts');
+const { HUB_INIT_MS } = require('./lib/mobile-constants');
 const { assertPhonePathHub } = require('../cross-client/phone-path-assertions');
 const {
     assertNaturalMobileViewport,
     assertFreestyleMobileLayoutStable
-} = require('../lib/mobile_assertions');
+} = require('./lib/mobile_assertions');
 
 async function main() {
     await ensureStackBounded();

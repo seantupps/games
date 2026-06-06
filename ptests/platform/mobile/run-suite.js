@@ -29,7 +29,7 @@ const { resolveMpAuditTimeoutMs, resolveMpAuditBlockMs } = require('../../shared
 const { shouldCloseBrowser, registerKeepOpenBrowser } = require('../../shared/infra/env-defaults');
 const { printSuiteHeader, printBenchmarkResults } = require('../../shared/infra/runner-results');
 const { captureAuditFailure } = require('../../shared/infra/test-logger');
-const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/mp-failure-snapshot');
+const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/failure-snapshot');
 
 /** MP manifest player count — prefer explicit 2p/3p in playerCounts over stale spec.players. */
 function mpPlayersForSpec(spec) {

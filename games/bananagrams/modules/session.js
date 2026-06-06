@@ -178,7 +178,8 @@
             _buildTilePool() {
                 const cfg = this._bagConfig();
                 const mode = this._tileBagMode();
-                const bag = BananaRules.getTileBag(mode, cfg);
+                const playerCount = this._getPlayerUids?.().length || 2;
+                const bag = BananaRules.getTileBag(mode, cfg, playerCount);
                 return BananaRules.buildShuffledPool(bag, cfg.bunchCount);
             },
 

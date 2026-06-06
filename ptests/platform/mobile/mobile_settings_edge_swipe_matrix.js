@@ -8,8 +8,8 @@ const { applyEnvProfiles } = require('../../shared/infra/env-defaults');
 applyEnvProfiles(['stack', 'quiet', 'mobile']);
 
 const { ensureTestStack, buildAppUrl, buildHubUrl } = require('../../shared/infra/emulator-utils');
-const { launchMobileBrowser, createMobileContext } = require('../lib/mobile-utils');
-const { enableMobileHub } = require('../lib/mobile_assertions');
+const { launchMobileBrowser, createMobileContext } = require('./lib/mobile-utils');
+const { enableMobileHub } = require('./lib/mobile_assertions');
 
 async function openGameOnMobile(page, gameId, gameMode = 'classic') {
     await page.goto(buildHubUrl('lobby'));

@@ -3,11 +3,11 @@
  * Use in audit_base, multiplayer_base, and custom extended audits.
  */
 const GameRegistry = require('../../../shared/games/registry');
-const { runScenario } = require('./scenario-runner');
+const { runScenario } = require('../infra/scenario-runner');
 const {
     assertWinBannerFadeStableAfterVictory,
     resolveWinnerFromBannerText
-} = require('./win-banner-audit');
+} = require('../assertions/win-banner');
 
 /**
  * @param {string} gameId

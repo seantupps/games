@@ -17,7 +17,7 @@ const {
 const { createAuditSession } = require('./audit-session');
 const { resolveMpAuditTimeoutMs } = require('./mp-audit-timeout');
 const { captureAuditFailure } = require('./test-logger');
-const { captureAuditFailureWithMpSnapshot } = require('./mp-failure-snapshot');
+const { captureAuditFailureWithMpSnapshot } = require('./failure-snapshot');
 
 /**
  * @param {object} options

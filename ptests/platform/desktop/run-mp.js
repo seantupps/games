@@ -28,7 +28,7 @@ const { mpHeadedContextOpts, layoutMpHeadedWindows } = require('../../shared/pla
 const { resolveMpAuditTimeoutMs } = require('../../shared/infra/mp-audit-timeout');
 const { runnerLog, printSuiteHeader, printBenchmarkResults } = require('../../shared/infra/runner-results');
 const { captureAuditFailure } = require('../../shared/infra/test-logger');
-const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/mp-failure-snapshot');
+const { captureAuditFailureWithMpSnapshot } = require('../../shared/infra/failure-snapshot');
 
 function canUseMpBundle(tests, spec = getActiveRunConfig()) {
     return tests.length > 0

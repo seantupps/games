@@ -66,7 +66,21 @@ function applyMpSuiteDefaults(spec) {
 
 async function runMp3p(spec, opts = {}) {
     const summarize = opts.summarize !== false && spec.summarize !== false;
-    const { runMp3pSuite } = require('./games/bananagrams/desktop-mp/mp_bananagrams_3p');
+    const scenario = String(spec.scenario || '').trim().toLowerCase();
+    const { normalizeScenarioId } = require('./games/bananagrams/scenarios/mp/index');
+    const { ROUTED_3P_SCENARIOS, DEFAULT_3P_SCENARIO } = require('./games/bananagrams/scenarios/mp/routing');
+    const scenarioId = normalizeScenarioId(scenario || DEFAULT_3P_SCENARIO);
+
+    if (ROUTED_3P_SCENARIOS.has(scenarioId)) {
+        const { runBananagramsMpNAudit } = require('./games/bananagrams/runners/mp-n-audit');
+        const routed = await runBananagramsMpNAudit({ ...spec, scenario: scenarioId }, { summarize });
+        if (summarize && !routed.allPassed) {
+            throw new Error(routed.results?.[0]?.error || '3p MP scenario failed');
+        }
+        return routed;
+    }
+
+    const { runMp3pSuite } = require('./games/bananagrams/runners/mp-3p');
     const result = await runMp3pSuite({
         topology: spec.topology,
         scenario: spec.scenario,

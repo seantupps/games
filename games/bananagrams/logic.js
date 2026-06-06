@@ -155,8 +155,17 @@
         return drawFromPool(pool, drawCount);
     }
 
-    function getTileBag(mode, config = {}) {
-        if (mode === 'multiplayer') return MP_BAG;
+    /** 2p MP uses Scrabble (100); 3p+ uses official TILE_BAG (144). */
+    function getMpBag(playerCount = 2) {
+        const n = Math.max(2, playerCount | 0);
+        return n >= 3 ? TILE_BAG : SCRABBLE_TILE_BAG;
+    }
+
+    function getTileBag(mode, config = {}, playerCount = 0) {
+        if (mode === 'multiplayer') {
+            const n = playerCount || config.playerCount || 2;
+            return getMpBag(n);
+        }
         const variant = config.soloVariant || 'fast';
         return variant === 'classic' ? SOLO_CLASSIC_TILE_BAG : SOLO_FAST_TILE_BAG;
     }
@@ -478,6 +487,11 @@
         return Object.values(bag).reduce((sum, n) => sum + n, 0);
     }
 
+    const TILE_BAG_TOTAL = poolTotal(TILE_BAG);
+    if (TILE_BAG_TOTAL !== 144) {
+        throw new Error(`TILE_BAG must total 144, got ${TILE_BAG_TOTAL}`);
+    }
+
     const SCRABBLE_TILE_TOTAL = poolTotal(SCRABBLE_TILE_BAG);
     if (SCRABBLE_TILE_TOTAL !== 100) {
         throw new Error(`SCRABBLE_TILE_BAG must total 100, got ${SCRABBLE_TILE_TOTAL}`);
@@ -512,6 +526,7 @@
         tileCellKey,
         MP_BAG,
         MP_HAND_OVERRIDE,
+        getMpBag,
         getTileBag,
         startingHandSize,
         poolTotal,

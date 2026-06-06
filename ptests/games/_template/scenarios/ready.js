@@ -1,8 +1,8 @@
 /**
  * Game-ready scenario — use in SP/MP beforeLoop for generic board shapes.
  */
-const { waitForGameReady, logStep } = require('../../../shared/platform/game-harness');
-const { runScenario } = require('../../../shared/platform/scenario-runner');
+const { waitForGameReady, logStep } = require('../../../shared/adapters/desktop-input');
+const { runScenario } = require('../../../shared/infra/scenario-runner');
 
 async function assertGameAuditReady(page, ctx = {}) {
     await runScenario('Game audit ready', async () => {

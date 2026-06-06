@@ -1,6 +1,6 @@
 const { runGameAudit } = require('../../shared/infra/audit_base');
 const { capabilityBeforeLoop } = require('../../shared/platform/capability-audit');
-const { composeBeforeLoop } = require('../../shared/platform/scenario-runner');
+const { composeBeforeLoop } = require('../../shared/infra/scenario-runner');
 const { assertClassicPilesReady } = require('./scenarios/ready');
 
 const beforeLoop = composeBeforeLoop(
