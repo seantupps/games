@@ -3,11 +3,12 @@
  */
 const {
     RUN_ID, prodUid, ensureProdStack, launchBrowser,
-    setupPlayerPage, waitForNetwork, cleanupPresence
+    setupPlayerPage, waitForNetwork, cleanupPresence,
+    assertLobbyPlayerCrossVisibility
 } = require('./prod-utils');
 
-async function runLobbyTest() {
-    console.log('\n[PROD:LOBBY] Starting lobby presence test...');
+async function runLobbyVisibilityTest() {
+    console.log('\n[PROD:LOBBY] Lobby player cross-visibility (desktop)...');
     await ensureProdStack();
 
     const uidA = prodUid('LOBBY_A');
@@ -25,23 +26,15 @@ async function runLobbyTest() {
         await setupPlayerPage(pageA, uidA, nameA, '#3b82f6', 'A');
         await setupPlayerPage(pageB, uidB, nameB, '#ef4444', 'B');
         await Promise.all([waitForNetwork(pageA), waitForNetwork(pageB)]);
-        await pageA.waitForTimeout(3000);
 
-        const getNames = async (page) => page.evaluate(() => {
-            const list = document.getElementById('player-list');
-            if (!list) return [];
-            return Array.from(list.querySelectorAll('.player-name')).map((el) => el.innerText.trim());
-        });
-
-        const [namesA, namesB] = await Promise.all([getNames(pageA), getNames(pageB)]);
+        const { namesA, namesB } = await assertLobbyPlayerCrossVisibility(
+            pageA,
+            pageB,
+            nameA,
+            nameB
+        );
         console.log(`[PROD:LOBBY] A sees: ${JSON.stringify(namesA)}`);
         console.log(`[PROD:LOBBY] B sees: ${JSON.stringify(namesB)}`);
-
-        const aSeesB = namesA.some((n) => n.includes(nameB) || n.includes('PW Lobby B'));
-        const bSeesA = namesB.some((n) => n.includes(nameA) || n.includes('PW Lobby A'));
-        if (!aSeesB || !bSeesA) {
-            throw new Error(`Lobby cross-visibility failed. A→B=${aSeesB} B→A=${bSeesA}`);
-        }
         console.log('[PROD:LOBBY] SUCCESS');
     } finally {
         await cleanupPresence(pageA, [uidA, uidB]);
@@ -49,8 +42,11 @@ async function runLobbyTest() {
     }
 }
 
+/** @deprecated use runLobbyVisibilityTest */
+const runLobbyTest = runLobbyVisibilityTest;
+
 if (require.main === module) {
-    runLobbyTest().catch((e) => { console.error('[PROD:LOBBY] FAILURE:', e.message); process.exit(1); });
+    runLobbyVisibilityTest().catch((e) => { console.error('[PROD:LOBBY] FAILURE:', e.message); process.exit(1); });
 }
 
-module.exports = { runLobbyTest };
+module.exports = { runLobbyVisibilityTest, runLobbyTest };

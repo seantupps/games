@@ -168,6 +168,53 @@ async function cleanupPresence(page, uids) {
     }, { ids: uids }).catch(() => {});
 }
 
+/** @param {import('playwright').Page} page */
+async function getLobbyPlayerNames(page) {
+    return page.evaluate(() => {
+        const list = document.getElementById('player-list');
+        if (!list) return [];
+        return Array.from(list.querySelectorAll('.player-name')).map((el) => el.innerText.trim());
+    });
+}
+
+/**
+ * Both lobby tabs must see the other player in #player-list (live presence).
+ * @param {import('playwright').Page} pageA
+ * @param {import('playwright').Page} pageB
+ * @param {string} nameA
+ * @param {string} nameB
+ * @param {{ timeoutMs?: number, settleMs?: number }} [opts]
+ */
+async function assertLobbyPlayerCrossVisibility(pageA, pageB, nameA, nameB, opts = {}) {
+    const timeoutMs = opts.timeoutMs ?? 15000;
+    const settleMs = opts.settleMs ?? 3000;
+    if (settleMs > 0) {
+        await pageA.waitForTimeout(settleMs);
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let namesA = [];
+    let namesB = [];
+    while (Date.now() < deadline) {
+        [namesA, namesB] = await Promise.all([
+            getLobbyPlayerNames(pageA),
+            getLobbyPlayerNames(pageB)
+        ]);
+        const aSeesB = namesA.some((n) => n.includes(nameB));
+        const bSeesA = namesB.some((n) => n.includes(nameA));
+        if (aSeesB && bSeesA) {
+            return { namesA, namesB };
+        }
+        await pageA.waitForTimeout(500);
+    }
+
+    throw new Error(
+        `Lobby player cross-visibility failed. `
+        + `A(${nameA}) sees: ${JSON.stringify(namesA)}; `
+        + `B(${nameB}) sees: ${JSON.stringify(namesB)}`
+    );
+}
+
 module.exports = {
     RUN_ID,
     prodRoom,
@@ -183,6 +230,8 @@ module.exports = {
     waitForGameMode,
     cleanupRoom,
     cleanupPresence,
+    getLobbyPlayerNames,
+    assertLobbyPlayerCrossVisibility,
     buildHubUrl,
     buildAppUrl
 };

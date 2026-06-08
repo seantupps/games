@@ -85,6 +85,15 @@
         }
 
         global.HubMessageBridge.install({
+            [H.FIVE_VIEWPORT_QUERY]: (e) => {
+                if (!e.source) return;
+                try {
+                    e.source.postMessage({
+                        type: H.FIVE_VIEWPORT_MODE,
+                        mobile: document.documentElement.classList.contains('five-mobile')
+                    }, '*');
+                } catch (_) { /* cross-origin */ }
+            },
             [L.TOGGLE_SETTINGS]: () => ctx.toggleSidebar(),
             [H.OPEN_SETTINGS_EDGE_SWIPE]: () => {
                 if (!edgeSwipeAllowedFromIframeGame()) return;

@@ -7,6 +7,7 @@
  * Optional:
  *   FIVE_HEADED=1              — visible browser
  *   FIVE_BASE_URL=...          — test deployed GitHub Pages build
+ *   FIVE_PROD_ONLY=lobby       — run one step (substring match on step name)
  *   FIVE_PROD_MAX_MOVES=45     — piles sim move cap
  *   FIVE_PROD_SYNC_MS=250      — delay between moves (prod latency)
  */
@@ -15,12 +16,12 @@ process.env.FIVE_PROFILE = process.env.FIVE_PROFILE || 'prod';
 require('../../shared/infra/bootstrap');
 
 const { RUN_ID } = require('./prod-utils');
-const { runLobbyTest } = require('./lobby');
+const { runLobbyVisibilityTest } = require('./lobby');
 const { runGameSwitchingTest } = require('./game_switching');
 const { runPilesSimTest } = require('./piles_sim');
 
 const STEPS = [
-    { name: 'Lobby presence', fn: runLobbyTest },
+    { name: 'Lobby player visibility', fn: runLobbyVisibilityTest, tag: 'lobby' },
     { name: 'Game/mode switching', fn: runGameSwitchingTest },
     { name: 'Classic piles simulation', fn: () => runPilesSimTest('classic') },
     { name: 'Party chat', fn: () => require('./chat').runChatTest() }

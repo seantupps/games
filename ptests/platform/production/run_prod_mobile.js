@@ -9,7 +9,7 @@
  * Optional:
  *   FIVE_HEADED=1
  *   FIVE_BASE_URL=https://seantupps.github.io/games/   (or local serve)
- *   FIVE_PROD_MOBILE_ONLY=smoke|party
+ *   FIVE_PROD_MOBILE_ONLY=lobby|smoke|party
  *   FIVE_PROD_MOBILE_MS=20000
  */
 process.env.FIVE_FIREBASE_TARGET = 'production';
@@ -19,8 +19,10 @@ require('../../shared/infra/bootstrap');
 const { RUN_ID } = require('./prod-mobile-utils');
 const { runMobileSmokeTest } = require('./mobile_smoke');
 const { runMobilePartyTest } = require('./mobile_party');
+const { runMobileLobbyVisibilityTest } = require('./lobby_mobile');
 
 const STEPS = [
+    { name: 'Mobile lobby player visibility', fn: runMobileLobbyVisibilityTest, tag: 'lobby' },
     { name: 'Mobile smoke (hub + piles)', fn: runMobileSmokeTest, tag: 'smoke' },
     { name: 'Mobile party sync', fn: runMobilePartyTest, tag: 'party' }
 ];

@@ -433,10 +433,7 @@
             if (ok === false) bar.style.display = '';
         }
     </script>
-    <script src="vendor/firebase/firebase-app-compat.js"
-        onerror="this.onerror=null;this.src='https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js'"></script>
-    <script src="vendor/firebase/firebase-database-compat.js"
-        onerror="this.onerror=null;this.src='https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js'"></script>
+    <script src="shared/network/firebase-sdk-loader.js"></script>
     <script>
         if (typeof firebase === 'undefined') {
             setBootStatus('Firebase SDK failed to load', false);
@@ -444,7 +441,7 @@
             if (el) {
                 el.querySelector('.hub-loading-title').textContent = 'Cannot load Firebase SDK';
                 el.querySelector('.hub-loading-hint').textContent =
-                    'Open phone-check.html first. On PC: npm run vendor:firebase';
+                    'On PC: npm run vendor:firebase. Public site should load from gstatic automatically.';
             }
             if (window.FivePhoneDebug) window.FivePhoneDebug.flush('firebase-missing');
         } else {
