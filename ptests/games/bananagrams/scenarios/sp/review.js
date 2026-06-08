@@ -1,7 +1,8 @@
 /**
  * Solo victory / Done / dev-win scenarios.
  */
-const { testBananasVictoryDone, testBananasDevWinDoneTwice } = require('../../assertions/sp-review');
+const { sp } = require('../../assertions');
+const { testBananasVictoryDone, testBananasDevWinDoneTwice } = sp;
 const { runScenario } = require('../../../../shared/infra/scenario-runner');
 
 async function runVictoryScenarios(page, gameFrame, options = {}) {

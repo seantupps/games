@@ -25,8 +25,7 @@
  * @property {number} playerCount
  * @property {MpPlayerSlot} host
  * @property {MpPlayerSlot[]} players
- * @property {MpPlayerSlot[]} remotes — non-host clients (was "guests")
- * @property {MpPlayerSlot[]} guests — @deprecated alias for remotes
+ * @property {MpPlayerSlot[]} remotes — non-host clients
  * @property {import('playwright').Page[]} pages
  * @property {import('playwright').Frame[]} [frames]
  * @property {string|null} roomId

@@ -17,13 +17,13 @@ const {
     HOST_UID,
     GUEST_UID,
     flushHostBananaInteractions,
-    enableFastBanners,
-    joinBananaPartyViaInvite,
-    assertHostDealPool,
-    EXPECTED_MP_2P_POOL
+    enableFastBanners
 } = require('../../lib/mp-state');
-const { bootMpPlaySession } = require('../../runners/mp-audit/mp-play-boot');
-const { runLastBunchPeelTests } = require('../../fixtures/last-bunch');
+const { bootMpPlaySessionFromPages } = require('../../lib/mp-session-boot');
+const { attachFramesToCtx, legacyPagesFromCtx } = require('../../lib/mp-ai-side-ctx');
+const { resolveSessionRounds, resolveSessionPause } = require('../../lib/mp-session-config');
+const { seedBananaParty } = require('./seed-party');
+const { runLastBunchPeelTests } = require('./last-bunch-flow');
 const {
     runSolveAndAssert,
     assertMpSolveSynced,
@@ -33,23 +33,21 @@ const {
 const { parseWinSideArgv } = require('../registry');
 const {
     runMpAiPlaythrough,
-    resolveSessionRounds,
-    resolveSessionPause,
-    advanceActionsRoundAfterReview
-} = require('../../runners/mp-audit/mp-ai-playthrough');
+    resetMpForAiPlaythrough,
+    advanceActionsRoundAfterReviewFromCtx
+} = require('./ai-playthrough');
+const { review, sp, sync } = require('../../assertions');
 const {
     assertMpReviewShowsAllBoards,
     waitMpResetAfterDone
-} = require('../../assertions/mp-review');
-const { clickDone } = require('../../assertions/sp-review');
-const { assertHostSplitSyncsBothAfterPostGameReset } = require('../../assertions/mp-review-done-split');
+} = review;
+const { clickDone } = sp;
+const { assertHostSplitSyncsBothAfterPostGameReset } = review;
 const {
     assertGuestWinAfterSolve2Placements,
     collectMpClientDiag
-} = require('../../assertions/mp-review-solve2');
-const {
-    assertGuestWinHubBannerReview
-} = require('../../assertions/mp-sync-guest-banner');
+} = review;
+const { assertGuestWinHubBannerReview } = sync;
 const mpLib = require('../../lib/mp-state');
 
 const TIMEOUT_MS = STEP_MS;
@@ -225,33 +223,31 @@ async function runSolveToWinReviewTests(page1, page2, frame1, frame2, mp, winSid
 }
 
 /**
- * @param {import('playwright').Page} page1 host
- * @param {import('playwright').Page} page2 guest
- * @param {{ roomId?: string, mobile?: boolean, skipSeed?: boolean, winSide?: 'host'|'guest'|null, rounds?: number, pause?: boolean }} [options]
+ * @param {import('./contract').MpScenarioContext} scenarioCtx
  */
-async function runReviewScenarioAudit(page1, page2, options = {}) {
-    const roomId = options.roomId || `MP_REVIEW_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    const mp = { page1, page2 };
+async function runReviewScenarioAuditFromCtx(scenarioCtx) {
+    const { ctx, roomId, mobile, options = {}, skipSeed } = scenarioCtx;
     const rounds = resolveSessionRounds(options);
     const pause = resolveSessionPause(options);
     const winSide = options.winSide ?? parseWinSideArgv() ?? 'host';
+    const { page1, page2, mp } = legacyPagesFromCtx(ctx);
 
     let frame1;
     let frame2;
-    if (options.skipSeed) {
-        const { resetMpForAiPlaythrough } = require('../../runners/mp-audit/mp-ai-playthrough');
+    if (skipSeed) {
         frame1 = await getGameFrame(page1);
         frame2 = await getGameFrame(page2);
         const reset = await resetMpForAiPlaythrough({
-            page1, page2, frame1, frame2, mp, mobile: !!options.mobile
+            ctx,
+            page1, page2, frame1, frame2, mp, mobile: !!mobile
         });
         frame1 = reset.frame1;
         frame2 = reset.frame2;
     } else {
-        await joinBananaPartyViaInvite(page1, page2, roomId);
-        await assertHostDealPool(page1, EXPECTED_MP_2P_POOL, 'review host deal bunch', mp);
-        ({ frame1, frame2 } = await bootMpPlaySession(page1, page2, { mobile: !!options.mobile }));
+        await seedBananaParty(scenarioCtx, { dealLabel: 'review host deal bunch' });
+        ({ frame1, frame2 } = await bootMpPlaySessionFromPages(page1, page2, { mobile: !!mobile }));
     }
+    attachFramesToCtx(ctx, [frame1, frame2]);
     await Promise.all([enableFastBanners(frame1), enableFastBanners(frame2)]);
 
     log('Review scenario: last-bunch peel sync (host + guest peels)...');
@@ -265,6 +261,7 @@ async function runReviewScenarioAudit(page1, page2, options = {}) {
         log(`Review solve-to-win round ${round}/${rounds} (winSide=${winSide})...`);
         frame1 = await getGameFrame(page1);
         frame2 = await getGameFrame(page2);
+        attachFramesToCtx(ctx, [frame1, frame2]);
         try {
             await runSolveToWinReviewTests(page1, page2, frame1, frame2, mp, winSide, { round, rounds });
         } catch (err) {
@@ -273,18 +270,14 @@ async function runReviewScenarioAudit(page1, page2, options = {}) {
         log(`SUCCESS: Review solve-to-win round ${round}/${rounds}`);
 
         if (round < rounds) {
-            const next = await advanceActionsRoundAfterReview(
-                page1,
-                page2,
-                frame1,
-                frame2,
-                mp,
-                !!options.mobile,
+            const next = await advanceActionsRoundAfterReviewFromCtx(
+                ctx,
                 `review round ${round}/${rounds}`,
-                { pause }
+                { pause, mobile: !!mobile }
             );
             frame1 = next.frame1;
             frame2 = next.frame2;
+            attachFramesToCtx(ctx, [frame1, frame2]);
         }
     }
 
@@ -306,14 +299,8 @@ async function runReviewScenarioAudit(page1, page2, options = {}) {
     log(`SUCCESS: Review scenario complete — ${rounds} solve-to-win round(s), Done reset, post-Done SPLIT`);
 }
 
-/** @deprecated alias — use runReviewScenarioAudit */
-async function runLastBunchPeelSyncAudit(page1, page2, options = {}) {
-    return runReviewScenarioAudit(page1, page2, options);
-}
-
 module.exports = {
-    runReviewScenarioAudit,
-    runLastBunchPeelSyncAudit,
+    runReviewScenarioAuditFromCtx,
     runSolveToWinReviewTests,
     assertBothPlayersReviewBoardsOnEveryClient
 };

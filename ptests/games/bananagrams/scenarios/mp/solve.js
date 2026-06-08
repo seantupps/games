@@ -1,37 +1,15 @@
 /**
  * solve — dev /b solve command lifecycle in MP session.
  */
+const { bootMpPlaySessionFromPages, bootMpPlaySessionThroughDeal, bootMpPlaySessionSplit } = require('../../lib/mp-session-boot');
 const { defineMpScenario } = require('./contract');
 const lib = require('../../lib/mp-state');
-const { bootMpPlaySession } = require('../../runners/mp-audit/mp-play-boot');
-const { bootMpPlaySessionN } = require('../../lib/mp-session-boot');
+
+const { audit } = require('../../assertions');
+
 const { runMpBoardSolveScenarios, runMpBoardSolveScenariosFromCtx } = require('../sp/solve');
-const { resolveSessionRounds } = require('../../runners/mp-audit/mp-ai-playthrough');
-const { joinBananaPartySequentially } = require('../../../../shared/infra/scenarios/mp-3p-banana-party');
-const { assertJoinedPlayersReadyWithVisibility } = require('../../lib/mp-join-ready');
-
-async function seedParty(scenarioCtx) {
-    const { ctx, roomId, mobile, options = {} } = scenarioCtx;
-    if (scenarioCtx.skipSeed) return;
-
-    if (ctx.playerCount === 2) {
-        await lib.joinBananaPartyViaInvite(ctx.pages[0], ctx.pages[1], roomId);
-        return;
-    }
-
-    const mobilePageIndices = mobile ? ctx.pages.map((_, i) => i) : (options.mobilePageIndices || []);
-    const guestOrder = options.guestJoinOrder || [1, 2];
-    await joinBananaPartySequentially(ctx.pages, roomId, guestOrder, {
-        log: lib.log,
-        mobilePageIndices,
-        assertJoinedPlayersReady: (pages, indices, rId, label, opts) =>
-            assertJoinedPlayersReadyWithVisibility(pages, indices, rId, label, {
-                ...opts,
-                playerDefs: ctx.players,
-                mobilePageIndices
-            })
-    });
-}
+const { resolveSessionRounds } = require('../../lib/mp-session-config');
+const { seedBananaParty } = require('./seed-party');
 
 async function runSolveScenario(scenarioCtx) {
     const { ctx, mobile, options = {} } = scenarioCtx;
@@ -43,15 +21,18 @@ async function runSolveScenario(scenarioCtx) {
         );
     }
 
-    await seedParty(scenarioCtx);
+    await seedBananaParty(scenarioCtx, { dealLabel: 'solve host deal after invite' });
 
     if (ctx.playerCount === 2) {
-        await bootMpPlaySession(ctx.pages[0], ctx.pages[1], { mobile });
+        await bootMpPlaySessionFromPages(ctx.pages[0], ctx.pages[1], { mobile });
         await runMpBoardSolveScenarios(ctx.pages[0], ctx.pages[1]);
         return;
     }
 
-    await bootMpPlaySessionN(ctx, { mobile });
+    let { frames } = await bootMpPlaySessionThroughDeal(ctx, { mobile });
+    await audit.assertPreSplitDealAudit(ctx, frames);
+    await bootMpPlaySessionSplit(ctx, frames, { mobile });
+    ctx.frames = frames;
     await runMpBoardSolveScenariosFromCtx(ctx);
 }
 

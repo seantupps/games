@@ -171,7 +171,6 @@
             logicKey: 'bananagrams',
             mpSuite: 'extended',
             mpPlayerCounts: [2, 3],
-            mpAudit3p: 'ptests/games/bananagrams/runners/mp-3p',
             modes: ['solo'],
             defaultMode: 'solo',
             maxPartyPlayers: 8,
@@ -243,10 +242,6 @@
 
     /** @param {string} id @param {number} count */
     function mpAuditPathForPlayerCount(id, mode, count, { mobile = false } = {}) {
-        if (count === 3) {
-            const custom = get(id)?.mpAudit3p;
-            if (custom) return custom;
-        }
         return mpAuditPathFor(id, mode, { mobile });
     }
 

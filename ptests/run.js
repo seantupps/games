@@ -64,36 +64,27 @@ function applyMpSuiteDefaults(spec) {
     }
 }
 
-async function runMp3p(spec, opts = {}) {
+async function runMpBananagramsN(spec, opts = {}) {
     const summarize = opts.summarize !== false && spec.summarize !== false;
     const scenario = String(spec.scenario || '').trim().toLowerCase();
     const { normalizeScenarioId } = require('./games/bananagrams/scenarios/mp/index');
-    const { ROUTED_3P_SCENARIOS, DEFAULT_3P_SCENARIO } = require('./games/bananagrams/scenarios/mp/routing');
-    const scenarioId = normalizeScenarioId(scenario || DEFAULT_3P_SCENARIO);
+    const { DEFAULT_MP_SCENARIO } = require('./games/bananagrams/scenarios/mp/routing');
+    const scenarioId = normalizeScenarioId(scenario || DEFAULT_MP_SCENARIO);
+    const playerCount = spec.players || spec.playerCount || 3;
 
-    if (ROUTED_3P_SCENARIOS.has(scenarioId)) {
-        const { runBananagramsMpNAudit } = require('./games/bananagrams/runners/mp-n-audit');
-        const routed = await runBananagramsMpNAudit({ ...spec, scenario: scenarioId }, { summarize });
-        if (summarize && !routed.allPassed) {
-            throw new Error(routed.results?.[0]?.error || '3p MP scenario failed');
-        }
-        return routed;
+    const { runBananagramsMpNAudit } = require('./games/bananagrams/runners/mp-n-audit');
+    const routed = await runBananagramsMpNAudit(
+        { ...spec, scenario: scenarioId, playerCount },
+        { summarize }
+    );
+    if (summarize && !routed.allPassed) {
+        throw new Error(routed.results?.[0]?.error || `${playerCount}p MP scenario failed`);
     }
-
-    const { runMp3pSuite } = require('./games/bananagrams/runners/mp-3p');
-    const result = await runMp3pSuite({
-        topology: spec.topology,
-        scenario: spec.scenario,
-        mobileAll: spec.topology === 'mobile',
-        mixed: spec.topology === 'mixed',
-        summarize,
-        skipStackCheck: spec.skipStackCheck
-    });
-    if (summarize && !result.allPassed) {
-        throw new Error(result.error || '3p MP suite failed');
-    }
-    return result;
+    return routed;
 }
+
+/** @deprecated use runMpBananagramsN */
+const runMp3p = runMpBananagramsN;
 
 async function runCombinedMpSuite(spec) {
     const { printSuiteHeader, emitBenchmarkSummary } = require('./shared/infra/runner-results');
@@ -124,7 +115,7 @@ async function runCombinedMpSuite(spec) {
     }
 
     if (wants3 && priorPassed) {
-        const mp3Out = await runMp3p(
+        const mp3Out = await runMpBananagramsN(
             { ...spec, game: spec.game || 'bananagrams', skipStackCheck: true },
             { summarize: false }
         );
@@ -168,7 +159,7 @@ async function runMp(spec) {
                 + 'Use --game=bananagrams or omit --game.'
             );
         }
-        return runMp3p(spec, { summarize });
+        return runMpBananagramsN(spec, { summarize });
     }
 
     const wantsBoth = includesPlayerCount(spec, 2) && includesPlayerCount(spec, 3);
@@ -268,7 +259,7 @@ async function runSingleTopology(spec) {
 
     if (spec.topology === 'mobile') {
         if (spec.mode === 'mp' && isOnlyPlayerCount(spec, 3)) {
-            out = await runMp3p({ ...spec, summarize: false }, { summarize: false });
+            out = await runMpBananagramsN({ ...spec, summarize: false }, { summarize: false });
         } else {
             out = await runMobile({ ...spec, summarize: false });
         }
@@ -400,7 +391,8 @@ if (require.main === module) {
 
 module.exports = {
     runCombinedMpSuite,
-    runMp3p,
+    runMpBananagramsN,
+    runMp3p: runMpBananagramsN,
     runMp,
     runSp,
     runMobile,

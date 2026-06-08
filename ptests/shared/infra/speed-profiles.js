@@ -79,6 +79,33 @@ function bannerInstantMs() {
     return readEnvMs('FIVE_BANANA_BANNER_INSTANT_MS', 100);
 }
 
+/** Off by default — set FIVE_MP_AI_ROUND_TRIP_CAP=1 to enforce max round-trip limits. */
+function mpAiRoundTripCapEnabled() {
+    const v = process.env.FIVE_MP_AI_ROUND_TRIP_CAP;
+    if (v == null || v === '') return false;
+    const s = String(v).toLowerCase();
+    return s !== '0' && s !== 'false' && s !== 'off' && s !== 'no';
+}
+
+/**
+ * @param {boolean} playToWin
+ * @param {{ playFallback?: number, auditFallback?: number }} [opts]
+ */
+function resolveMpAiMaxRoundTrips(playToWin, opts = {}) {
+    if (!mpAiRoundTripCapEnabled()) {
+        return Number.POSITIVE_INFINITY;
+    }
+    if (playToWin) {
+        return Number(
+            process.env.FIVE_BANANA_MAX_TURNS
+            || process.env.FIVE_MP_AI_MAX_ROUNDS
+            || opts.playFallback
+            || 30
+        );
+    }
+    return Number(process.env.FIVE_MP_AI_MAX_ROUNDS || opts.auditFallback || 120);
+}
+
 module.exports = {
     PROFILES,
     SCENARIO_PROFILES,
@@ -89,5 +116,7 @@ module.exports = {
     mpReviewWaitMs,
     peelStabilitySettleMs,
     bannerInstantMs,
+    mpAiRoundTripCapEnabled,
+    resolveMpAiMaxRoundTrips,
     WAIT_MS: STEP_MS
 };

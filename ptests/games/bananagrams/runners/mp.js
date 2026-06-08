@@ -12,6 +12,13 @@ const { chromium } = require('playwright');
 const { ensureTestStack } = require('../../../shared/infra/emulator-utils');
 const { runBananagramsMpAudit } = require('./mp-audit/run-audit');
 const lib = require('../lib/mp-state');
+const {
+    peelGridScript,
+    peelGridScriptEval,
+    peelGridOnFrameScript
+} = require('../fixtures/review-state');
+const { spawn } = require('../assertions');
+const { assertSpawnedAtViewportBottom } = spawn.visibility;
 const { DESKTOP_VIEWPORT } = require('../../../shared/infra/viewport-constants');
 const { layoutMpHeadedWindows, mpHeadedContextOpts, centerMpViewerOnPages } = require('../../../shared/platform/mp-headed-view');
 const { getActiveRunConfig } = require('../../../shared/infra/run-config');
@@ -144,12 +151,13 @@ module.exports = {
     dumpTile: lib.dumpTile,
     holdDump: lib.holdDump,
     dragTileByIndex: lib.dragTileByIndex,
-    assertSpawnedAtViewportBottom: lib.assertSpawnedAtViewportBottom,
+    assertSpawnedAtViewportBottom,
     waitForDiag: lib.waitForDiag,
     waitDumpResult: lib.waitDumpResult,
     splitViaDrag: lib.splitViaDrag,
-    peelGridScript: lib.peelGridScript,
-    peelGridScriptEval: lib.peelGridScriptEval,
+    peelGridScript,
+    peelGridScriptEval,
+    peelGridOnFrameScript,
     beforeLoop,
     skipBootstrap: true,
     deferBootstrapWait: true,

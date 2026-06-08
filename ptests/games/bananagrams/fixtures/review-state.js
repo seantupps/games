@@ -155,10 +155,64 @@ function peelGridAndTriggerInFrameStandalone() {
     };
 }
 
+/** Legacy 3-tile peel grid (solo-style) — in-frame script body for frame.evaluate. */
+function peelGridOnFrameScript() {
+    const g = window.game;
+    const opts = {
+        cols: BananaRules.COLS,
+        gap: BananaRules.TILE_GAP,
+        tileSize: BananaRules.TILE_SIZE,
+        handBelowCenter: BananaRules.HAND_BELOW_CENTER,
+        handSize: BananaRules.startingHandSize(2)
+    };
+    const src = [...(g.tiles || [])].slice(0, 3);
+    if (src.length < 3) return { placed: false, valid: false, reason: 'short-hand' };
+    g.tiles = src.map((t, idx) => ({
+        id: t.id || `peel-${idx}`,
+        letter: t.letter || 'A',
+        x: 2400,
+        y: idx === 0 ? 2200 : idx === 1 ? 2240 : 2280,
+        faceUp: true
+    }));
+    g.requestRender();
+    const placed = BananaGrid.allTilesPlacedInGrid(g.tiles, { x: g.ORIGIN, y: g.ORIGIN }, opts);
+    const valid = BananaGrid.validateGrid(g.tiles, g._checker);
+    return { placed, valid: valid.ok };
+}
+
+function peelGridScriptEval({ nPlayers = 2 } = {}) {
+    const g = window.game;
+    const opts = {
+        cols: BananaRules.COLS,
+        gap: BananaRules.TILE_GAP,
+        tileSize: BananaRules.TILE_SIZE,
+        handBelowCenter: BananaRules.HAND_BELOW_CENTER,
+        handSize: BananaRules.startingHandSize(nPlayers)
+    };
+    const src = [...(g.tiles || [])].slice(0, 3);
+    if (src.length < 3) return { placed: false, valid: false, reason: 'short-hand' };
+    g.tiles = src.map((t, idx) => ({
+        id: t.id || `peel-${idx}`,
+        letter: t.letter || 'A',
+        x: 2400,
+        y: idx === 0 ? 2200 : idx === 1 ? 2240 : 2280,
+        faceUp: true
+    }));
+    g.requestRender();
+    const placed = BananaGrid.allTilesPlacedInGrid(g.tiles, { x: g.ORIGIN, y: g.ORIGIN }, opts);
+    const valid = BananaGrid.validateGrid(g.tiles, g._checker);
+    return { placed, valid: valid.ok, words: valid.words };
+}
+
+const peelGridScript = peelGridScriptEval;
+
 module.exports = {
     PEEL_CROSSWORD_Y0,
     peelCrosswordPlacements,
     peelGridInFrame,
     peelGridAndTriggerInFrame,
-    peelGridAndTriggerInFrameStandalone
+    peelGridAndTriggerInFrameStandalone,
+    peelGridOnFrameScript,
+    peelGridScriptEval,
+    peelGridScript
 };

@@ -7,10 +7,11 @@ const { chromium } = require('playwright');
 const { ensureTestStack } = require('../../../shared/infra/emulator-utils');
 const { playwrightHeadless, shouldCloseBrowser, registerKeepOpenBrowser } = require('../../../shared/infra/env-defaults');
 const { printSuiteHeader, printBenchmarkResults, runnerLog } = require('../../../shared/infra/runner-results');
-const { createBanana3pSession, BANANA_3P_PLAYERS } = require('../../../shared/infra/scenarios/mp-3p-banana-party');
+const { createBananaMpSession } = require('../lib/banana-mp-party');
+const { bananaPlayerDefs } = require('../lib/mp-ctx');
 const { runBananagramsMpAudit } = require('./mp-audit/run-audit');
 const { normalizeScenarioId, scenarioSupportsPlayerCount } = require('../scenarios/mp/index');
-const { DEFAULT_3P_SCENARIO } = require('../scenarios/mp/routing');
+const { DEFAULT_MP_SCENARIO, supportedMpPlayerCounts } = require('../scenarios/mp/routing');
 const { parseScenarioArgv } = require('../scenarios/registry');
 
 /**
@@ -22,17 +23,27 @@ async function runBananagramsMpNAudit(spec = {}, opts = {}) {
     const topology = spec.topology || 'desktop';
     const mobileAll = topology === 'mobile' || !!spec.mobileAll;
     const playerCount = spec.players || spec.playerCount || 3;
-    const scenarioId = normalizeScenarioId(spec.scenario || parseScenarioArgv(process.argv, DEFAULT_3P_SCENARIO));
+    const scenarioId = normalizeScenarioId(spec.scenario || parseScenarioArgv(process.argv, DEFAULT_MP_SCENARIO));
 
-    if (playerCount !== 3) {
-        throw new Error(`runBananagramsMpNAudit: only 3p wired today (got ${playerCount}p)`);
+    const allowed = supportedMpPlayerCounts('bananagrams');
+    if (!allowed.includes(playerCount)) {
+        throw new Error(
+            `runBananagramsMpNAudit: ${playerCount}p not wired for bananagrams `
+            + `(supported: ${allowed.join(', ')})`
+        );
+    }
+    if (playerCount < 3) {
+        throw new Error(
+            `runBananagramsMpNAudit: use mp.js bundle for ${playerCount}p `
+            + '(mp-n-audit is for 3p+ sessions)'
+        );
     }
     if (!scenarioSupportsPlayerCount(scenarioId, playerCount)) {
         throw new Error(`Scenario "${scenarioId}" does not support ${playerCount} players`);
     }
 
     if (summarize) {
-        printSuiteHeader('BANANAGRAMS MP 3P', [
+        printSuiteHeader(`BANANAGRAMS MP ${playerCount}P`, [
             `${topology}${mobileAll ? ', mobile' : ''}`,
             `scenario=${scenarioId}`
         ]);
@@ -57,12 +68,16 @@ async function runBananagramsMpNAudit(spec = {}, opts = {}) {
     }
 
     const roomId = spec.roomId
-        || `MP_BANANA_3P_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    const testName = `MP Bananagrams 3p [${scenarioId}]`;
+        || `MP_BANANA_${playerCount}P_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const testName = `MP Bananagrams ${playerCount}p [${scenarioId}]`;
     const t0 = Date.now();
     let result;
 
-    const { contexts, pages, mobilePageIndices } = await createBanana3pSession(browser, { mobileAll });
+    const playerDefs = bananaPlayerDefs(playerCount);
+    const { contexts, pages, mobilePageIndices } = await createBananaMpSession(browser, {
+        playerCount,
+        mobileAll
+    });
     const hostPage = pages[0];
 
     try {
@@ -71,7 +86,7 @@ async function runBananagramsMpNAudit(spec = {}, opts = {}) {
             scenario: scenarioId,
             roomId,
             mobile: mobileAll,
-            playerDefs: BANANA_3P_PLAYERS,
+            playerDefs,
             guestOrders: spec.guestOrders,
             mobilePageIndices
         });

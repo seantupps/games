@@ -10,6 +10,7 @@ const review = require('./review');
 const focus = require('./focus');
 const join = require('./join');
 const ctxProof = require('./ctx-proof');
+const template = require('./template');
 const peelRegisterRepro = require('./peel-register-repro-3p');
 
 /** @type {Record<string, import('./contract').MpScenarioModule>} */
@@ -22,6 +23,7 @@ const MP_SCENARIOS = {
     focus,
     join,
     'ctx-proof': ctxProof,
+    template,
     'peel-register-repro': peelRegisterRepro
 };
 

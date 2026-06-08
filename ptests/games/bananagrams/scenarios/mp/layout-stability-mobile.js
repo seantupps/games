@@ -9,37 +9,17 @@ const {
     dumpTile,
     waitForDiag,
     flushHostBananaInteractions,
-    dismissBanners,
-    assertActionBannerOnBoth
+    dismissBanners
 } = require('../../lib/mp-state');
 const { touchPanBackground } = require('../../adapters/mobile-touch');
 const { peelGridInFrame } = require('../../fixtures/review-state');
+const { readBoardField } = require('../../assertions/core/capture');
+const { layout, authority } = require('../../assertions');
+const { assertActionBannerOnBoth } = authority;
 const {
     captureTileStabilitySnapshot,
     assertMobileTileStabilityAfterAction
-} = require('../../assertions/layout-tile-stability');
-
-async function readDumpSeq(page) {
-    return page.evaluate(() => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const room = g?.roomData;
-        const board = (typeof RtdbSchema !== 'undefined' && room)
-            ? RtdbSchema.readBoardFromRoom(room)
-            : room?.global?.board;
-        return board?.dumpSeq || 0;
-    });
-}
-
-async function readPeelSeq(page) {
-    return page.evaluate(() => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const room = g?.roomData;
-        const board = (typeof RtdbSchema !== 'undefined' && room)
-            ? RtdbSchema.readBoardFromRoom(room)
-            : room?.global?.board;
-        return board?.peelSeq || 0;
-    });
-}
+} = layout.tileStability;
 
 /**
  * @param {object} opts
@@ -99,7 +79,7 @@ async function runBananagramsMpMobilePeelDumpTileStability(opts) {
         captureTileStabilitySnapshot(page1),
         captureTileStabilitySnapshot(page2)
     ]);
-    const dumpSeqBefore = await readDumpSeq(page1);
+    const dumpSeqBefore = await readBoardField(page1, 'dumpSeq');
     const dumpRes = await dumpTile(frame1, -1, { mobile: true, hostPage: page1 });
     if (!dumpRes.ok) {
         throw new Error(`Mobile dump stability trigger failed (${JSON.stringify(dumpRes)})`);
@@ -140,7 +120,7 @@ async function runBananagramsMpMobilePeelDumpTileStability(opts) {
         captureTileStabilitySnapshot(page1),
         captureTileStabilitySnapshot(page2)
     ]);
-    const peelSeqBefore = await readPeelSeq(page1);
+    const peelSeqBefore = await readBoardField(page1, 'peelSeq');
     const peelRes = await frame1.evaluate(() => {
         const g = window.game;
         g._bannerText = '';

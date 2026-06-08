@@ -1,12 +1,25 @@
 /**
- * 3p scenarios routed through registry + mp-n-audit (not the legacy mp-3p monolith).
+ * N-player MP scenarios routed through registry + mp-n-audit (not legacy monoliths).
  */
-const ROUTED_3P_SCENARIOS = new Set(['join', 'ctx-proof', 'full', 'solve', 'peel-register-repro']);
+const GameRegistry = require('../../../../../shared/games/registry');
 
-/** Default 3p scenario when --scenario is omitted (full after step 5). */
-const DEFAULT_3P_SCENARIO = 'full';
+const ROUTED_MP_SCENARIOS = new Set([
+    'join', 'ctx-proof', 'full', 'solve', 'peel-register-repro', 'actions', 'review', 'sync', 'focus'
+]);
+
+/** Default N-player scenario when --scenario is omitted. */
+const DEFAULT_MP_SCENARIO = 'full';
+
+/**
+ * @param {string} [gameId]
+ * @returns {number[]}
+ */
+function supportedMpPlayerCounts(gameId = 'bananagrams') {
+    return GameRegistry.mpPlayerCountsFor(gameId);
+}
 
 module.exports = {
-    ROUTED_3P_SCENARIOS,
-    DEFAULT_3P_SCENARIO
+    ROUTED_MP_SCENARIOS,
+    DEFAULT_MP_SCENARIO,
+    supportedMpPlayerCounts
 };

@@ -5,17 +5,18 @@ const { STEP_MS } = require('../../../../shared/infra/timeouts');
 const { getGameFrame } = require('../../../../shared/adapters/desktop-input');
 const { solveAttemptFromBrowserState } = require('../../ai');
 const { playwrightSlowMo } = require('../../../../shared/infra/env-defaults');
-const { assertTileDistributionInReview } = require('../../assertions/mp-distribution');
+const { distribution, sp } = require('../../assertions');
+const { assertTileDistributionInReview } = distribution;
+const {
+    clickDone,
+    waitSoloFaceDownHand,
+    waitSoloPostGameReview
+} = sp;
 const {
     attachSnapshotTileIds,
     rackLettersFromSnap,
     applyPinnedPlacementsInFrame
 } = require('../../lib/ai-snapshot-apply');
-const {
-    clickDone,
-    waitSoloFaceDownHand,
-    waitSoloPostGameReview
-} = require('../../assertions/sp-review');
 
 const ACTION_SLICES = ['placement', 'dump', 'peel'];
 

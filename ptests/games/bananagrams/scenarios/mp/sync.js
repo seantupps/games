@@ -4,45 +4,44 @@
  */
 const { defineMpScenario } = require('./contract');
 const lib = require('../../lib/mp-state');
-const { bootMpPlaySession } = require('../../runners/mp-audit/mp-play-boot');
+const { bootMpPlaySessionFromPages } = require('../../lib/mp-session-boot');
 const { getGameFrame } = lib;
 const { patchMpThreeLetterChecker } = require('../../fixtures/mp-four-tile');
-const {
-    assertHostPeelGuestDisconnectedTilesStable
-} = require('../../assertions/mp-sync-disconnected');
+const { sync } = require('../../assertions');
 const { runMpPeelSpawnScenario } = require('./sync-peel');
+const { seedBananaParty } = require('./seed-party');
 
-async function runSyncScenario(ctx) {
+async function runSyncScenario(scenarioCtx) {
     const {
         page1,
         page2,
         mobile = false,
         mp: mpIn = null
-    } = ctx;
+    } = scenarioCtx;
     const mp = mpIn || { page1, page2 };
     const log = lib.log;
 
-    if (!ctx.skipSeed) {
-        await lib.joinBananaPartyViaInvite(page1, page2, ctx.roomId);
+    if (!scenarioCtx.skipSeed) {
+        await seedBananaParty(scenarioCtx, { dealLabel: 'sync host deal after invite' });
     }
 
     log('MP sync invariants: host-authoritative micro fixtures (4-tile symmetric)...');
 
-    const boot = await bootMpPlaySession(page1, page2, { mobile });
+    const boot = await bootMpPlaySessionFromPages(page1, page2, { mobile });
     let frame1 = boot.frame1;
     let frame2 = boot.frame2;
 
     await patchMpThreeLetterChecker([frame1, frame2]);
 
     log('MP sync: guest disconnected stragglers stable when host peels...');
-    await assertHostPeelGuestDisconnectedTilesStable({
+    await sync.assertHostPeelGuestDisconnectedTilesStable({
         page1,
         page2,
         frame1,
         frame2,
         mp,
         mobile,
-        ctx: ctx.ctx,
+        ctx: scenarioCtx.ctx,
         log
     });
 
@@ -72,5 +71,5 @@ module.exports = defineMpScenario({
     joinMode: 'invite',
     requiresFreshRoom: true,
     mutatesAuthority: true,
-    assertions: ['mp-sync-disconnected', 'mp-sync-peel-spawn', 'mp-four-tile', 'peel-grid']
+    assertions: ['sync', 'mp-four-tile', 'peel-grid']
 }, runSyncScenario);

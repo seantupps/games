@@ -98,19 +98,6 @@ function buildMultiplayerAudits(opts = {}) {
         if (!includeGameInMpSuite(game, suiteFilter)) continue;
         if (!GameRegistry.supportsMpPlayerCount(game.id, players)) continue;
 
-        if (players === 3 && game.mpAudit3p) {
-            rows.push({
-                name: `MP ${game.label} (3p)${topoSuffix}`,
-                gameId: game.id,
-                gameMode: game.hubModeInParty || game.defaultMode,
-                players: 3,
-                topology,
-                customRunner: game.mpAudit3p,
-                config: {}
-            });
-            continue;
-        }
-
         for (const mode of game.modes) {
             const rel = GameRegistry.mpAuditPathForPlayerCount(game.id, mode, players, opts)
                 || mpAuditPathFor(game, mode, opts);

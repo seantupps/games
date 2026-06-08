@@ -6,26 +6,23 @@
  */
 const { defineMpScenario } = require('./contract');
 const { parseWinSideArgv } = require('../registry');
+const { resolveSessionRounds, resolveSessionPause } = require('../../lib/mp-session-config');
 const {
-    resolveSessionRounds,
-    resolveSessionPause
-} = require('../../runners/mp-audit/mp-ai-playthrough');
-const {
-    runReviewScenarioAudit,
-    runLastBunchPeelSyncAudit,
+    runReviewScenarioAuditFromCtx,
     runSolveToWinReviewTests,
     assertBothPlayersReviewBoardsOnEveryClient
 } = require('./review-run');
 
-async function runReviewScenario(ctx) {
-    const { page1, page2, roomId, mobile, options = {} } = ctx;
-    return runReviewScenarioAudit(page1, page2, {
-        ...options,
-        roomId,
-        mobile,
-        winSide: options.winSide ?? parseWinSideArgv(),
-        rounds: resolveSessionRounds(options),
-        pause: resolveSessionPause(options)
+async function runReviewScenario(scenarioCtx) {
+    const { options = {} } = scenarioCtx;
+    return runReviewScenarioAuditFromCtx({
+        ...scenarioCtx,
+        options: {
+            ...options,
+            winSide: options.winSide ?? parseWinSideArgv(),
+            rounds: resolveSessionRounds(options),
+            pause: resolveSessionPause(options)
+        }
     });
 }
 
@@ -50,8 +47,7 @@ const scenario = defineMpScenario({
 
 module.exports = {
     ...scenario,
-    runReviewScenarioAudit,
-    runLastBunchPeelSyncAudit,
+    runReviewScenarioAuditFromCtx,
     runSolveToWinReviewTests,
     assertBothPlayersReviewBoardsOnEveryClient
 };

@@ -73,7 +73,8 @@ async function resetSoloHand(gameFrame) {
     }, { timeout: STEP_MS });
 }
 
-const { testBananasDevWinDoneTwice } = require('../assertions/sp-review');
+const { sp, layout } = require('../assertions');
+const { testBananasDevWinDoneTwice } = sp;
 
 /** Full solo mobile audit (audit_base provides hub + iframe navigation). */
 async function runBananagramsSpMobile(page) {
@@ -86,7 +87,7 @@ async function runBananagramsSpMobile(page) {
     log('SUCCESS: Rack visible inside mobile viewport.');
 
     log('Mobile solo settings Bananagrams reset matches refresh rack placement...');
-    const { assertMobileSoloSettingsResetMatchesRefresh } = require('../assertions/layout-mobile-viewport');
+    const { assertMobileSoloSettingsResetMatchesRefresh } = layout.mobileViewport;
     await assertMobileSoloSettingsResetMatchesRefresh(page, {
         label: 'solo mobile settings Bananagrams reset vs refresh',
         timeoutMs: STEP_MS
@@ -94,7 +95,7 @@ async function runBananagramsSpMobile(page) {
     log('SUCCESS: Settings menu reset matches refresh rack placement on mobile.');
 
     log('Mobile rack auto-fits even with low persisted zoom...');
-    const { assertBananagramsRackVisibleWithLowPersistedZoom } = require('../assertions/layout-hub');
+    const { assertBananagramsRackVisibleWithLowPersistedZoom } = layout.hub;
     await assertBananagramsRackVisibleWithLowPersistedZoom(page, { ms: STEP_MS });
     await waitBananagramsReady(page);
     gameFrame = await getGameFrame(page);
@@ -285,7 +286,31 @@ async function runBananagramsMpMobileExtras(page1, page2) {
     log('SUCCESS: MP no marquee on mobile.');
 }
 
+/** 3p+ mobile extras — host/guest checks plus each extra remote client. */
+async function runMpMobileExtrasN(pages, frames, opts = {}) {
+    const mobileAll = !!opts.mobileAll;
+    const p3Mobile = !!opts.p3Mobile;
+    if (!mobileAll && !p3Mobile) return;
+    const syncMs = MP_BOARD_SYNC_MS;
+    if (mobileAll && pages.length >= 2) {
+        await runBananagramsMpMobileExtras(pages[0], pages[1]);
+    }
+    for (let i = 2; i < pages.length; i++) {
+        const role = `P${i + 1}`;
+        log(`MP mobile: ${role} rack fits viewport...`);
+        await assertBananagramsRackFitsViewport(pages[i], { ms: syncMs, minTiles: 4 });
+        await assertFaceDownRack(frames[i], `${role} pre-SPLIT`);
+        log(`SUCCESS: ${role} mobile rack + face-down checks.`);
+        log(`MP mobile: no marquee on ${role}...`);
+        await assertNoMarqueeOnMobile(frames[i]);
+        log(`SUCCESS: ${role} no marquee on mobile.`);
+    }
+}
+
 module.exports = {
     runBananagramsSpMobile,
-    runBananagramsMpMobileExtras
+    runBananagramsMpMobileExtras,
+    runMpMobileExtrasN,
+    /** @deprecated use runMpMobileExtrasN */
+    runMpMobileExtras3p: runMpMobileExtrasN
 };

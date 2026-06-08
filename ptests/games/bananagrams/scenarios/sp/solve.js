@@ -12,16 +12,17 @@ const {
     waitPoolBoth,
     waitPoolAll,
     splitViaDrag,
-    assertStartingRackConnected,
     waitForDiag,
     syncGuestPoolFromHost,
     flushHostBananaInteractions
 } = require('../../lib/mp-state');
+const { review, sp, deal } = require('../../assertions');
+const { assertStartingRackConnected } = deal;
 const {
     waitMpClientsInReview,
     waitMpResetAfterDone
-} = require('../../assertions/mp-review');
-const { clickDone } = require('../../assertions/sp-review');
+} = review;
+const { clickDone } = sp;
 
 /** @param {number} n @param {number} playerCount @param {number} totalTiles */
 function solveExpectations(n, playerCount, totalTiles) {

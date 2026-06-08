@@ -4,8 +4,10 @@
  *   node ptests/run.js mp --game=bananagrams --players=3 --scenario=join
  */
 const { defineMpScenario } = require('./contract');
-const { joinBananaPartySequentially, BANANA_3P_PLAYERS } = require('../../../../shared/infra/scenarios/mp-3p-banana-party');
-const { assertJoinedPlayersReadyWithVisibility } = require('../../lib/mp-join-ready');
+const { joinBananaPartySequentially } = require('../../lib/banana-mp-party');
+const { BANANA_3P_PLAYERS } = require('../../lib/mp-ctx');
+const { joinReady } = require('../../assertions');
+const { assertJoinedPlayersReadyWithVisibility } = joinReady;
 const lib = require('../../lib/mp-state');
 
 /** Guest join orders after host (indices into player defs). */
@@ -31,7 +33,8 @@ async function runJoinScenario(scenarioCtx) {
         await joinBananaPartySequentially(pages, orderRoom, guestOrder, {
             log,
             mobilePageIndices,
-            assertJoinedPlayersReady: (p, indices, rId, label, opts) =>
+            playerDefs,
+            waitJoinedPlayersReady: (p, indices, rId, label, opts) =>
                 assertJoinedPlayersReadyWithVisibility(p, indices, rId, label, {
                     ...opts,
                     playerDefs,

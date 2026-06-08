@@ -1,34 +1,35 @@
 /**
-
  * Mobile MP post-game review: multi-board view, frozen tiles, Done reset.
-
  */
-
 const { STEP_MS } = require('../../../../shared/infra/timeouts');
 const {
-    centerMpViewerOnPages,
     isMpHeaded,
     syncMpHeadedMobileViewport,
     syncMpHeadedDesktopViewport
 } = require('../../../../shared/platform/mp-headed-view');
-const { ensureWinBannerDwellForAudit } = require('../../assertions/layout-hub');
-
+const { layout, review, distributionSeed, reviewMobile } = require('../../assertions');
+const { ensureWinBannerDwellForAudit, assertWinBannerLayout } = layout.hub;
+const { getGameFrame } = require('../../adapters/mobile-touch');
+const {
+    multiBoardTiles,
+    setupPlayerCrosswords,
+    applyEndingSnapshotsForReview,
+    triggerHostWin
+} = require('../../fixtures/review-mobile-setup');
+const {
+    SYNC_MS,
+    log,
+    dumpBoardEpoch,
+    dumpPostGameDiag,
+    waitPostGameReview,
+    readReviewState,
+    clickDone
+} = require('../../lib/review-mobile-mechanics');
+const { assertTilesFrozenOnMobile, assertPanStillWorks } = reviewMobile;
 function startWinBannerLayoutAsserts(pages) {
-    const { assertWinBannerLayout } = require('../../assertions/layout-hub');
     return Promise.all(pages.map((p, i) => assertWinBannerLayout(p, `P${i + 1}-win-banner`)));
 }
 
-const {
-
-    getGameFrame,
-
-    touchDragTile,
-
-    touchPanBackground
-
-} = require('../../adapters/mobile-touch');
-
-const { PEEL_CROSSWORD_Y0 } = require('../../fixtures/review-state');
 const {
     assertTimerFrozenInReview,
     assertMpReviewShowsAllBoards,
@@ -38,7 +39,6 @@ const {
     assertReviewLayoutOrientation,
     mergeGuestLayoutOnHost,
     pushHostReviewStateToClients,
-    forceRoomSyncToGameIframes,
     waitForHostReviewReady,
     waitMpClientsInReview,
     waitMpClientsPostWinReady,
@@ -48,433 +48,20 @@ const {
     assertMpPlayableAfterReset,
     captureEndingLayoutFromFrame,
     syncGuestLocalLayoutFromFixture,
-    assertDoneButtonVisible
-} = require('../../assertions/mp-review');
-
-
-
-const SYNC_MS = STEP_MS;
-
-
-
-function log(msg) {
-
-    console.log(`[TEST] ${msg}`);
-
-}
-
-/** resetCount (epoch) + board.seq + phase for host and guest iframes. */
-async function dumpBoardEpoch(pages, label) {
-    const states = await Promise.all(pages.map((page, i) => page.evaluate((playerIndex) => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const room = g?.roomData;
-        const S = typeof RtdbSchema !== 'undefined' ? RtdbSchema : null;
-        const board = S?.readBoardFromRoom ? S.readBoardFromRoom(room) : room?.global?.board;
-        const epoch = S?.readResetCount ? S.readResetCount(room) : (room?.global?.resetCount ?? null);
-        return {
-            player: playerIndex + 1,
-            role: g?.playerRole ?? null,
-            resetCount: epoch,
-            mpAppliedResetCount: g?._mpAppliedResetCount ?? null,
-            localBoardSeq: g?._boardSeq ?? null,
-            boardSeq: board?.seq ?? null,
-            phase: board?.phase ?? null,
-            reviewPhase: board?.reviewPhase ?? null,
-            postGameReview: !!g?._postGameReview,
-            tileCount: g?.tiles?.length ?? 0
-        };
-    }, i).catch((err) => ({ player: i + 1, diagError: err.message }))));
-    states.forEach((s) => log(`[DIAG epoch ${label}] P${s.player} ${JSON.stringify(s)}`));
-    return states;
-}
-
-async function dumpPostGameDiag(pages, label) {
-    const states = await Promise.all(pages.map((page, i) => page.evaluate(() => {
-        const frame = document.getElementById('game-frame');
-        const g = frame?.contentWindow?.game;
-        const board = g?.roomData?.global?.board;
-        const btn = frame?.contentDocument?.getElementById('banana-done-btn');
-        const tileEls = frame?.contentDocument ? [...frame.contentDocument.querySelectorAll('.tile')] : [];
-        return {
-            postGameFlag: !!g?._postGameReview,
-            isOver: !!g?.isOver,
-            winnerUid: g?._winnerUid || null,
-            boardSeq: board?.seq ?? null,
-            boardPhase: board?.phase,
-            boardReviewPhase: board?.reviewPhase,
-            boardReviewLayouts: board?.reviewLayouts ? Object.keys(board.reviewLayouts) : [],
-            boardReviewDone: board?.reviewDone || {},
-            localReviewLayouts: g?._reviewLayouts ? Object.keys(g._reviewLayouts) : [],
-            doneVisible: !!btn?.classList.contains('show'),
-            doneDisabled: !!btn?.disabled,
-            tileCount: g?.tiles?.length ?? 0,
-            tileDomCount: tileEls.length
-        };
-    }).catch((err) => ({ diagError: err.message }))));
-    states.forEach((s, i) => {
-        log(`[DIAG ${label}] P${i + 1} ${JSON.stringify(s)}`);
-    });
-}
-
-
-
-/** Six tiles per player — vertical WORD + AT branch (valid crossword shape). */
-function multiBoardTiles(originX, originY, prefix) {
-    const gap = 40;
-    const y0 = PEEL_CROSSWORD_Y0 + originY;
-    return [
-        { id: `${prefix}-w`, letter: 'W', x: originX, y: y0 },
-        { id: `${prefix}-o`, letter: 'O', x: originX, y: y0 + gap },
-        { id: `${prefix}-r`, letter: 'R', x: originX, y: y0 + gap * 2 },
-        { id: `${prefix}-d`, letter: 'D', x: originX, y: y0 + gap * 3 },
-        { id: `${prefix}-a`, letter: 'A', x: originX + gap, y: y0 + gap * 2 },
-        { id: `${prefix}-t`, letter: 'T', x: originX + gap * 2, y: y0 + gap * 2 }
-    ];
-}
-
-
-
-async function applyEndingSnapshotsForReview(frames, players, snapshots) {
-    const hostFrame = frames[0];
-    const layouts = players.map((p) => ({
-        uid: p.uid,
-        tiles: snapshots[p.uid]?.tiles || []
-    }));
-    const setup = await hostFrame.evaluate(({ playerLayouts }) => {
-        const g = window.game;
-        if (!g?.isHost?.()) return { ok: false, reason: 'not-host' };
-        for (const { uid, tiles } of playerLayouts) {
-            if (!tiles.length) return { ok: false, reason: 'empty-snapshot', uid };
-            g._hostSetPlayerTiles(uid, tiles.map((t) => ({
-                id: t.id,
-                letter: t.letter,
-                faceUp: true,
-                x: t.x,
-                y: t.y
-            })), true, { allowTilesToOwned: true });
-        }
-        g._hostSyncBoard?.();
-        return { ok: true };
-    }, { playerLayouts: layouts });
-    if (!setup.ok) throw new Error(`Snapshot board setup failed (${JSON.stringify(setup)})`);
-
-    await Promise.all(frames.map((frame, i) => {
-        const tiles = layouts[i]?.tiles || snapshots[players[i].uid]?.tiles || [];
-        return syncGuestLocalLayoutFromFixture(frame, tiles);
-    }));
-    return layouts;
-}
-
-async function setupPlayerCrosswords(hostFrame, players) {
-
-    return hostFrame.evaluate(({ layouts }) => {
-
-        const g = window.game;
-
-        if (!g?.isHost?.()) return { ok: false, reason: 'not-host' };
-
-        layouts.forEach(({ uid, tiles }) => {
-
-            g._hostSetPlayerTiles(uid, tiles.map((t) => ({
-
-                id: t.id,
-
-                letter: t.letter,
-
-                faceUp: true
-
-            })), true, { allowTilesToOwned: true });
-
-        });
-
-        g._hostSyncBoard();
-
-        return { ok: true };
-
-    }, {
-
-        layouts: players.map((p) => ({
-
-            uid: p.uid,
-
-            tiles: multiBoardTiles(p.originX, p.originY, p.prefix || p.uid.slice(-2))
-
-        }))
-
-    });
-
-}
-
-
-
-async function triggerHostWin(hostFrame) {
-
-    return hostFrame.evaluate(() => {
-
-        const g = window.game;
-
-        const uid = g._myUid();
-
-        const params = new URLSearchParams(window.location.search);
-        if (params.get('room')) g.roomId = params.get('room');
-        g.mode = 'multiplayer';
-        g.isMultiplayer = !!g.roomId && g.roomId !== 'lobby';
-        if (typeof g._reconcileMpMode === 'function') g._reconcileMpMode();
-
-        g._victoryRegistered = false;
-        g._postGameReview = false;
-        g._tilePool = [];
-
-        const uids = g._getPlayerUids();
-
-        uids.forEach((id) => {
-
-            if (g._mpScores[id] == null) g._mpScores[id] = 0;
-
-        });
-
-        g._finishVictory(uid);
-
-        if (!g._winnerUid && uid) {
-            g._winnerUid = uid;
-            g.isOver = true;
-            if (!g._postGameReview && g.isHost?.()) {
-                g._enterPostGameReview(uid);
-            }
-        }
-
-        const board = g.roomData?.global?.board || g.roomData?.state?.board;
-
-        return {
-
-            banner: g._bannerText,
-
-            winner: g._winnerUid,
-
-            boardWinner: board?.winnerUid,
-
-            phase: board?.phase,
-
-            reviewPhase: board?.reviewPhase,
-
-            hostTiles: g.tiles.length,
-
-            mp: g._isMultiplayerMode?.(),
-
-            isHost: g.isHost?.()
-
-        };
-
-    });
-
-}
-
-
-
-async function waitPostGameReview(page, label, { hostOnly = false } = {}) {
-    if (hostOnly) {
-        await page.waitForFunction(() => {
-            const g = document.getElementById('game-frame')?.contentWindow?.game;
-            const board = g?.roomData?.global?.board;
-            const btn = document.getElementById('game-frame')?.contentDocument?.getElementById('banana-done-btn');
-            const inReview = board?.phase === 'review' || board?.reviewPhase === true || !!g?._postGameReview;
-            return inReview && g?.isOver && g?.isHost?.() && btn?.classList.contains('show');
-        }, undefined, { timeout: SYNC_MS }).catch(async (err) => {
-            await dumpPostGameDiag([page], `wait-review-${label}`);
-            throw new Error(`${label} post-game review timeout: ${err.message}`);
-        });
-        return;
-    }
-
-    await page.waitForFunction(() => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const board = g?.roomData?.global?.board;
-        const inReview = board?.phase === 'review' || board?.reviewPhase === true || !!g?._postGameReview;
-        return inReview && g?.isOver;
-    }, undefined, { timeout: SYNC_MS }).catch(async (err) => {
-        await dumpPostGameDiag([page], `wait-review-${label}`);
-        throw new Error(`${label} post-game review timeout: ${err.message}`);
-    });
-}
-
-
-
-async function readReviewState(frame) {
-
-    return frame.evaluate(() => {
-
-        const g = window.game;
-
-        const owners = new Set((g.tiles || []).map((t) => t.ownerUid).filter(Boolean));
-
-        const board = g.roomData?.global?.board;
-
-        const layoutUids = board?.reviewLayouts ? Object.keys(board.reviewLayouts) : [];
-
-        return {
-
-            postGame: board?.phase === 'review' || board?.reviewPhase === true,
-
-            tileCount: g.tiles?.length ?? 0,
-
-            ownerCount: owners.size,
-
-            owners: [...owners],
-
-            layoutUidCount: layoutUids.length,
-
-            reviewLayouts: layoutUids,
-
-            reviewDone: board?.reviewDone || {},
-
-            frozenLayer: !!document.querySelector('.board-pan-layer.is-review-frozen'),
-
-            doneVisible: !!document.getElementById('banana-done-btn')?.classList.contains('show')
-
-        };
-
-    });
-
-}
-
-
-
-async function assertTilesFrozenOnMobile(frame, label) {
-
-    const snap = await frame.evaluate(() => {
-
-        const g = window.game;
-
-        const tile = g.tiles?.[0];
-
-        if (!tile) return { ok: false, reason: 'no-tiles' };
-
-        const idx = [...document.querySelectorAll('.tile')].findIndex(
-
-            (n) => n.dataset.tileId === tile.id
-
-        );
-
-        return { ok: true, idx, x: tile.x, y: tile.y, id: tile.id };
-
-    });
-
-    if (!snap.ok) throw new Error(`${label}: no tiles to test freeze (${JSON.stringify(snap)})`);
-
-    const drag = await touchDragTile(frame, snap.idx, 72, 56);
-
-    const after = await frame.evaluate(({ id }) => {
-
-        const t = window.game.tiles.find((tile) => tile.id === id);
-
-        return t ? { x: t.x, y: t.y } : null;
-
-    }, { id: snap.id });
-
-    const moved = after && Math.hypot(after.x - snap.x, after.y - snap.y) > 10;
-
-    if (moved || drag.moved) {
-
-        throw new Error(`${label}: tiles must not move after game over (${JSON.stringify({ snap, drag, after })})`);
-
-    }
-
-}
-
-
-
-async function assertPanStillWorks(frame, label) {
-
-    const pan = await touchPanBackground(frame);
-
-    if (!pan.ok || pan.dist < 12) {
-
-        throw new Error(`${label}: pan/zoom review should allow background pan (${JSON.stringify(pan)})`);
-
-    }
-
-}
-
-
-
-function boardInReview(board) {
-
-    if (!board) return false;
-
-    if (board.phase === 'review' || board.reviewPhase === true) return true;
-
-    if (board.phase === 'playing' || board.phase === 'idle') return false;
-
-    return board.reviewPhase === true;
-
-}
-
-
-
-async function clickDone(frame) {
-
-    await frame.evaluate(() => {
-
-        const g = window.game;
-
-        if (!g) throw new Error('game not ready in iframe');
-
-        if (typeof g._onDonePressed === 'function') {
-
-            g._onDonePressed();
-
-            return;
-
-        }
-
-        document.getElementById('banana-done-btn')?.click();
-
-    });
-
-}
-
-
-
-async function waitHostSeesGuestsDone(hostFrame, guestUids, label) {
-    await hostFrame.waitForFunction(({ uids }) => {
-        const done = window.game?.roomData?.global?.board?.reviewDone || {};
-        return uids.every((u) => done[u] === true);
-    }, { uids: guestUids }, { timeout: SYNC_MS }).catch((err) => {
-        throw new Error(`${label} host board.reviewDone missing guest: ${err.message}`);
-    });
-}
-
-async function waitReviewExitedOnFrame(frame, label, timeout = SYNC_MS) {
-    return waitMpResetAfterDone(frame, label, timeout);
-}
-
-
-
-/** @deprecated use waitMpResetAfterDone — kept for test exports. */
-async function waitRedealtAfterDone(frames, timeout) {
-    await Promise.all(frames.map((frame, i) =>
-        waitMpResetAfterDone(frame, `P${i + 1}`, timeout)));
-}
-
-
+    assertDoneButtonVisible,
+    prepareGuestReviewViewport
+} = review;
 
 /**
-
  * @param {import('playwright').Page[]} pages
-
  * @param {import('playwright').Frame[]} frames
-
  * @param {{ uid: string, originX: number, originY: number }[]} players
-
  */
-
 async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {}) {
-
-    const { finiteTimeout } = require('../../assertions/mp-distribution-seed');
+    const { finiteTimeout } = distributionSeed;
     const resetMs = finiteTimeout(opts.resetMs ?? STEP_MS, STEP_MS);
 
     const hostFrame = frames[0];
-
     const allUids = players.map((p) => p.uid);
     const reviewSyncMs = opts.reviewSyncMs
         ?? (players.length > 2 ? Math.max(SYNC_MS, 8000) : SYNC_MS);
@@ -509,9 +96,7 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
         log('SUCCESS: Each player has live board tiles before victory trigger.');
     } else {
         log('MP post-game: place crosswords for each player...');
-
         const setup = await setupPlayerCrosswords(hostFrame, players);
-
         if (!setup.ok) throw new Error(`Crossword setup failed (${JSON.stringify(setup)})`);
 
         await Promise.all(players.map((p, i) => pages[i].waitForFunction(({ min }) => {
@@ -675,8 +260,6 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
         g._processBananaInteractions?.(g.roomData?.interactions?.banana);
     }).catch(() => {});
 
-    // After natural win the game already synced review layouts; post-win snapshots can
-    // include merged review tiles (e.g. guest sees all 100) and would overwrite good data.
     if (players.length >= 2 && !naturalWin) {
         await hostFrame.evaluate(({ snaps }) => {
             const g = window.game;
@@ -694,7 +277,6 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
     await pushHostReviewStateToClients(hostFrame, pages);
     await mergeGuestLayoutOnHost(hostFrame, pages);
     if (players.length > 2) {
-        const { prepareGuestReviewViewport } = require('../../assertions/mp-review');
         for (let i = 1; i < pages.length; i++) {
             await prepareGuestReviewViewport(pages[i], `P${i + 1}`);
         }
@@ -721,8 +303,6 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
     } else {
         log('SUCCESS: Skipping 2p touch-free visibility check (3+ players use merged-board waits).');
     }
-
-
 
     await waitPostGameReview(pages[0], 'host', { hostOnly: true });
     await Promise.all(pages.slice(1).map((page, i) => waitPostGameReview(page, `P${i + 2}`)));
@@ -823,10 +403,7 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
         log('SUCCESS: Tiles cannot move; background pan still works.');
     }
 
-
-
     log('MP post-game: host taps Done...');
-
     await clickDone(hostFrame);
     const dealTimeout = finiteTimeout(resetMs, STEP_MS);
 
@@ -863,61 +440,32 @@ async function runBananagramsMpMobilePostGame(pages, frames, players, opts = {})
         ));
         log('SUCCESS: Players can play after post-game Done.');
     }
-
 }
 
-
-
 async function runBananagramsMpMobilePostGame2p(page1, page2, opts = {}) {
-
     const HOST_UID = opts.hostUid || 'u_banana_host';
-
     const GUEST_UID = opts.guestUid || 'u_banana_guest';
-
     const frame1 = opts.frame1 || await getGameFrame(page1);
-
     const frame2 = opts.frame2 || await getGameFrame(page2);
-
     const ox = await frame1.evaluate(() => window.game.ORIGIN);
 
     await runBananagramsMpMobilePostGame(
-
         [page1, page2],
-
         [frame1, frame2],
-
         [
-
             { uid: HOST_UID, prefix: 'h', originX: ox, originY: 0 },
-
             { uid: GUEST_UID, prefix: 'g', originX: ox + 320, originY: 0 }
-
         ],
-
         opts
-
     );
-
 }
 
-
-
+const setup = require('../../fixtures/review-mobile-setup');
+const mechanics = require('../../lib/review-mobile-mechanics');
 module.exports = {
-
     runBananagramsMpMobilePostGame,
-
     runBananagramsMpMobilePostGame2p,
-
-    assertTilesFrozenOnMobile,
-
-    waitPostGameReview,
-
-    dumpBoardEpoch,
-
-    waitReviewExitedOnFrame,
-
-    clickDone
-
+    ...setup,
+    ...mechanics,
+    ...reviewMobile
 };
-
-

@@ -56,7 +56,7 @@
     "mp:banana:3p:desktop": "node ptests/run.js mp --game=bananagrams --players=3 --topology=desktop",
     "mp:banana:3p:mobile": "node ptests/run.js mp --game=bananagrams --players=3 --topology=mobile",
     "mp:banana:3p:mobile:actions": "node ptests/run.js mp --game=bananagrams --players=3 --topology=mobile --scenario=actions",
-    "mp:banana:3p:audit": "node ptests/games/bananagrams/runners/mp-3p.js --audit-only",
+    "mp:banana:3p:audit": "node ptests/run.js mp --game=bananagrams --players=3",
     "mp:banana:focus": "node ptests/run.js mp --game=bananagrams --scenario=focus",
     "sp:mobile": "node ptests/run.js sp --topology=mobile",
     "mp:mobile": "node ptests/run.js mp --topology=mobile",

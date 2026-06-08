@@ -9,42 +9,19 @@
  */
 const { defineMpScenario } = require('./contract');
 const lib = require('../../lib/mp-state');
-const { bootMpPlaySessionN } = require('../../lib/mp-session-boot');
-const { bootMpPlaySession } = require('../../runners/mp-audit/mp-play-boot');
-const { assertJoinedPlayersReadyWithVisibility } = require('../../lib/mp-join-ready');
-const { joinBananaPartySequentially } = require('../../../../shared/infra/scenarios/mp-3p-banana-party');
+const { bootMpPlaySessionN, bootMpPlaySessionFromPages } = require('../../lib/mp-session-boot');
+const { seedBananaParty } = require('./seed-party');
 const {
     setupHostPeelGrid,
     prepareGuestPeelGridOnClient,
-    setGuestPeelFixtureOnHost,
-    readPeelSeq
+    setGuestPeelFixtureOnHost
 } = require('../../fixtures/peel-grid');
 const { peelGridInFrame } = require('../../fixtures/review-state');
+const { sync, core, deal } = require('../../assertions');
+const { readBoardField } = core;
+const { failWithSnapshot } = core;
 
 const { log, WAIT_MS, waitForDiag, flushHostBananaInteractions, getGameFrame } = lib;
-
-async function seedParty(scenarioCtx) {
-    const { ctx, roomId, mobile, options = {} } = scenarioCtx;
-    if (scenarioCtx.skipSeed) return;
-
-    if (ctx.playerCount === 2) {
-        await lib.joinBananaPartyViaInvite(ctx.pages[0], ctx.pages[1], roomId);
-        return;
-    }
-
-    const mobilePageIndices = mobile ? ctx.pages.map((_, i) => i) : (options.mobilePageIndices || []);
-    const guestOrder = options.guestJoinOrder || [1, 2];
-    await joinBananaPartySequentially(ctx.pages, roomId, guestOrder, {
-        log,
-        mobilePageIndices,
-        assertJoinedPlayersReady: (pages, indices, rId, label, opts) =>
-            assertJoinedPlayersReadyWithVisibility(pages, indices, rId, label, {
-                ...opts,
-                playerDefs: ctx.players,
-                mobilePageIndices
-            })
-    });
-}
 
 /**
  * @param {import('./contract').MpScenarioContext} scenarioCtx
@@ -55,7 +32,7 @@ async function attemptPeel(scenarioCtx, actorIndex, opts = {}) {
     const player = ctx.players[actorIndex];
     const hostPage = ctx.host.page;
     const frame = await getGameFrame(player.page);
-    const peelSeqBefore = await readPeelSeq(hostPage);
+    const peelSeqBefore = await readBoardField(hostPage, 'peelSeq');
     const poolBefore = await hostPage.evaluate(() => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         return g?._tilePool?.length ?? -1;
@@ -183,7 +160,7 @@ async function attemptPeelAfterGuestSend(scenarioCtx, actorIndex, peelRes) {
     const { ctx } = scenarioCtx;
     const player = ctx.players[actorIndex];
     const hostPage = ctx.host.page;
-    const peelSeqBefore = await readPeelSeq(hostPage);
+    const peelSeqBefore = await readBoardField(hostPage, 'peelSeq');
     const poolBefore = await hostPage.evaluate(() => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         return g?._tilePool?.length ?? -1;
@@ -336,10 +313,10 @@ async function runPeelRegisterRepro(scenarioCtx) {
     const { ctx, mobile } = scenarioCtx;
     const n = ctx.playerCount;
 
-    await seedParty(scenarioCtx);
+    await seedBananaParty(scenarioCtx, { dealLabel: 'peel-register host deal after invite' });
 
     if (n === 2) {
-        await bootMpPlaySession(ctx.pages[0], ctx.pages[1], { mobile });
+        await bootMpPlaySessionFromPages(ctx.pages[0], ctx.pages[1], { mobile });
     } else {
         await bootMpPlaySessionN(ctx, { mobile });
     }
@@ -355,7 +332,7 @@ async function runPeelRegisterRepro(scenarioCtx) {
         const actorFrame = await getGameFrame(player.page);
         const peelRes = await attemptGuestManualPeel(actorFrame);
         if (!peelRes.ok) {
-            throw new Error(`${player.role} local peel grid invalid (${JSON.stringify(peelRes)})`);
+            failWithSnapshot('peel-register-repro', [`${player.role} local peel grid invalid`], { peelRes });
         }
         const manual = await attemptPeelAfterGuestSend(scenarioCtx, guestIndex, peelRes);
         results.push({ mode: 'manual-guest-fresh', ...manual });
@@ -367,13 +344,10 @@ async function runPeelRegisterRepro(scenarioCtx) {
             + `pool ${manual.poolBefore}→${manual.poolAfter}`
         );
         if (!manual.peelRes.peeled) {
-            throw new Error(`${player.role} _checkPeel returned false locally\n${JSON.stringify(manual, null, 2)}`);
+            failWithSnapshot('peel-register-repro', [`${player.role} _checkPeel returned false locally`], { manual });
         }
         if (!manual.hostRegistered) {
-            throw new Error(
-                `${player.role} peel NOT registered on host (guest sent peel, peelSeq unchanged)\n`
-                + JSON.stringify(manual, null, 2)
-            );
+            failWithSnapshot('peel-register-repro', [`${player.role} peel NOT registered on host`], { manual });
         }
     }
 
@@ -384,9 +358,7 @@ async function runPeelRegisterRepro(scenarioCtx) {
         const synced = await attemptPeel(scenarioCtx, i, { syncGuestToHost: true });
         results.push({ mode: 'synced', ...synced });
         if (!synced.hostRegistered) {
-            throw new Error(
-                `${player.role} peel NOT registered (synced path)\n${JSON.stringify(synced, null, 2)}`
-            );
+            failWithSnapshot('peel-register-repro', [`${player.role} peel NOT registered (synced path)`], { synced });
         }
         log(`SUCCESS: ${player.role} peel registered (synced), pool ${synced.poolBefore}→${synced.poolAfter}`);
     }
@@ -404,5 +376,5 @@ module.exports = defineMpScenario({
     joinMode: 'invite',
     requiresFreshRoom: true,
     mutatesAuthority: true,
-    assertions: ['peel-grid', 'mp-sync-board']
+    assertions: ['sync', 'accounting', 'core', 'peel-grid']
 }, runPeelRegisterRepro);

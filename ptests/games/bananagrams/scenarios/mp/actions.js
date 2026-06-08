@@ -3,20 +3,45 @@
  */
 const { defineMpScenario } = require('./contract');
 const { STEP_MS } = require('../../../../shared/infra/timeouts');
-const {
-    runBananagramsMpActionsAudit,
-    withActionsTimeout
-} = require('../../runners/mp-audit/actions-audit');
+const { applySpeedProfile } = require('../../../../shared/infra/speed-profiles');
+const { getWinSide, getActiveRunConfig, isPaused } = require('../../../../shared/infra/run-config');
+const { parseWinSideArgv } = require('../registry');
+const { resolveSessionRounds } = require('../../lib/mp-session-config');
+const { withActionsTimeout } = require('../../runners/mp-audit/actions-audit');
+const { bootMpPlaySessionThroughDeal, bootMpPlaySessionSplit } = require('../../lib/mp-session-boot');
+const { audit } = require('../../assertions');
+const { runMpAiActionsOnlyFromCtx } = require('./ai-playthrough');
+const { seedBananaParty } = require('./seed-party');
 
-async function runActionsScenario(ctx) {
-    const { page1, page2, roomId, options = {} } = ctx;
-    if (!ctx.skipSeed) {
-        await require('../../lib/mp-state').joinBananaPartyViaInvite(page1, page2, roomId);
+async function runActionsScenario(scenarioCtx) {
+    const { ctx, mobile, options = {}, skipSeed } = scenarioCtx;
+
+    if (!skipSeed) {
+        await seedBananaParty(scenarioCtx, { dealLabel: 'actions host deal after invite' });
     }
-    page1.setDefaultTimeout(STEP_MS);
-    page2.setDefaultTimeout(STEP_MS);
+
+    await Promise.all(ctx.pages.map((p) => p.setDefaultTimeout(STEP_MS)));
+    applySpeedProfile('ci', { scenario: 'actions' });
+
+    const cfg = getActiveRunConfig();
+    const playOpts = {
+        ...options,
+        skipSeed: true,
+        mobile,
+        rounds: resolveSessionRounds({ ...options, rounds: options.rounds ?? cfg.rounds }),
+        winSide: options.winSide ?? getWinSide() ?? parseWinSideArgv() ?? null,
+        pause: options.pause ?? isPaused()
+    };
+
+    if (ctx.playerCount >= 3) {
+        let { frames } = await bootMpPlaySessionThroughDeal(ctx, { mobile });
+        await audit.assertPreSplitDealAudit(ctx, frames);
+    await bootMpPlaySessionSplit(ctx, frames, { mobile });
+    ctx.frames = frames;
+    }
+
     return withActionsTimeout(
-        runBananagramsMpActionsAudit(page1, page2, { ...options, skipSeed: true }),
+        runMpAiActionsOnlyFromCtx(ctx, playOpts),
         'MP Actions'
     );
 }

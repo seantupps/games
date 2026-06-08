@@ -10,6 +10,15 @@ const BANANA_2P_PLAYERS = [
     { uid: 'u_banana_guest', name: 'BananaGuest', color: '#ef4444', role: 'P2' }
 ];
 
+const BANANA_3P_PLAYERS = [
+    { uid: 'u_banana_p1', name: 'BananaP1', color: '#3b82f6', role: 'P1' },
+    { uid: 'u_banana_p2', name: 'BananaP2', color: '#ef4444', role: 'P2' },
+    { uid: 'u_banana_p3', name: 'BananaP3', color: '#22c55e', role: 'P3' }
+];
+
+const BANANA_HOST = BANANA_3P_PLAYERS[0];
+const BANANA_MP_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7', '#ec4899'];
+
 const HOST_UID = BANANA_2P_PLAYERS[0].uid;
 const GUEST_UID = BANANA_2P_PLAYERS[1].uid;
 
@@ -20,7 +29,27 @@ const BAG_BY_PLAYER_COUNT = {
     4: 144
 };
 
+const BUNCH = BAG_BY_PLAYER_COUNT[2];
 const STARTING_HAND = 21;
+/** Expected bunch after 2p deal (100 tiles − 2×21 hands). */
+const EXPECTED_MP_2P_POOL = BUNCH - 2 * STARTING_HAND;
+
+/**
+ * @param {number} playerCount
+ */
+function bananaPlayerDefs(playerCount) {
+    if (playerCount === 2) return BANANA_2P_PLAYERS;
+    if (playerCount === 3) return BANANA_3P_PLAYERS;
+    if (playerCount >= 4 && playerCount <= BANANA_MP_COLORS.length) {
+        return Array.from({ length: playerCount }, (_, i) => ({
+            uid: `u_banana_p${i + 1}`,
+            name: `BananaP${i + 1}`,
+            color: BANANA_MP_COLORS[i],
+            role: `P${i + 1}`
+        }));
+    }
+    throw new Error(`bananaPlayerDefs: ${playerCount}p not wired`);
+}
 
 /**
  * @param {number} playerCount
@@ -56,8 +85,6 @@ function buildMpCtx(defs, pages, opts = {}) {
     }));
     const host = players[0];
     const remotes = players.slice(1);
-    /** @deprecated use remotes */
-    const guests = remotes;
 
     return {
         topology,
@@ -65,7 +92,6 @@ function buildMpCtx(defs, pages, opts = {}) {
         host,
         players,
         remotes,
-        guests,
         pages,
         frames: opts.frames || [],
         roomId: opts.roomId || null,
@@ -88,17 +114,11 @@ function buildMpCtx2p(page1, page2, opts = {}) {
  * @param {object} [opts]
  */
 function buildMpCtxFromPages(pages, defs, opts = {}) {
-    const { BANANA_3P_PLAYERS } = require('../../../shared/infra/scenarios/mp-3p-banana-party');
     const playerDefs = defs || (pages.length === 3 ? BANANA_3P_PLAYERS : BANANA_2P_PLAYERS.slice(0, pages.length));
     if (playerDefs.length !== pages.length) {
         throw new Error(`buildMpCtxFromPages: ${playerDefs.length} defs for ${pages.length} pages`);
     }
     return buildMpCtx(playerDefs, pages, opts);
-}
-
-/** @param {import('../scenarios/mp/contract').MpCtx} ctx */
-function mpCtxFromLegacy(page1, page2, opts = {}) {
-    return buildMpCtx2p(page1, page2, opts);
 }
 
 /** @param {import('../scenarios/mp/contract').MpCtx} ctx @returns {string[]} */
@@ -108,14 +128,19 @@ function playerUids(ctx) {
 
 module.exports = {
     BANANA_2P_PLAYERS,
+    BANANA_3P_PLAYERS,
+    BANANA_HOST,
+    BANANA_MP_COLORS,
+    bananaPlayerDefs,
     HOST_UID,
     GUEST_UID,
+    BUNCH,
     BAG_BY_PLAYER_COUNT,
     STARTING_HAND,
+    EXPECTED_MP_2P_POOL,
     bagForPlayerCount,
     buildMpCtx,
     buildMpCtx2p,
     buildMpCtxFromPages,
-    mpCtxFromLegacy,
     playerUids
 };
