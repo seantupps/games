@@ -14,6 +14,7 @@ const {
 } = require('../../../assertions/mp/review-actions');
 const { readMpBoardSyncState } = require('../../../assertions/mp/victory');
 const { preloadAiDictionary } = require('../../../lib/ai-dictionary');
+const { readMpDebugWaitDiag } = require('../../../lib/mp-debug-bridge');
 const {
     WAIT_MS,
     RESET_WAIT_MS,
@@ -36,6 +37,7 @@ const { buildAppUrl } = require('../../../../../shared/infra/emulator-utils');
 const {
     applySpeedProfile,
     mpAiRoundTripCapEnabled,
+    mpReviewWaitMs,
     resolveMpAiMaxRoundTrips
 } = require('../../../../../shared/infra/speed-profiles');
 const { shouldCloseBrowser } = require('../../../../../shared/infra/env-defaults');
@@ -726,8 +728,10 @@ async function finishActionsWin3p(ctx) {
     const hostFrame = frames[0];
     const mp = { page1: hostPage, page2: pages[1] };
     const preWinByUid = await capturePreReviewBoardsByPlayer(frames);
+    const reviewSyncMs = Math.max(mpReviewWaitMs(), WAIT_MS);
     await pushHostReviewStateToClients(hostFrame, pages);
-    await mergeGuestLayoutOnHost(hostFrame, pages);
+    await mergeGuestLayoutOnHost(hostFrame, pages, Math.max(6, pages.length * 2));
+    process.env.FIVE_MP_REVIEW_SYNC_MS = String(reviewSyncMs);
     await assertActionsReviewLayouts(hostFrame, hostPage, mp, winLabel);
     await assertReviewPreservesPreWinBoards(frames, preWinByUid, `${winLabel} review-boards`);
 
@@ -913,6 +917,11 @@ async function resetMpForAiPlaythroughN(opts) {
     const hostFrame = frames[0];
 
     log('Reset to fresh split hands (3p solver playthrough)...');
+    await Promise.all(pages.map((page) => page.evaluate(() => {
+        try {
+            localStorage.setItem('five_banana_trace_done', '1');
+        } catch (_) { /* ignore */ }
+    })));
     const expectedHand = await hostFrame.evaluate((n) => (
         typeof BananaRules !== 'undefined' ? BananaRules.startingHandSize(n) : 21
     ), playerCount);
@@ -925,24 +934,108 @@ async function resetMpForAiPlaythroughN(opts) {
         g._syncBannerEl?.();
     })));
 
-    await hostFrame.evaluate(() => {
+    const resetDiag = await hostFrame.evaluate(() => {
         const g = window.game;
         if (!g?.isHost?.()) throw new Error('resetMpForAiPlaythroughN requires host frame');
         g._bananaHandled = {};
         g._bananaAck = {};
+        if (g.roomData?.interactions) g.roomData.interactions.banana = null;
         const db = window.NetworkEngine?.db;
         const rId = g.roomId;
         if (db && rId) {
             db.ref(`games/${rId}/interactions/banana`).set(null);
         }
+        const resetCount = g.roomData?.global?.resetCount ?? g.lastResetCount ?? null;
         g.onGameReset();
+        const uids = g._getPlayerUids();
+        const handSize = g._handSizeForParty?.() ?? 21;
+        const uid = g._myUid();
+        const owned = g._mpOwned?.[uid] || [];
+        if (!uids || uids.length < 2) {
+            throw new Error(`reset: party too small (${JSON.stringify(uids)})`);
+        }
+        if (owned.length < handSize) {
+            throw new Error(`reset: host not dealt (${owned.length}/${handSize})`);
+        }
         g._hostBeginSplit();
+        if ((g.tiles?.length || 0) < owned.length) {
+            g.tiles = g._mergeInventoryWithLayout(
+                owned,
+                g._mpPlayerLayouts?.[uid] || {},
+                null
+            );
+            g._localInventorySeq = g._mpInventorySeq?.[uid] || 1;
+        }
         g._persistMpLayout?.();
+        g._mpAppliedResetCount = g.lastResetCount
+            ?? g.roomData?.global?.resetCount
+            ?? g._mpAppliedResetCount
+            ?? 0;
+        g._mpEpochSyncedFromRoom = true;
+        g._mpAwaitReset = false;
+        g._hostSyncBoard?.({ immediate: true });
+        g._mpAssertDealEpochMembership?.('ai-reset');
+        return {
+            uids: uids.length,
+            handSize,
+            owned: owned.length,
+            tiles: g.tiles?.length ?? 0,
+            gameStarted: !!g.gameStarted,
+            resetCount
+        };
     });
+    log(`[AI] Reset host diag: ${JSON.stringify(resetDiag)}`);
+    const resetDbgSnaps = await Promise.all(frames.map((f, i) => readMpDebugWaitDiag(f).then((dbg) => ({
+        role: `P${i + 1}`,
+        dbg
+    }))));
+    if (process.env.FIVE_MP_ACTIONS_DEBUG === '1' || process.env.FIVE_LOG_VERBOSE === '1') {
+        resetDbgSnaps.forEach(({ role, dbg }) => {
+            log(`[AI] Reset debug ${role}: ${JSON.stringify(dbg)}`);
+        });
+    }
+    await Promise.all(frames.map((f) => f.evaluate(() => {
+        const g = window.game;
+        if (!g) return;
+        g._lastDumpSeq = 0;
+        g._lastPeelSeq = 0;
+        g._bannerText = '';
+        g._bannerUntil = 0;
+    })));
     await flushHostBananaInteractions(hostPage);
 
-    for (let i = 0; i < pages.length; i++) {
+    await waitForDiag(hostPage, 'AI reset host started', ({ minHand }) => {
+        const g = document.getElementById('game-frame')?.contentWindow?.game;
+        return !!g?.gameStarted && (g.tiles?.length ?? 0) >= minHand;
+    }, { minHand: expectedHand }, RESET_WAIT_MS);
+
+    const epochTarget = resetDiag.resetCount ?? 2;
+    for (let i = 1; i < pages.length; i++) {
         const role = BANANA_3P_PLAYERS[i].role;
+        await waitForDiag(pages[i], `AI reset ${role} epoch`, ({ rc }) => {
+            const g = document.getElementById('game-frame')?.contentWindow?.game;
+            const room = g?.roomData;
+            const epoch = (typeof RtdbSchema !== 'undefined' && room)
+                ? RtdbSchema.readResetCount(room)
+                : (room?.global?.resetCount ?? 0);
+            return epoch >= rc;
+        }, { rc: epochTarget }, RESET_WAIT_MS);
+        await frames[i].evaluate(() => {
+            const g = window.game;
+            if (!g || g.isHost?.()) return;
+            g._clearLocalLayout?.();
+            g._lastPeelSeq = 0;
+            g._localInventorySeq = 0;
+            g._mpAwaitReset = false;
+            g._mpAppliedResetCount = g.lastResetCount ?? g.roomData?.global?.resetCount ?? 0;
+            const board = (typeof RtdbSchema !== 'undefined' && g.roomData)
+                ? RtdbSchema.readBoardFromRoom(g.roomData)
+                : g.roomData?.global?.board;
+            if (board) {
+                g._applyMultiplayerBoard(board, { force: true, reset: true });
+            }
+            g.requestRender?.();
+        });
         await waitForDiag(pages[i], `AI reset ${role} started`, ({ minHand }) => {
             const g = document.getElementById('game-frame')?.contentWindow?.game;
             return !!g?.gameStarted && (g.tiles?.length ?? 0) >= minHand;

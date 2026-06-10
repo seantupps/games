@@ -25,22 +25,27 @@ async function setGuestPeelFixtureOnHost(opts) {
         waitLabel = `guest peel fixture ${suffix}`
     } = opts;
 
-    await frame1.evaluate(({ uid, s, src }) => {
+    const setup = await frame1.evaluate(({ uid, src }) => {
         const g = window.game;
         const gap = window.BananaRules.TILE_GAP;
         const y0 = 2200;
-        const x0 = 2400;
+        const x0 = g.ORIGIN;
         const letters = ['C', 'A', 'T', 'T'];
-        const tiles = letters.map((letter, idx) => ({
-            id: `gfix-${s}-${idx}`,
-            letter,
+        const owned = [...(g._mpOwned?.[uid] || [])];
+        if (owned.length < 4) {
+            return { ok: false, reason: 'short-owned', owned: owned.length };
+        }
+        const ids = owned.slice(0, 4).map((t) => t.id);
+        g._mpEnsureCanonicalMap?.();
+        if (!g._mpCanonicalById) g._mpCanonicalById = {};
+        ids.forEach((id, idx) => { g._mpCanonicalById[id] = letters[idx]; });
+        const tiles = ids.map((id, idx) => ({
+            id,
+            letter: letters[idx],
             x: idx === 3 ? x0 + gap : x0,
             y: idx === 3 ? y0 + gap : y0 + idx * gap,
             faceUp: true
         }));
-        g._mpEnsureCanonicalMap?.();
-        if (!g._mpCanonicalById) g._mpCanonicalById = {};
-        tiles.forEach((t) => { g._mpCanonicalById[t.id] = t.letter; });
         if (typeof g._hostSetPlayerTiles === 'function') {
             g._hostSetPlayerTiles(uid, tiles, true, {
                 allowTilesToOwned: true,
@@ -52,7 +57,12 @@ async function setGuestPeelFixtureOnHost(opts) {
             })), true);
         }
         g._hostSyncBoard({ immediate: true });
-    }, { uid: guestUid, s: suffix, src: source });
+        return { ok: true, ids };
+    }, { uid: guestUid, src: source });
+
+    if (setup?.ok === false) {
+        throw new Error(`setGuestPeelFixtureOnHost failed (${JSON.stringify(setup)})`);
+    }
 
     await waitForDiag(page2, waitLabel, () => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
@@ -82,7 +92,8 @@ async function setupHostPeelGrid(frame1) {
     return setup;
 }
 
-module.exports = {    setGuestPeelFixtureOnHost,
+module.exports = {
+    setGuestPeelFixtureOnHost,
     prepareGuestPeelGridOnClient,
     setupHostPeelGrid
 };

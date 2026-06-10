@@ -193,7 +193,10 @@
                 const surface = container.querySelector('.board-pan-layer');
                 if (!surface) return;
         
-                const existing = new Set(this.tiles.map((t) => t.id));
+                const renderTiles = this.tiles || [];
+                const pendingDump = this._mpGuestDumpUiPending?.();
+                const pendingDumpId = pendingDump?.tileId ?? null;
+                const existing = new Set(renderTiles.map((t) => t.id));
                 surface.querySelectorAll('.tile').forEach((node) => {
                     if (!existing.has(node.dataset.tileId)) node.remove();
                 });
@@ -201,11 +204,24 @@
                 const inset = BananagramsGame.TILE_HIT_INSET;
                 const hitSize = 40 + inset * 2;
 
-                const tilesToRender = this._mpHydrateTiles?.(this.tiles) || this.tiles;
-                this.tiles = tilesToRender;
+                if (this._mpInventoryProjectionFailed) {
+                    console.error('[Bananagrams][render] degraded — inventory projection lagging',
+                        this._snapshotInventoryProjection?.(
+                            this._mpBoardFromRoom?.(this.roomData),
+                            this._myUid?.(),
+                            'render-degraded'
+                        ));
+                }
+
+                const board = this._mpBoardFromRoom?.(this.roomData);
+                const spawnBlocked = this._isMultiplayerMode?.() && !this.isHost?.() && board
+                    && this._mpRequireCoherent?.(board, 'spawn-render', { log: false })?.ok === false;
+
+                const tilesToRender = this._mpHydrateTiles?.(renderTiles) || renderTiles;
 
                 tilesToRender.forEach((tile) => {
                     let el = surface.querySelector(`[data-tile-id="${tile.id}"]`);
+                    if (!el && spawnBlocked) return;
                     if (!el) {
                         el = document.createElement('div');
                         el.className = 'tile';
@@ -254,6 +270,11 @@
                     }
                     const on = this._selectionHighlight && this._selectedIds.has(tile.id);
                     el.classList.toggle('is-selected', on);
+                    const dumpPending = pendingDumpId === tile.id;
+                    el.classList.toggle('is-dump-pending', dumpPending);
+                    if (!this._inReviewExperience?.()) {
+                        el.style.pointerEvents = dumpPending ? 'none' : '';
+                    }
                 });
         
                 this._initSelection(surface);

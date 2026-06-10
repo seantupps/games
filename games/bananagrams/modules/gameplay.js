@@ -61,20 +61,26 @@
                 return this._tilePool?.length ?? 0;
             },
 
+            _isBunchEmpty() {
+                return this._bunchLenForDump() === 0;
+            },
+
             _canDumpFromBunch() {
                 const min = typeof BananaRules !== 'undefined' ? BananaRules.DUMP_DRAW_COUNT : 3;
                 return this._bunchLenForDump() >= min;
             },
 
             _applyDumpToTiles(tiles, tileId) {
+                if (this._isMultiplayerMode?.()) {
+                    console.error('[Bananagrams] _applyDumpToTiles must not run in MP — use _requestDump');
+                    return { ok: false, reason: 'mp-forbidden' };
+                }
                 if (!this._canDumpFromBunch()) return { ok: false, reason: 'short-pool' };
                 const idx = tiles.findIndex((t) => t.id === tileId);
                 if (idx < 0) return { ok: false, reason: 'tile-not-found' };
         
                 const removed = tiles[idx];
-                const removedLetter = this._isMultiplayerMode?.()
-                    ? this._mpCanonicalLetter(removed.id, removed.letter, 'guest-dump')
-                    : removed.letter;
+                const removedLetter = removed.letter;
                 // Compute dump once on a pool copy, then commit that snapshot.
                 // This avoids RNG divergence between preview and commit.
                 const nextPool = [...this._tilePool];
@@ -90,43 +96,34 @@
                 this._tilePool = nextPool;
                 tiles.splice(idx, 1);
                 const added = this._materializeDrawnTiles(spots, true);
-                if (this._isMultiplayerMode?.()) {
-                    added.forEach((t) => {
-                        this._mpCanonicalRegister?.(t.id, t.letter, 'guest-dump-draw');
-                    });
-                }
                 added.forEach((t) => tiles.push(t));
                 return { ok: true, added, removedId: removed.id };
             },
 
             _handleDump(tile) {
-                if (!this.canMutatePlayingBoard?.()) return false;
+                if (!this._canMutatePlayingHand?.()) return false;
                 if (!tile || !this._canDumpFromBunch()) return false;
+                const now = Date.now();
+                if (now - (this._lastDumpHandledAt || 0) < 400) return false;
+                if (this._dumpHandleBusy) return false;
+                if (this._isMultiplayerMode?.() && !this.isHost?.() && this._mpGuestDumpUiPending?.()) {
+                    return false;
+                }
+                this._dumpHandleBusy = true;
+                let ok = false;
+                try {
+                    ok = this._handleDumpInner(tile);
+                    if (ok) this._lastDumpHandledAt = now;
+                } finally {
+                    this._dumpHandleBusy = false;
+                }
+                return ok;
+            },
+
+            _handleDumpInner(tile) {
+                this._clearLocalDragDebounce?.();
                 if (this._isMultiplayerMode()) {
-                    const me = this._myUid();
-                    if (this.isHost()) {
-                        const ok = this._hostApplyDump(me, tile.id);
-                        if (ok) this._showBanner('Dump!', 2200, { actorUid: me });
-                        return ok;
-                    }
-                    (this.tiles || []).forEach((t) => {
-                        this.traceTileLetter?.({
-                            ctx: 'guest-dump-snapshot',
-                            playerId: me,
-                            tileId: t.id,
-                            observedLetter: t.letter,
-                            canonicalLetter: this._mpCanonicalById?.[t.id],
-                            source: 'dump-snapshot',
-                            round: this._mpTraceRound?.()
-                        });
-                    });
-                    this._sendBananaInteraction({
-                        type: 'dump',
-                        tileId: tile.id
-                    });
-                    // Optimistic local feedback; host board sync reinforces banner + inventory.
-                    this._showBanner('Dump!', 2200, { actorUid: me });
-                    return true;
+                    return this._requestDump(tile);
                 }
                 const result = this._applyDumpToTiles(this.tiles, tile.id);
                 if (!result.ok) return false;
@@ -209,14 +206,11 @@
                 return (result.words || []).some((w) => String(w || '').length >= 3);
             },
 
-            /** True when local and/or synced MP bunch is empty (win, not peel). */
+            /** True when authoritative MP bunch is empty (win, not peel). */
             _mpBunchEmptyForWin() {
-                const local = this._tilePool?.length ?? 0;
-                if (!local) return true;
-                if (!this._isMultiplayerMode?.()) return false;
                 const auth = typeof this._mpAuthoritativeBunchLen === 'function'
                     ? this._mpAuthoritativeBunchLen()
-                    : local;
+                    : (this._tilePool?.length ?? 0);
                 return auth === 0;
             },
 
@@ -312,7 +306,7 @@
                     && BananaGrid.eachTileOccupiesUniqueCell(tiles);
                 let summary;
                 if (crosswordOk) {
-                    if (!this._tilePool?.length) {
+                    if (this._isBunchEmpty()) {
                         summary = 'Solved — valid crossword and bunch is empty (win ready).';
                     } else {
                         summary = 'Solved — valid crossword (peel ready).';
@@ -328,10 +322,16 @@
             },
 
             _checkPeel() {
-                if (!this.canMutatePlayingBoard?.()) return false;
+                if (!this._canMutatePlayingHand?.()) return false;
                 if (this._isHandDragActive()) return false;
                 if (!this._checker || !BananaGrid) return false;
                 if ((this.tiles?.length || 0) < 3) return false;
+
+                const origin = { x: this.ORIGIN, y: this.ORIGIN };
+                const layoutOpts = this._rackLayoutOptions();
+                if (BananaGrid.isStartingRack(this.tiles, origin, layoutOpts)) {
+                    return false;
+                }
 
                 const snappedHand = this._snapHandForValidation(this.tiles);
                 if (!this._allTilesPlacedOn(snappedHand)) return false;
@@ -346,8 +346,10 @@
                     const partySize = (typeof this._peelPartyUids === 'function'
                         ? this._peelPartyUids(me)
                         : this._getPlayerUids()).filter(Boolean).length || 2;
-                    const localPoolLen = this._tilePool?.length ?? 0;
-                    const bunchEmpty = this._mpBunchEmptyForWin();
+                    const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
+                        ? this._mpAuthoritativeBunchLen()
+                        : (this._tilePool?.length ?? 0);
+                    const bunchEmpty = bunchLen === 0 || this._mpBunchEmptyForWin();
                     const winReady = bunchEmpty && this._mpWinGridReady(snappedHand);
 
                     if (winReady) {
@@ -370,24 +372,10 @@
                     }
 
                     // Empty bunch means win or nothing — never peel (avoids bogus optimistic peel tile).
-                    if (localPoolLen === 0 || bunchEmpty) return false;
-
-                    const bunchLen = typeof this._mpAuthoritativeBunchLen === 'function'
-                        ? this._mpAuthoritativeBunchLen()
-                        : localPoolLen;
+                    if (bunchEmpty) return false;
                     if (bunchLen < partySize) return false;
 
-                    if (this.isHost()) {
-                        const ok = this._hostPeelForPlayer(me);
-                        if (ok && !this._winnerUid) this._showBanner('Peel!', 2200, { actorUid: me });
-                        return ok;
-                    }
-                    const positionsSnapshot = this._serializePositions(snappedHand);
-                    this._sendBananaInteraction({
-                        type: 'peel',
-                        positions: positionsSnapshot
-                    });
-                    return true;
+                    return this._requestPeel?.(snappedHand) ?? false;
                 }
         
                 if (!this._tilePool.length) {
@@ -452,51 +440,138 @@
             },
 
             _commitTilePositions(members) {
-                (members || []).forEach((m) => {
-                    const tile = m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId);
-                    if (!tile || !m.el) return;
-                    const others = this.tiles.filter((t) => t.id !== tile.id);
-                    const snap = BananaGrid.snapTilePosition(tile, others);
-                    if (snap.snapped) {
-                        tile.x = snap.x;
-                        tile.y = snap.y;
-                    } else {
-                        tile.x = Math.round(tile.x);
-                        tile.y = Math.round(tile.y);
-                    }
-                });
+                const apply = (tiles) => {
+                    (members || []).forEach((m) => {
+                        const tile = m.tile || tiles.find((t) => t.id === m.el?.dataset?.tileId);
+                        if (!tile || !m.el) return;
+                        const others = tiles.filter((t) => t.id !== tile.id);
+                        const snap = BananaGrid.snapTilePosition(tile, others);
+                        if (snap.snapped) {
+                            tile.x = snap.x;
+                            tile.y = snap.y;
+                        } else {
+                            tile.x = Math.round(tile.x);
+                            tile.y = Math.round(tile.y);
+                        }
+                    });
+                    return true;
+                };
+                if (this._isMultiplayerMode?.() && typeof this._mutateMpTilesInPlace === 'function') {
+                    this._mutateMpTilesInPlace('drag-commit-positions', apply, { mode: 'playing' });
+                } else {
+                    apply(this.tiles || []);
+                }
                 this._ensurePlayStartedFromBoardActivity?.();
+            },
+
+            /** One hold-dump timer per game — drag.js calls this to cancel on move. */
+            _cancelHoldDump() {
+                if (this._holdDumpTimer) {
+                    clearTimeout(this._holdDumpTimer);
+                    this._holdDumpTimer = null;
+                }
+                this._holdDumpPointerId = null;
+                this._holdDumpTileEl = null;
+            },
+
+            _releaseHoldDumpPointer(pointerId) {
+                if (pointerId == null) return;
+                this._holdDumpConsumedPointers?.delete(pointerId);
+                if (this._holdDumpPointerId === pointerId) {
+                    this._cancelHoldDump();
+                }
+            },
+
+            _tryHoldDumpFromTimer(pointerId, el, liveTile) {
+                if (pointerId == null || this._holdDumpPointerId !== pointerId) return;
+                this._holdDumpTimer = null;
+                this._holdDumpPointerId = null;
+                this._holdDumpTileEl = null;
+                if (this._pointerDragging || el?.classList?.contains('is-dragging')) return;
+                if (this._rmbMarqueeUsed) return;
+                if (!this._holdDumpConsumedPointers) this._holdDumpConsumedPointers = new Set();
+                if (this._holdDumpConsumedPointers.has(pointerId)) return;
+                this._holdDumpConsumedPointers.add(pointerId);
+                this.beginGame();
+                if (this._handleDump(liveTile())) {
+                    if (!this._isMultiplayerMode()) this.persistState();
+                    this.requestRender();
+                }
+            },
+
+            _armHoldDump(e, el, liveTile, holdMs = 450) {
+                if (e.button !== 0 || e.pointerId == null) return;
+                if (!this._holdDumpPointerEndBound) {
+                    this._holdDumpPointerEndBound = true;
+                    const release = (ev) => this._releaseHoldDumpPointer(ev.pointerId);
+                    document.addEventListener('pointerup', release);
+                    document.addEventListener('pointercancel', release);
+                }
+                this._cancelHoldDump();
+                const pointerId = e.pointerId;
+                this._holdDumpPointerId = pointerId;
+                this._holdDumpTileEl = el;
+                this._holdDumpTimer = setTimeout(() => {
+                    this._tryHoldDumpFromTimer(pointerId, el, liveTile);
+                }, holdMs);
+            },
+
+            _initHoldDumpDelegation(surface) {
+                if (!surface || surface.dataset.holdDumpDelegationBound) return;
+                surface.dataset.holdDumpDelegationBound = '1';
+                const HOLD_DUMP_MS = 450;
+                surface.addEventListener('pointerdown', (e) => {
+                    if (e.button !== 0 || e.pointerId == null) return;
+                    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+                    const tileEl = e.target?.closest?.('.tile');
+                    if (!tileEl?.dataset?.tileId) return;
+                    if (!this.canMutatePlayingBoard?.()) return;
+                    if (this._holdDumpConsumedPointers?.has(e.pointerId)) return;
+                    const liveTile = () => this.tiles.find((t) => t.id === tileEl.dataset.tileId);
+                    if (!liveTile()) return;
+                    this.beginGame();
+                    this._armHoldDump(e, tileEl, liveTile, HOLD_DUMP_MS);
+                }, { capture: true });
             },
 
             _bindTileDrag(el, tile) {
                 if (el.dataset.bananaDragBound) return;
                 el.dataset.bananaDragBound = '1';
                 const liveTile = () => this.tiles.find((t) => t.id === el.dataset.tileId) || tile;
-                const HOLD_DUMP_MS = 450;
-                let holdDumpTimer = null;
-                const clearHoldDump = () => {
-                    if (holdDumpTimer) {
-                        clearTimeout(holdDumpTimer);
-                        holdDumpTimer = null;
-                    }
-                };
-                this._cancelHoldDump = clearHoldDump;
-        
+
                 BaseGame.setupDragging(
                     el,
                     (didDrag, draggedEl, ue, members) => {
-                        clearHoldDump();
+                        this._cancelHoldDump();
+                        if (ue?.pointerId != null) {
+                            this._releaseHoldDumpPointer(ue.pointerId);
+                        }
                         this.beginGame();
                         if (didDrag && ue) {
                             this._tileDumpTap = null;
                             const dragMembers = members || [{ el: draggedEl, tile: liveTile() }];
-                            this._snapMembers(dragMembers);
-                            this._commitTilePositions(dragMembers);
-                            if (this._isMultiplayerMode()) {
-                                this._markLocalDrag();
-                                this._persistMpLayout();
+                            if (this._canMutatePlayingHand?.()) {
+                                this._snapMembers(dragMembers);
+                                this._commitTilePositions(dragMembers);
+                                if (this._isMultiplayerMode()) {
+                                    this._endLocalDragAndFlushDeferred?.();
+                                }
+                                this._schedulePeelAfterDragRelease();
+                            } else if (this._isMultiplayerMode?.() && !this.isHost?.()) {
+                                this._mutateMpTilesInPlace?.('drag-revert-guest', (tiles) => {
+                                    let changed = false;
+                                    dragMembers.forEach((m) => {
+                                        const tile = m.tile || tiles.find((t) => t.id === m.el?.dataset?.tileId);
+                                        if (!tile || !m.el) return;
+                                        if (Number.isFinite(m.startWorldX) && Number.isFinite(m.startWorldY)) {
+                                            tile.x = m.startWorldX;
+                                            tile.y = m.startWorldY;
+                                            changed = true;
+                                        }
+                                    });
+                                    return changed;
+                                }, { mode: 'playing' });
                             }
-                            this._schedulePeelAfterDragRelease();
                             if (!this._isMultiplayerMode()) this.persistState();
                         }
                         this.requestRender();
@@ -504,8 +579,17 @@
                     this,
                     () => {
                         if (!this.canMutatePlayingBoard?.()) return false;
+                        const guestMp = this._isMultiplayerMode?.() && !this.isHost?.();
+                        if (guestMp) {
+                            const board = this._mpBoardFromRoom?.(this.roomData);
+                            if (board?.gameStarted) {
+                                if (!this._mpGuestAuthorityReadyForPlay?.()) return false;
+                            } else {
+                                this.beginGame();
+                                return true;
+                            }
+                        }
                         this.beginGame();
-                        if (this._isMultiplayerMode()) this._markLocalDrag();
                         return true;
                     },
                     null,
@@ -532,21 +616,7 @@
                         e.preventDefault();
                         return;
                     }
-                    if (e.button === 0) {
-                        e.stopPropagation();
-                        this.beginGame();
-                        clearHoldDump();
-                        holdDumpTimer = setTimeout(() => {
-                            holdDumpTimer = null;
-                            if (this._pointerDragging || el.classList.contains('is-dragging')) return;
-                            if (this._rmbMarqueeUsed) return;
-                            this.beginGame();
-                            if (this._handleDump(liveTile())) {
-                                if (!this._isMultiplayerMode()) this.persistState();
-                                this.requestRender();
-                            }
-                        }, HOLD_DUMP_MS);
-                    }
+                    if (e.button === 0) e.stopPropagation();
                 });
             },
 
@@ -554,6 +624,7 @@
                 if (this._selectionInit || typeof GameSelection === 'undefined') return;
                 const host = document.getElementById('game-container');
                 if (!host || !surface) return;
+                this._initHoldDumpDelegation(surface);
                 if (!this.isMobileViewport()) {
                     GameSelection.setupMarquee(host, surface, this, {
                         getSelectableElements: () => [...surface.querySelectorAll('.tile')],

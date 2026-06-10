@@ -21,6 +21,7 @@ const {
     playerDefsForCount
 } = require('./mp-player-utils');
 const { createTestLogger, isMpChatterSuppressed, isLogVerbose } = require('./test-logger');
+const { isMpDiagConsoleLine, pushMpDiagLine } = require('./mp-console-ring');
 
 /**
  * Shared multiplayer audit library for game simulations.
@@ -184,11 +185,18 @@ async function runMultiplayerAudit(gameId, options = {}) {
                 return;
             }
 
+            const isMpDiag = isMpDiagConsoleLine(text);
             const isImportant = ['WINNER', 'FAILURE', 'SUCCESS'].some(tag => text.includes(tag))
                 || (text.includes('[TEST]') && !text.includes('showWinBanner'))
                 || (text.includes('HOST:') && !text.includes('listener'))
-                || (text.includes('[ENGINE]') && (text.includes('auto-reset') || text.includes('scheduling')));
+                || (text.includes('[ENGINE]') && (text.includes('auto-reset') || text.includes('scheduling')
+                    || text.includes('reset signal')))
+                || isMpDiag;
             const isCriticalType = type === 'ERROR' || type === 'WARNING';
+
+            if (isMpDiag) {
+                pushMpDiagLine(page, text);
+            }
 
             if (!isImportant && !isCriticalType) {
                 return;

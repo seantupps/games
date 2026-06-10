@@ -31,7 +31,12 @@ function peelGridInFrame() {
     const ox = g.ORIGIN;
     const y0 = 2200;
     const hand = [...(g.tiles || [])];
-    if (hand.length < 4) return { placed: false, valid: false, words: [] };
+    if (hand.length < 4) {
+        return { placed: false, valid: false, words: [], reason: 'short-hand', handLen: hand.length };
+    }
+    if (!g._checker) {
+        return { placed: false, valid: false, words: [], reason: 'no-checker' };
+    }
 
     const pick = hand.slice(0, 4);
     const letters = ['C', 'A', 'T', 'T'];
@@ -71,7 +76,14 @@ function peelGridInFrame() {
     const origin = { x: g.ORIGIN, y: g.ORIGIN };
     const placed = BananaGrid.allTilesPlacedInGrid(g.tiles, origin, opts);
     const valid = BananaGrid.validateGrid(g.tiles, g._checker);
-    return { placed, valid: valid.ok, words: valid.words };
+    return {
+        placed,
+        valid: valid.ok,
+        words: valid.words,
+        reason: !placed ? 'not-placed' : (!valid.ok ? (valid.reason || 'invalid-grid') : null),
+        handLen: hand.length,
+        gameStarted: !!g.gameStarted
+    };
 }
 
 /** Same-frame setup + peel (self-contained for frame.evaluate). */

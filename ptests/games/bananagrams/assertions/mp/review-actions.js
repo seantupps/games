@@ -2,7 +2,13 @@
  * MP post-win review assertions — win banner, review layouts, pool-at-zero.
  * Extracted from mp-ai-playthrough so assertions never import runners.
  */
-const { failWithSnapshot } = require('../core/format-failure');
+const { failWithSnapshot, failWithTargetedDiag } = require('../core/format-failure');
+const {
+    captureReviewLayoutFailureFromPages,
+    enrichReviewLayoutDiagBundle,
+    formatReviewLayoutFailure
+} = require('../../lib/review-layout-failure-diag');
+const { getPlaythroughContext } = require('../../lib/mp-playthrough-context');
 const {
     mergeGuestLayoutOnHost,
     waitForHostReviewReady,
@@ -102,7 +108,7 @@ async function assertActionsWinBoards(winnerFrame, loserFrame, winnerUid, label 
 
 async function assertActionsPoolZero(hostPage, guestPage, mp, label = 'actions win') {
     await flushHostBananaInteractions(hostPage);
-    const poolWaitMs = mpVictoryWaitMs();
+    const poolWaitMs = Math.max(mpVictoryWaitMs(), mpReviewWaitMs());
 
     await waitForDiag(hostPage, `${label} bunch=0 host`, () => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
@@ -186,6 +192,10 @@ async function assertActionsWinBanner(pages, label = 'actions win banner') {
 async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions review') {
     const layoutWaitMs = mpReviewWaitMs();
 
+    await mergeGuestLayoutOnHost(frame1, [hostPage], 8);
+    await flushHostBananaInteractions(hostPage);
+    await waitForHostReviewReady(frame1, hostPage, layoutWaitMs);
+
     await waitForDiag(hostPage, `${label} layouts ready`, () => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         const room = g?.roomData;
@@ -195,8 +205,11 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
         const winnerUid = g?._winnerUid || board?.winnerUid;
         if (!winnerUid) return false;
         const layouts = board?.reviewLayoutsOrig || board?.reviewLayouts || g?._reviewLayouts || {};
-        const roster = Object.keys(room?.playerData || {}).filter(Boolean);
-        return roster.every((uid) => Array.isArray(layouts[uid]) && layouts[uid].length > 0);
+        const roster = (typeof g?._getPlayerUids === 'function' ? g._getPlayerUids() : null)
+            || board?.playerUids
+            || Object.keys(room?.playerData || {}).filter(Boolean);
+        return roster.length >= 2
+            && roster.every((uid) => Array.isArray(layouts[uid]) && layouts[uid].length > 0);
     }, {}, layoutWaitMs, mp);
 
     const state = await frame1.evaluate(() => {
@@ -210,7 +223,9 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
             : room?.global?.board;
         const winnerUid = g._winnerUid || board?.winnerUid || null;
         const layouts = board?.reviewLayoutsOrig || board?.reviewLayouts || g._reviewLayouts || {};
-        const roster = Object.keys(room?.playerData || {}).filter(Boolean).sort();
+        const roster = ((typeof g._getPlayerUids === 'function' ? g._getPlayerUids() : null)
+            || board?.playerUids
+            || Object.keys(room?.playerData || {}).filter(Boolean)).sort();
 
         const validateLayout = (uid, tileList) => {
             if (!Array.isArray(tileList) || !tileList.length) {
@@ -240,7 +255,8 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
                 connected: mainConnected,
                 gridOk: mainGrid.ok,
                 words: mainGrid.words || [],
-                invalidReason: mainGrid.ok ? null : (mainGrid.reason || fullGrid.reason || null)
+                invalidReason: mainGrid.ok ? null : (mainGrid.reason || fullGrid.reason || null),
+                invalidWord: mainGrid.word || fullGrid.word || null
             };
         };
 
@@ -259,10 +275,24 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
         failWithSnapshot(label, ['winner must have a fully connected valid crossword'], { state });
     }
 
+    const guestPage = mp?.page2 || mp?.pages?.[1] || null;
+
     for (const player of state.players || []) {
         if (player.uid === state.winnerUid) continue;
         if (!player.connected || !player.gridOk) {
-            failWithSnapshot(label, ['loser must show a connected valid crossword in review'], { player });
+            const diagBundle = enrichReviewLayoutDiagBundle(
+                await captureReviewLayoutFailureFromPages(hostPage, guestPage),
+                getPlaythroughContext()
+            );
+            const targetedText = formatReviewLayoutFailure(diagBundle);
+            const verdict = targetedText.split('\n').find((l) => l.startsWith('VERDICT:'))?.slice(8).trim()
+                || 'loser must show a connected valid crossword in review';
+            failWithTargetedDiag(
+                label,
+                [verdict],
+                { ...diagBundle, player },
+                targetedText
+            );
         }
     }
 

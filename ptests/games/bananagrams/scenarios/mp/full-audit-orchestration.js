@@ -131,12 +131,11 @@ async function runFullAuditFromCtx(scenarioCtx) {
     attachFramesToCtx(ctx, frames);
 
     const tileIdByUid = await assertAllPlayersDragLocal(ctx, frames, { mobile });
-    if (!mobile) {
-        frames = await assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid);
-        attachFramesToCtx(ctx, frames);
-    } else {
-        log('MP mobile: skip per-player refresh (SP mobile audit covers refresh).');
-    }
+    frames = await assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid);
+    attachFramesToCtx(ctx, frames);
+    const { reset: resetPlaythroughCtx, markAuditStep } = require('../../lib/mp-playthrough-context');
+    resetPlaythroughCtx();
+    markAuditStep('refresh');
 
     await assertSnapRules(ctx, frames[0]);
     await assertNoPeelOnRack(ctx, frames[0]);
@@ -257,10 +256,8 @@ async function runFullAuditMultiPlayer(scenarioCtx) {
     attachFramesToCtx(ctx, frames);
 
     const tileIdByUid = await assertAllPlayersDragLocal(ctx, frames, { mobile });
-    if (!mobile) {
-        frames = await assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid);
-        attachFramesToCtx(ctx, frames);
-    }
+    frames = await assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid);
+    attachFramesToCtx(ctx, frames);
 
     await assertSnapRules(ctx, frames[0]);
     await assertNoPeelOnRack(ctx, frames[0]);

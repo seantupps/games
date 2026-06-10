@@ -29,6 +29,52 @@
                 if (this._mpPoolIsIdBased()) this._mpIdPoolActive = true;
             },
 
+            /**
+             * Host: board.pool must not reintroduce owned or duplicate ids into authority pool.
+             * Stale RTDB echoes can otherwise break partition before the next peel/dump.
+             */
+            _mpSanitizeBoardPoolForHost(pool, context = 'pool-sanitize') {
+                if (!this.isHost?.() || !Array.isArray(pool)) return [];
+                const owned = this._mpGlobalOwnedIdSet?.() || new Set();
+                const seen = new Set();
+                const out = [];
+                const dropped = [];
+                pool.forEach((id) => {
+                    if (!id) return;
+                    if (owned.has(id)) {
+                        dropped.push({ id, reason: 'owned' });
+                        return;
+                    }
+                    if (seen.has(id)) {
+                        dropped.push({ id, reason: 'duplicate' });
+                        return;
+                    }
+                    seen.add(id);
+                    out.push(id);
+                });
+                if (dropped.length) {
+                    console.error('[Bananagrams] host pool sanitize rejected entries', {
+                        context,
+                        dropped: dropped.slice(0, 8),
+                        before: pool.length,
+                        after: out.length
+                    });
+                }
+                return out;
+            },
+
+            /** Host: drop owned/duplicate ids from live pool — pool authority follows membership. */
+            _mpRepairHostPoolPartition(context = 'pool-repair') {
+                if (!this.isHost?.() || !this._mpPoolIsIdBased?.()) return true;
+                const before = this._tilePool?.length ?? 0;
+                const sanitized = this._mpSanitizeBoardPoolForHost(this._tilePool, context);
+                if (sanitized.length !== before) {
+                    this._tilePool = sanitized;
+                    this._syncHostPoolOnRoomCaches?.();
+                }
+                return true;
+            },
+
             /** MP peel/dump/deal: id-pool only — legacy letter-pool must not run. */
             _mpAssertIdPoolForMutation(context = 'mutation') {
                 if (!this._isMultiplayerMode?.()) return true;
@@ -96,7 +142,15 @@
             /** Normalize board/wire owned to id + faceUp (letters from canonical at projection). */
             _mpNormalizeBoardOwned(raw, faceUpDefault = false) {
                 if (!raw?.length) return [];
-                return raw.map((entry) => this._mpStripOwnedEntry(entry, faceUpDefault)).filter(Boolean);
+                const seen = new Set();
+                const out = [];
+                raw.forEach((entry) => {
+                    const norm = this._mpStripOwnedEntry(entry, faceUpDefault);
+                    if (!norm?.id || seen.has(norm.id)) return;
+                    seen.add(norm.id);
+                    out.push(norm);
+                });
+                return out;
             },
 
             /** Resolve tile letters from canonical before merge/render. */
@@ -111,11 +165,38 @@
                 });
             },
 
-            /**
-             * Guest board apply: load canonical + pool before inventory merge
-             * (_applyMpSharedGameState runs too late for peel/dump owned hydration).
-             */
-            _mpIngestBoardBeforeInventory(board) {
+            /** Merge board.canonical into local map — shared by pre-inventory ingest and lifecycle apply. */
+            _mpMergeCanonicalFromBoard(board, options = {}) {
+                if (options.hostSkipCanonical || !board?.canonical || typeof board.canonical !== 'object') {
+                    return;
+                }
+                this._mpEnsureCanonicalMap();
+                const entries = Object.entries(board.canonical);
+                if (this.isHost?.()) {
+                    if (!this._hostMayIngestBoardToAuthority?.(board, options)) {
+                        return;
+                    }
+                    entries.forEach(([id, letter]) => {
+                        if (!this._mpCanonicalEntryForCurrentDeal?.(id)) return;
+                        const norm = this._mpNormLetter?.(letter) || letter;
+                        const existing = this._mpCanonicalById[id];
+                        if (existing && existing !== norm) {
+                            console.error('[Bananagrams][canonical] host ingress letter drift — overwriting', {
+                                id,
+                                existing,
+                                incoming: norm
+                            });
+                        }
+                        this._mpCanonicalById[id] = norm;
+                    });
+                    return;
+                }
+                entries.forEach(([id, letter]) => {
+                    this._mpCanonicalById[id] = this._mpNormLetter?.(letter) || letter;
+                });
+            },
+
+            _mpEnsureIdPoolModeFromBoard(board) {
                 if (!board) return;
                 if (board.poolUsesTileIds
                     || (Array.isArray(board.pool)
@@ -123,97 +204,36 @@
                     this._mpIdPoolActive = true;
                 }
                 this._mpEnsureIdPoolModeFromPool?.();
-                if (board.canonical && typeof board.canonical === 'object') {
-                    this._mpEnsureCanonicalMap();
-                    const entries = Object.entries(board.canonical);
-                    if (!this.isHost?.()) {
-                        entries.forEach(([id, letter]) => {
-                            this._mpCanonicalById[id] = this._mpNormLetter?.(letter) || letter;
-                        });
-                    } else {
-                        const localCount = Object.keys(this._mpCanonicalById).length;
-                        entries.forEach(([id, letter]) => {
-                            if (!this._mpCanonicalEntryForCurrentDeal?.(id)) return;
-                            if (localCount === 0 || !this._mpCanonicalById[id]) {
-                                this._mpCanonicalById[id] = this._mpNormLetter?.(letter) || letter;
-                            }
-                        });
-                    }
-                }
-                if (!Array.isArray(board.pool)) return;
+            },
+
+            /**
+             * Board apply: canonical map (+ host room-cache sync) before inventory merge.
+             * Pool projection is _applyPoolFromBoardAuthority only.
+             */
+            _mpIngestBoardBeforeInventory(board) {
+                if (!board) return;
+                this._mpEnsureIdPoolModeFromBoard(board);
+                this._mpMergeCanonicalFromBoard(board);
+                if (!this.isHost?.() || !Array.isArray(board.pool)) return;
                 const inReviewEarly = this._boardPhase?.(board) === BananagramsGame.MP_PHASE.REVIEW;
                 const winActiveEarly = inReviewEarly
                     || !!(board.winnerUid || this._winnerUid || this._victoryRegistered);
-                if (this.isHost?.()) {
-                    if (!winActiveEarly) {
-                        const local = this._tilePool?.length ?? 0;
-                        const boardPool = this._mpBoardPoolForCurrentDeal?.(board);
-                        const hostAuthoritative = this.gameStarted && !this._winnerUid;
-                        const remoteLen = boardPool?.length ?? 0;
-                        const noHostPoolMutations = !(this._peelSeq || this._dumpSeq);
-                        let shouldHydrate = local === 0 && remoteLen > 0;
-                        if (shouldHydrate && hostAuthoritative && !noHostPoolMutations) {
-                            shouldHydrate = false;
-                        }
-                        if (shouldHydrate && boardPool?.length) {
-                            this._tilePool = [...boardPool];
-                            if (this.roomData?.global?.board) {
-                                this.roomData.global.board.pool = [...board.pool];
-                            }
-                            if (typeof board.nextTileId === 'number') {
-                                this._nextTileId = board.nextTileId;
-                            }
-                            const poolEl = document.getElementById('banana-pool-count');
-                            if (poolEl) poolEl.textContent = String(this._tilePool.length);
-                        } else if (hostAuthoritative && local === 0 && boardPool?.length
-                            && (this._peelSeq || board.peelSeq || board.dumpSeq)) {
-                            this._syncHostPoolOnRoomCaches?.();
-                        }
-                    }
-                    return;
-                }
                 if (winActiveEarly) return;
-                const peelSeq = board.peelSeq || 0;
-                const dumpSeq = board.dumpSeq || 0;
-                const peelAdvanced = peelSeq > (this._lastPeelSeq || 0);
-                const dumpAdvanced = dumpSeq > (this._lastDumpSeq || 0);
-                const inReview = this._boardPhase?.(board) === BananagramsGame.MP_PHASE.REVIEW;
-                const winActive = inReview
-                    || !!(board.winnerUid || this._winnerUid || this._victoryRegistered);
-                if (winActive) return;
-
                 const local = this._tilePool?.length ?? 0;
-                let nextPool = [...board.pool];
-
-                // Partial RTDB merges can advance peelSeq without refreshing pool — infer drain from party size.
-                if (peelAdvanced) {
-                    const party = (this._peelPartyUids?.(board.peelActorUid) || []).length || 2;
-                    const expectedLen = Math.max(0, local - party);
-                    if (nextPool.length > expectedLen) {
-                        nextPool = nextPool.slice(0, expectedLen);
-                    }
+                const boardPool = this._mpBoardPoolForCurrentDeal?.(board);
+                const hostAuthoritative = this.gameStarted && !this._winnerUid;
+                const remoteLen = boardPool?.length ?? 0;
+                if (hostAuthoritative && local === 0 && remoteLen > 0
+                    && (this._peelSeq || board.peelSeq || board.dumpSeq)) {
+                    this._syncHostPoolOnRoomCaches?.();
                 }
-
-                const actionAdvanced = peelAdvanced || dumpAdvanced;
-                const poolChanged = nextPool.length !== local
-                    || nextPool.length !== board.pool.length;
-                if (!actionAdvanced && !poolChanged) return;
-
-                nextPool.forEach((id) => {
-                    this._mpAssertIdDealEpoch?.(id, 'ingest-board-pool');
-                });
-                this._tilePool = nextPool;
-                if (this.roomData?.global?.board) {
-                    this.roomData.global.board.pool = [...nextPool];
-                }
-                if (typeof board.nextTileId === 'number') this._nextTileId = board.nextTileId;
-                const poolEl = document.getElementById('banana-pool-count');
-                if (poolEl) poolEl.textContent = String(this._tilePool.length);
             },
 
             /** Host: freeze pool + owned ids + canonical before win clears live authority. */
             _mpFreezeFinalAuthoritySnapshot() {
-                if (!this.isHost?.() || !this._mpIdPoolActive) return null;
+                if (!this.isHost?.()) return null;
+                const hasOwned = Object.values(this._mpOwned || {}).some((list) => list?.length);
+                if (!this._mpIdPoolActive && !hasOwned) return null;
                 const canonical = { ...(this._mpCanonicalById || {}) };
                 const pool = [...(this._tilePool || [])];
                 const ownedByPlayer = {};
@@ -285,26 +305,62 @@
                 });
             },
 
-            /** Draw tile ids from id-pool (mutates pool). */
+            /** Draw tile ids from id-pool (mutates pool). Host rejects draws already owned. */
             _mpDrawIdsFromPool(pool, count = 1) {
-                if (!Array.isArray(pool) || count < 1) return [];
-                const drawn = pool.splice(0, count);
+                if (!Array.isArray(pool) || count < 1 || pool.length < count) return [];
+                const peek = pool.slice(0, count);
                 if (this.isHost?.()) {
-                    drawn.forEach((id) => this._mpAssertIdDealEpoch?.(id, 'draw-pool'));
+                    const owned = this._mpGlobalOwnedIdSet?.() || new Set();
+                    for (const id of peek) {
+                        this._mpAssertIdDealEpoch?.(id, 'draw-pool');
+                        if (owned.has(id)) {
+                            console.error('[Bananagrams] pool draw partition violation — id already owned', {
+                                id,
+                                context: 'draw-pool'
+                            });
+                            return [];
+                        }
+                    }
                 }
-                return drawn;
+                return pool.splice(0, count);
             },
 
-            /** Return dumped tile id to pool, shuffle, draw drawCount ids (mutates pool). */
-            _mpDumpTileIdToPool(pool, tileId, drawCount = 3) {
+            /**
+             * Return dumped tile id to pool, shuffle, draw drawCount ids (mutates pool copy).
+             * Rejects when the returned id is already in pool or draws overlap current hand.
+             */
+            _mpDumpTileIdToPool(pool, tileId, drawCount = 3, opts = {}) {
                 if (!Array.isArray(pool) || pool.length < drawCount || !tileId) return [];
                 this._mpAssertIdDealEpoch?.(tileId, 'dump-return');
+                const handAfterRemove = opts.handAfterRemove instanceof Set
+                    ? opts.handAfterRemove
+                    : new Set(opts.handAfterRemove || []);
+                // Membership authority: strip stale pool copies before return-to-pool shuffle.
+                for (let i = pool.length - 1; i >= 0; i--) {
+                    if (pool[i] === tileId) pool.splice(i, 1);
+                }
                 pool.push(tileId);
                 for (let i = pool.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [pool[i], pool[j]] = [pool[j], pool[i]];
                 }
-                return pool.splice(0, drawCount);
+                const drawn = pool.splice(0, drawCount);
+                if (drawn.length !== drawCount) return [];
+                if (new Set(drawn).size !== drawn.length) {
+                    console.error('[Bananagrams] dump draw batch has duplicate ids', { drawn, tileId });
+                    return [];
+                }
+                for (const id of drawn) {
+                    if (handAfterRemove.has(id)) {
+                        console.error('[Bananagrams] dump draw overlaps hand — partition broken', {
+                            id,
+                            tileId,
+                            handSize: handAfterRemove.size
+                        });
+                        return [];
+                    }
+                }
+                return drawn;
             },
 
             /** Active deal epoch = room resetCount (single authority). */
@@ -412,12 +468,15 @@
                 return true;
             },
 
-            /** Host ingress: membership ids only — ignore client letters. */
+            /** Host ingress: membership ids only — ignore client letters; dedupe ids. */
             _mpIngressNormalizeOwned(owned, context = 'ingress', meta = {}) {
                 const source = meta.source || context;
                 const playerId = meta.playerId ?? null;
-                return (owned || []).map((t) => {
-                    if (!t?.id) return t;
+                const seen = new Set();
+                const out = [];
+                (owned || []).forEach((t) => {
+                    if (!t?.id || seen.has(t.id)) return;
+                    seen.add(t.id);
                     if (this.isHost?.() && this._mpIdPoolActive) {
                         this._mpAssertIdDealEpoch?.(t.id, `${context}:${source}`);
                     }
@@ -436,8 +495,18 @@
                     if (t.letter && !canon && meta.registerIfMissing === true) {
                         this._mpCanonicalRegister(t.id, t.letter, context);
                     }
-                    return { id: t.id, faceUp: !!t.faceUp };
-                }).filter((t) => t?.id);
+                    out.push({ id: t.id, faceUp: !!t.faceUp });
+                });
+                if (this.isHost?.() && seen.size !== (owned || []).filter((t) => t?.id).length) {
+                    console.error('[Bananagrams][ingress] duplicate owned ids dropped', {
+                        context,
+                        source,
+                        playerId,
+                        before: (owned || []).length,
+                        after: out.length
+                    });
+                }
+                return out;
             },
 
             _mpEnsureCanonicalMap() {
@@ -539,7 +608,15 @@
 
                 (this._tilePool || []).forEach((id) => claim(id, 'pool'));
                 Object.entries(this._mpOwned || {}).forEach(([uid, list]) => {
-                    (list || []).forEach((t) => claim(t?.id, uid));
+                    const seenInPlayer = new Set();
+                    (list || []).forEach((t) => {
+                        if (!t?.id) return;
+                        if (seenInPlayer.has(t.id)) {
+                            partitionErrors.push({ id: t.id, reason: 'duplicate-in-owned', owner: uid });
+                        }
+                        seenInPlayer.add(t.id);
+                        claim(t.id, uid);
+                    });
                 });
 
                 const myUid = this._myUid?.();

@@ -299,7 +299,12 @@
                 y: t.y,
                 faceUp: !!t.faceUp
             }));
-            this.tiles = this._mpHydrateTiles?.(mapped) || mapped;
+            const hydrated = this._mpHydrateTiles?.(mapped) || mapped;
+            this._commitMpTilesProjection?.(hydrated, {
+                mode: 'playing',
+                source: 'dev-solve-local-hand',
+                tileCount: hydrated.length
+            }) || (this.tiles = hydrated);
             this.started = this.tiles.length > 0;
             this._persistMpLayout?.();
             if (!this._isMultiplayerMode()) this.persistState?.();
@@ -317,9 +322,13 @@
             if (typeof this._hostSetPlayerTiles === 'function') {
                 this._hostSetPlayerTiles(uid, hydrated, true, {
                     allowTilesToOwned: true,
+                    devAuthorityBypass: true,
                     source: 'dev-solve'
                 });
                 return;
+            }
+            if (this._isMultiplayerMode?.()) {
+                throw new Error('[Bananagrams][dev-solve] _hostSetPlayerTiles required in MP');
             }
             this._hostEnsureMpStores?.();
             this._mpOwned[uid] = hydrated.map((t) => ({ id: t.id, faceUp: !!t.faceUp }));
@@ -359,7 +368,12 @@
         _devSolveRestoreState(snapshot) {
             if (!snapshot) return;
             const tiles = snapshot.tiles || [];
-            this.tiles = this._mpHydrateTiles?.(tiles) || tiles.map((t) => ({ ...t }));
+            const hydrated = this._mpHydrateTiles?.(tiles) || tiles.map((t) => ({ ...t }));
+            this._commitMpTilesProjection?.(hydrated, {
+                mode: 'playing',
+                source: 'dev-solve-restore',
+                tileCount: hydrated.length
+            }) || (this.tiles = hydrated);
             this._tilePool = [...(snapshot.tilePool || [])];
             if (snapshot.mpOwned) {
                 this._mpOwned = JSON.parse(JSON.stringify(snapshot.mpOwned));
@@ -409,7 +423,12 @@
                     );
                 this._mpInventorySeq[uid] = (this._mpInventorySeq[uid] || 0) + 1;
                 if (uid === this._myUid?.()) {
-                    this.tiles = this._mpHydrateTiles?.(hydrated) || hydrated;
+                    const local = this._mpHydrateTiles?.(hydrated) || hydrated;
+                    this._commitMpTilesProjection?.(local, {
+                        mode: 'playing',
+                        source: 'dev-solve-project',
+                        tileCount: local.length
+                    }) || (this.tiles = local);
                 }
             });
 
@@ -447,7 +466,9 @@
             board.devSolveSeq = snapshot.devSolveSeq || 0;
             board.winnerUid = null;
             this._hostPublishBoard(board, 'dev-solve-rollback', {
-                _traceCaller: 'dev-solve-rollback'
+                _traceCaller: 'dev-solve-rollback',
+                allowHostFullApply: true,
+                applySource: 'dev-solve'
             });
             return true;
         },

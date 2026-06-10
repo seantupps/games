@@ -183,8 +183,19 @@ async function mergeGuestLayoutOnHost(hostFrame, pages, rounds = 4) {
         const merged = await hostFrame.evaluate(({ min }) => {
             const g = window.game;
             const board = g?.roomData?.global?.board || g?.roomData?.state?.board;
-            const keys = board?.reviewLayouts ? Object.keys(board.reviewLayouts) : [];
-            return keys.length >= min;
+            const orig = board?.reviewLayoutsOrig || board?.reviewLayouts || g?._reviewLayouts || {};
+            const roster = (typeof g?._getPlayerUids === 'function' ? g._getPlayerUids() : null)
+                || board?.playerUids
+                || Object.keys(orig);
+            if (roster.length < min) return false;
+            return roster.every((uid) => {
+                const list = orig[uid];
+                if (!Array.isArray(list) || !list.length) return false;
+                if (uid === g?._myUid?.()) return true;
+                return typeof g._remoteReviewLayoutAuthoritative === 'function'
+                    ? g._remoteReviewLayoutAuthoritative(list)
+                    : true;
+            });
         }, { min: minLayouts }).catch(() => false);
         if (merged) return;
         await new Promise((r) => setTimeout(r, 100));

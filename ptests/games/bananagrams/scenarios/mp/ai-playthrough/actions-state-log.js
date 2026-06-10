@@ -32,6 +32,32 @@ function stateLine(label, snap, solved) {
     ].join(' ');
 }
 
+/**
+ * One-line why a player took no action this turn (MP playthrough visibility).
+ * @param {object} snap
+ * @param {object} solved
+ * @param {{ desiredWinSide?: string|null, isGuest?: boolean }} [ctx]
+ */
+function summarizeIdleTurn(snap, solved, ctx = {}) {
+    const bits = [];
+    if (ctx.desiredWinSide) {
+        const steeredLoser = ctx.desiredWinSide === 'host' ? ctx.isGuest : !ctx.isGuest;
+        if (steeredLoser) bits.push('steered-loser');
+        else bits.push(`steered-winner(${ctx.desiredWinSide})`);
+    }
+    bits.push(`pool=${snap?.poolLen ?? '?'}`);
+    bits.push(`rack=${snap?.rack?.length ?? 0}`);
+    bits.push(`board=${snap?.boardCells?.length ?? 0}`);
+    if (snap?.gridOk === false) {
+        if (snap.gridInvalidWord) bits.push(`grid-invalid="${snap.gridInvalidWord}"`);
+        else if (snap.gridInvalidReason) bits.push(`grid-invalid=${snap.gridInvalidReason}`);
+    }
+    bits.push(explainSkippedAction(snap, solved, 'place'));
+    bits.push(explainSkippedAction(snap, solved, 'peel'));
+    if (solved?.stuck) bits.push(explainSkippedAction(snap, solved, 'dump'));
+    return bits.join(' | ');
+}
+
 function explainSkippedAction(snap, solved, kind) {
     if (kind === 'peel') {
         if (!snap?.allPlaced) return 'peel-skip(not-all-placed)';
@@ -159,6 +185,7 @@ module.exports = {
     probeFrame,
     logBothPages,
     logFailure,
+    summarizeIdleTurn,
     explainSkippedAction,
     captureMpState,
     captureBothMpStates

@@ -13,6 +13,9 @@ const coreFormat = require('./core/format-failure');
 const syncCore = require('./mp/sync');
 const syncDisconnected = require('./mp/sync-disconnected');
 const syncPeelSpawn = require('./mp/sync-peel-spawn');
+const syncDumpSpawn = require('./mp/sync-dump-spawn');
+const guestDumpVisible = require('./mp/guest-dump-visible');
+const postResetSpawn = require('./mp/post-reset-spawn');
 const syncSplit = require('./mp/sync-split');
 const syncWinBanner = require('./mp/sync-win-banner');
 const syncGuestBanner = require('./mp/sync-guest-banner');
@@ -37,6 +40,9 @@ module.exports = {
         ...syncCore,
         ...syncDisconnected,
         ...syncPeelSpawn,
+        ...syncDumpSpawn,
+        ...guestDumpVisible,
+        ...postResetSpawn,
         ...syncSplit,
         ...syncWinBanner,
         ...syncGuestBanner,

@@ -23,7 +23,24 @@ function formatFailure(label, problems, details = {}) {
  */
 function failWithSnapshot(label, problems, snapshot = {}) {
     const { message } = formatFailure(label, problems, snapshot);
-    assertOk(false, message, { problems, snapshot, ...snapshot });
+    assertOk(false, message, { problems, snapshot });
 }
 
-module.exports = { formatFailure, failWithSnapshot };
+/**
+ * Targeted failure — concise formatted diag replaces bloated generic snapshot.
+ * @param {string} label
+ * @param {string[]} problems
+ * @param {object} targetedDiag
+ * @param {string} targetedText
+ */
+function failWithTargetedDiag(label, problems, targetedDiag, targetedText) {
+    const { message } = formatFailure(label, problems);
+    assertOk(false, message, {
+        problems,
+        targeted: true,
+        targetedDiag,
+        targetedText
+    });
+}
+
+module.exports = { formatFailure, failWithSnapshot, failWithTargetedDiag };

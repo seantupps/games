@@ -13,12 +13,15 @@
                 }
                 this._seedMpAppliedResetFromRoom();
                 if (this.isHost()) {
-                    this._hostPurgeDepartedPlayers?.();
                     this._maybeSetupMultiplayer();
+                    this._hostPurgeDepartedPlayers?.();
                 }
                 const board = this._mpBoardFromRoom(this.roomData);
                 if (board?.version >= 2) {
-                    this._applyMultiplayerBoard(board, { _traceCaller: 'onNetworkUpdate' });
+                    this._applyMultiplayerBoard(board, {
+                        _traceCaller: 'onNetworkUpdate',
+                        applySource: 'network'
+                    });
                 }
                 if (this.isHost()) {
                     this._processBananaInteractions(data?.interactions?.banana);
@@ -114,6 +117,14 @@
                 return !!(resetAt && msg?.at && msg.at < resetAt);
             },
 
+            _scheduleBananaInteractionRetry() {
+                if (!this.isHost?.() || this._bananaRetryRaf) return;
+                this._bananaRetryRaf = requestAnimationFrame(() => {
+                    this._bananaRetryRaf = 0;
+                    this._processBananaInteractions(this.roomData?.interactions?.banana);
+                });
+            },
+
             _processBananaInteractions(banana) {
                 if (!this.isHost()) return;
                 let ackedNew = false;
@@ -129,12 +140,13 @@
                     }
                     const result = this._hostHandleBananaInteraction(uid, msg);
                     if (result === 'retry') {
+                        this._scheduleBananaInteractionRetry?.();
                         return;
                     }
                     this._ackBananaInteraction(uid, msg, path);
                     ackedNew = true;
                     if (result === 'handled' && (msg.type === 'peel' || msg.type === 'bananas'
-                        || msg.type === 'victory-layout')) {
+                        || msg.type === 'victory-layout' || msg.type === 'dump')) {
                         boardAlreadySynced = true;
                     }
                 });

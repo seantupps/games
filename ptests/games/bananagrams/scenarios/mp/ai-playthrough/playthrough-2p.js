@@ -32,6 +32,9 @@ const {
     mpReviewWaitMs
 } = require('../../../lib/mp-state');
 const stateLog = require('./actions-state-log');
+const { readMpDebugWaitDiag } = require('../../../lib/mp-debug-bridge');
+const { captureStallFailureDiag, throwStallFailure } = require('../../../lib/ai-playthrough-stall-diag');
+const playthroughCtx = require('../../../lib/mp-playthrough-context');
 const { STEP_MS } = require('../../../../../shared/infra/timeouts');
 const {
     mpAiRoundTripCapEnabled,
@@ -50,11 +53,9 @@ const {
     waitMpResetAfterDone,
     waitMpClientsInReview,
     waitMpClientsPostWinReady,
-    waitForHostReviewReady,
     assertGuestReviewVisibleWithoutInteraction,
     assertReviewViewportStable,
-    assertReviewBoardsFullyVisible,
-    mergeGuestLayoutOnHost
+    assertReviewBoardsFullyVisible
 } = require('../../../assertions/mp/review');
 const {
     assertTileDistributionInReview,
@@ -549,35 +550,39 @@ async function runPlayerStep(ctx, label, round = 0) {
             }
         }
         if (!applied?.ok) {
-            if (isGuest && ctx.desiredWinSide && !sideMatchesDesiredWin(ctx)) {
-                return { action: 'idle' };
+            const steeringLoser = isGuest && ctx.desiredWinSide && !sideMatchesDesiredWin(ctx);
+            if (!steeringLoser) {
+                throw new Error(`${label} apply failed (${JSON.stringify(applied)})`);
             }
-            throw new Error(`${label} apply failed (${JSON.stringify(applied)})`);
-        }
-        placed = applied.placed;
-        await publishGuestStep(hostPage, page, isGuest);
-        const snapAfter = await snapshotWithHostPool(frame, hostPage);
-        if (snapAfter.winner) {
-            return { win: true, action: 'win', placed, winSnap: snapAfter };
-        }
-        const peelReady = snapAfter.poolLen === 0
-            || (!snapAfter.rack.length && snapAfter.boardCells.length);
-        if (peelReady) {
-            const peelAfter = await tryPeel(ctx, snapAfter, label);
-            if (peelAfter) {
-                log(`[AI] ${label} place+peel (${placed} tiles)`);
-                if (peelAfter.final) {
-                    return {
-                        win: true, action: 'win', placed,
-                        winSnap: peelAfter.winSnap,
-                        ...peelAfter
-                    };
+            // Steered loser may skip placement but still peel/dump like real play.
+            snap = await snapshotWithHostPool(frame, hostPage);
+            solved = solveForPlayerStep(snap, ctx);
+        } else {
+            placed = applied.placed;
+            await publishGuestStep(hostPage, page, isGuest);
+            const snapAfter = await snapshotWithHostPool(frame, hostPage);
+            if (snapAfter.winner) {
+                return { win: true, action: 'win', placed, winSnap: snapAfter };
+            }
+            const peelReady = snapAfter.poolLen === 0
+                || (!snapAfter.rack.length && snapAfter.boardCells.length);
+            if (peelReady) {
+                const peelAfter = await tryPeel(ctx, snapAfter, label);
+                if (peelAfter) {
+                    log(`[AI] ${label} place+peel (${placed} tiles)`);
+                    if (peelAfter.final) {
+                        return {
+                            win: true, action: 'win', placed,
+                            winSnap: peelAfter.winSnap,
+                            ...peelAfter
+                        };
+                    }
+                    return { action: 'place+peel', placed, ...peelAfter };
                 }
-                return { action: 'place+peel', placed, ...peelAfter };
             }
+            log(`[AI] ${label} place (${placed} tiles)`);
+            return { action: 'place', placed };
         }
-        log(`[AI] ${label} place (${placed} tiles)`);
-        return { action: 'place', placed };
     }
 
     const peel = await tryPeel(ctx, snap, label);
@@ -600,15 +605,12 @@ async function runPlayerStep(ctx, label, round = 0) {
         }
     }
 
+    const idleWhy = stateLog.summarizeIdleTurn(snap, solved, ctx);
+    log(`[AI] ${label} idle — ${idleWhy}`);
     if (stateLog.enabled()) {
-        const skips = [
-            stateLog.explainSkippedAction(snap, solved, 'place'),
-            stateLog.explainSkippedAction(snap, solved, 'peel'),
-            stateLog.explainSkippedAction(snap, solved, 'dump')
-        ].join(' | ');
-        stateLog.logTurn(round, Date.now(), [snap], [label], [solved], [`${label}:idle`, skips]);
+        stateLog.logTurn(round, Date.now(), [snap], [label], [solved], [`${label}:idle`, idleWhy]);
     }
-    return { action: 'idle' };
+    return { action: 'idle', idleWhy };
 }
 
 /**
@@ -724,6 +726,7 @@ async function runMpAiPlaythrough2p(opts) {
                 `${winLabel}: expected ${desiredWinSide} to win (--win=${desiredWinSide})`
             );
         }
+        playthroughCtx.recordWinRound(round, actualSide);
         log(`[AI] Win detected (${side.label}, round ${round}, side=${actualSide}).`);
         let winnerSnap = step?.winSnap || null;
         if (!winnerSnap?.allPlaced || !winnerSnap?.gridOk) {
@@ -835,6 +838,7 @@ async function runMpAiPlaythrough2p(opts) {
     for (let round = 1; round <= maxRounds; round++) {
         stats.rounds = round;
         let progress = false;
+        log(`[AI] ── round ${round} ──`);
 
         for (const side of sides) {
             await flushHostBananaInteractions(page1);
@@ -881,6 +885,13 @@ async function runMpAiPlaythrough2p(opts) {
             }
 
             const step = await runPlayerStep(side, `${side.label} r${round}`, round);
+            const snapAfterStep = await snapshotWithHostPool(side.frame, page1);
+            playthroughCtx.recordRound(
+                side.isGuest ? 'guest' : 'host',
+                round,
+                snapAfterStep,
+                { action: step.action, idleWhy: step.idleWhy }
+            );
             if (step.win) {
                 await finishActionsWin(side, round, step);
                 return stats;
@@ -909,33 +920,8 @@ async function runMpAiPlaythrough2p(opts) {
                 boardCells: snap.boardCells,
                 rackLetters: snap.rack.map((r) => r.letter)
             }));
-            await stateLog.logFailure(
-                page1, page2, round, lastSnaps, lastLabels, lastSolved,
-                `stalled-${idleRounds}-idle-hostPool=${hostPool}`
-            );
-            await Promise.all(sides.map((s) => stateLog.probeFrame(s.frame, s.label)));
-            const hostDiag = await frame1.evaluate(() => {
-                const g = window.game;
-                if (!g?._checker || typeof BananaGrid === 'undefined') return null;
-                const hand = typeof g._snapHandForValidation === 'function'
-                    ? g._snapHandForValidation(g.tiles) : g.tiles;
-                const v = BananaGrid.validateGrid(hand, g._checker);
-                const uid = g._myUid?.();
-                return {
-                    tiles: g.tiles?.length ?? 0,
-                    owned: g._mpOwned?.[uid]?.length ?? 0,
-                    pool: g._tilePool?.length ?? 0,
-                    gridOk: !!v.ok,
-                    invalid: (v.invalid || []).slice(0, 8),
-                    words: (v.words || []).slice(0, 10),
-                    connected: BananaGrid.isConnected(hand),
-                    unique: BananaGrid.eachTileOccupiesUniqueCell(hand),
-                    dist: g._lastMpDistCheck || null
-                };
-            });
-            log(`[STALL-DIAG] host=${JSON.stringify(hostDiag)}`);
-            throw new Error(`AI playthrough stalled (${idleRounds} idle round-trips, `
-                + `stats=${JSON.stringify(stats)}, hostPool=${hostPool})`);
+            const stallDiag = await captureStallFailureDiag(sides, stats, idleRounds, hostPool, round);
+            throwStallFailure(`AI playthrough stalled: ${stallDiag.verdict}`, stallDiag);
         }
     }
 
@@ -968,6 +954,11 @@ async function resetMpForAiPlaythrough2p(opts) {
     } = opts;
 
     log('[AI] Reset to fresh split hands (solver playthrough)...');
+    await Promise.all([page1, page2].map((page) => page.evaluate(() => {
+        try {
+            localStorage.setItem('five_banana_trace_done', '1');
+        } catch (_) { /* ignore */ }
+    })));
     const expectedHand = await frame1.evaluate(() => (
         typeof BananaRules !== 'undefined' ? BananaRules.startingHandSize(2) : 21
     ));
@@ -983,14 +974,7 @@ async function resetMpForAiPlaythrough2p(opts) {
         if (db && rId) {
             db.ref(`games/${rId}/interactions/banana`).set(null);
         }
-        const buildReset = g.sync?.buildHostResetUpdates
-            || (typeof GameSync !== 'undefined' ? GameSync.buildHostResetUpdates : null);
-        let resetCount = g.roomData?.global?.resetCount ?? null;
-        let resetUpdates = null;
-        if (buildReset) {
-            resetUpdates = buildReset(g, { wasOver: false, includeBoard: false });
-            resetCount = g.lastResetCount ?? g.roomData?.global?.resetCount ?? resetCount;
-        }
+        const resetCount = g.roomData?.global?.resetCount ?? g.lastResetCount ?? null;
         g.onGameReset();
         const uids = g._getPlayerUids();
         const handSize = g._handSizeForParty?.() ?? 21;
@@ -1012,11 +996,13 @@ async function resetMpForAiPlaythrough2p(opts) {
             g._localInventorySeq = g._mpInventorySeq?.[uid] || 1;
         }
         g._persistMpLayout?.();
-        if (buildReset && resetUpdates) {
-            resetUpdates['global/board'] = g.serializeBoard();
-            g.updateMetadata(resetUpdates);
-            resetCount = g.lastResetCount ?? g.roomData?.global?.resetCount ?? resetCount;
-        }
+        g._mpAppliedResetCount = g.lastResetCount
+            ?? g.roomData?.global?.resetCount
+            ?? g._mpAppliedResetCount
+            ?? 0;
+        g._mpEpochSyncedFromRoom = true;
+        g._mpAwaitReset = false;
+        g._hostSyncBoard?.({ immediate: true });
         g._mpAssertDealEpochMembership?.('ai-reset');
         return {
             uids: uids.length,
@@ -1028,6 +1014,16 @@ async function resetMpForAiPlaythrough2p(opts) {
         };
     });
     log(`[AI] Reset host diag: ${JSON.stringify(resetDiag)}`);
+    playthroughCtx.recordAiReset(resetDiag);
+    if (process.env.FIVE_MP_ACTIONS_DEBUG === '1' || process.env.FIVE_LOG_VERBOSE === '1') {
+        const [resetDbgHost, resetDbgGuest] = await Promise.all([
+            readMpDebugWaitDiag(frame1),
+            readMpDebugWaitDiag(frame2)
+        ]);
+        log(`[AI] Reset debug host: ${JSON.stringify(resetDbgHost)}`);
+        log(`[AI] Reset debug guest: ${JSON.stringify(resetDbgGuest)}`);
+    }
+    await flushHostBananaInteractions(page1);
     await Promise.all([frame1, frame2].map((frame) => frame.evaluate(() => {
         const g = window.game;
         if (!g) return;
@@ -1318,9 +1314,6 @@ async function resumeMpSplitAfterReviewDone(page1, page2, frame1, frame2, mp, mo
             : g.roomData?.global?.board;
         if (board) {
             g._applyMultiplayerBoard(board, { force: true, reset: true });
-        }
-        if (board?.gameStarted && !g.gameStarted && typeof g._guestBeginSplit === 'function') {
-            g._guestBeginSplit();
         }
         g.requestRender?.();
     });

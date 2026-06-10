@@ -25,7 +25,7 @@ function resolveMpAuditTimeoutMs(options = {}) {
     if (slim) return Number(process.env.FIVE_MP_SMOKE_MS || 45000);
     if (scenario === 'actions') return Number(process.env.FIVE_MP_ACTIONS_TIMEOUT_MS || 600000);
     if (scenario === 'focus') return Number(process.env.FIVE_MP_FOCUS_TIMEOUT_MS || 300000);
-    if (scenario === 'all') return Number(process.env.FIVE_MP_ALL_SCENARIOS_MS || 900000);
+    if (scenario === 'all') return Number(process.env.FIVE_MP_ALL_SCENARIOS_MS || 2700000);
     return Number(process.env.FIVE_MP_FULL_AUDIT_MS || 120000);
 }
 

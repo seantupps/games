@@ -67,6 +67,8 @@
                 this._mpReviewEpoch = 0;
                 this._reviewLayoutsSyncedFp = null;
                 this._boardSeq = 0;
+                this._mpBoardRevision = 0;
+                this._mpClearRevisionClientState?.();
                 this._bananaHandled = {};
                 this._bananaAck = {};
                 this._winnerUid = null;
@@ -75,7 +77,7 @@
                 this.isOver = false;
                 this.winner = null;
                 this._stopTimer();
-                this.tiles = [];
+                this._clearMpTilesProjection?.('session-reset', { clearRegistry: true });
                 this._tilePool = [];
                 this.started = false;
                 this.gameStarted = false;
@@ -124,13 +126,16 @@
                 this._exitReviewLocalState?.();
                 this._dismissHubWinBanner?.();
                 this._stopTimer();
+                this._hostReviewCompleting = false;
+                this._mpClientBoardPhase = null;
+                this._setGamePhase?.('playing');
                 this._mpOwned = null;
                 this._mpPlayerLayouts = null;
                 this._mpInventorySeq = null;
                 this._mpDeferredBoard = null;
                 this._postGameReview = false;
                 this._hostReviewTransitionActive = false;
-                this.tiles = [];
+                this._clearMpTilesProjection?.('mp-session-prepare', { clearRegistry: true });
                 this._tilePool = [];
                 this.started = false;
                 this.gameStarted = false;
@@ -288,7 +293,6 @@
                     if (this.isHost()) {
                         this._hostBeginSplit();
                     } else {
-                        this._guestBeginSplit();
                         this._sendBananaInteraction({ type: 'split' });
                     }
                     return;
@@ -326,18 +330,25 @@
                 if (!this._usesGameTimer() || this._timerFrozen) return;
                 if (this._timerRaf && this._timerStart != null) return;
 
-                const startedAt = this._mpStartedAt || Date.now();
+                const board = this._mpBoardFromRoom?.(this.roomData);
+                const wireStartedAt = board?.startedAt;
+                const startedAt = this._mpStartedAt || wireStartedAt || Date.now();
+
                 if (this._isMultiplayerMode()) {
                     if (this.isHost?.()) {
-                        if (!this._mpStartedAt) {
+                        if (!this._mpStartedAt && wireStartedAt) {
+                            this._mpStartedAt = wireStartedAt;
+                        } else if (!this._mpStartedAt) {
                             this._mpStartedAt = startedAt;
-                            this._hostSyncBoard?.({ immediate: true });
+                            this._logMpDiagnostic?.('timer-repair-local-started-at', board, this._myUid?.(), {
+                                startedAt,
+                                note: 'split txn owns wire startedAt — local repair only'
+                            });
                         }
-                        this._syncMpTimerFromBoard(this._mpStartedAt || startedAt);
-                    } else {
-                        this._timerStart = startedAt;
-                        this._startTimer();
+                    } else if (!this._mpStartedAt && wireStartedAt) {
+                        this._mpStartedAt = wireStartedAt;
                     }
+                    this._syncMpTimerFromBoard(this._mpStartedAt || wireStartedAt || startedAt);
                     return;
                 }
 
@@ -430,7 +441,12 @@
                     }
                 }
                 const pool = document.getElementById('banana-pool-count');
-                if (pool) pool.textContent = String(this._tilePool.length);
+                if (pool) {
+                    const poolLen = typeof this._mpAuthoritativeBunchLen === 'function'
+                        ? this._mpAuthoritativeBunchLen()
+                        : (this._tilePool?.length ?? 0);
+                    pool.textContent = String(poolLen);
+                }
             },
 
             _bannerColorForUid(uid) {

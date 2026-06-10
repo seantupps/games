@@ -50,13 +50,15 @@ async function rightClickDump(frame, tileIndex = -1) {
         if (!tile) return { ok: false, reason: 'no-model' };
         const before = g.tiles.length;
         const beforeIds = [...g.tiles.map((t) => t.id)];
+        const dumpedTileId = tile.id;
         const ok = g._handleDump(tile);
-        return { ok, before, beforeIds };
+        return { ok, before, beforeIds, dumpedTileId };
     }, tileIndex);
 }
 
-async function holdDump(frame, tileIndex = -1, holdMs = 480, hostPage = null) {
-    const triggered = await frame.evaluate(async ({ idx, holdMs }) => {
+async function holdDump(frame, tileIndex = -1, holdMs = 450, hostPage = null, options = {}) {
+    const syncAuthority = options.syncAuthority !== false;
+    const triggered = await frame.evaluate(async ({ idx, holdMs: hold }) => {
         const g = window.game;
         g.beginGame?.();
         const nodes = [...document.querySelectorAll('.tile')];
@@ -66,50 +68,85 @@ async function holdDump(frame, tileIndex = -1, holdMs = 480, hostPage = null) {
         if (!tile) return { ok: false, reason: 'no-model' };
         const before = g.tiles.length;
         const beforeIds = [...g.tiles.map((t) => t.id)];
-        const guestMp = g._isMultiplayerMode?.() && !g.isHost?.();
-        if (guestMp) {
-            g._sendBananaInteraction({ type: 'dump', tileId: tile.id });
-            return { ok: true, before, beforeIds, after: g.tiles.length, guestMp: true };
+        const dumpedTileId = tile.id;
+        const seqBefore = g.roomData?.global?.board?.dumpSeq || 0;
+        // Synthetic pointerdown on the tile does not invoke surface capture listeners
+        // (dispatchEvent skips capture). Arm hold-dump through the game API instead.
+        if (typeof g._armHoldDump === 'function') {
+            g._armHoldDump(
+                { button: 0, pointerId: 1, pointerType: 'touch' },
+                node,
+                () => tile,
+                hold
+            );
+            await new Promise((res) => setTimeout(res, hold + 50));
+            g._releaseHoldDumpPointer?.(1);
+        } else {
+            const r = node.getBoundingClientRect();
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            const mk = (type) => new PointerEvent(type, {
+                clientX: cx,
+                clientY: cy,
+                bubbles: true,
+                pointerId: 1,
+                pointerType: 'touch',
+                button: 0,
+                buttons: type === 'pointerup' ? 0 : 1
+            });
+            node.dispatchEvent(mk('pointerdown'));
+            await new Promise((res) => setTimeout(res, hold));
+            node.dispatchEvent(mk('pointerup'));
         }
-        const r = node.getBoundingClientRect();
-        const cx = r.left + r.width / 2;
-        const cy = r.top + r.height / 2;
-        const mk = (type) => new PointerEvent(type, {
-            clientX: cx,
-            clientY: cy,
-            bubbles: true,
-            pointerId: 1,
-            pointerType: 'touch',
-            button: 0,
-            buttons: type === 'pointerup' ? 0 : 1
-        });
-        node.dispatchEvent(mk('pointerdown'));
-        await new Promise((res) => setTimeout(res, holdMs));
-        node.dispatchEvent(mk('pointerup'));
         await new Promise((res) => requestAnimationFrame(res));
+        const guestMp = g._isMultiplayerMode?.() && !g.isHost?.();
+        const optimistic = guestMp && g._guestDumpPendingTileId === dumpedTileId;
+        const seqAfter = g.roomData?.global?.board?.dumpSeq || 0;
+        const hostApplied = !guestMp && g.tiles.length === beforeIds.length + 2;
+        const handUniqueAfter = new Set((g.tiles || []).map((t) => t.id)).size;
+        const handUniqueBefore = new Set(beforeIds).size;
+        const authorityApplied = handUniqueAfter === handUniqueBefore + 2;
         return {
-            ok: g.tiles.length === beforeIds.length + 2,
+            ok: optimistic || hostApplied || seqAfter > seqBefore || authorityApplied,
             before,
             beforeIds,
+            dumpedTileId,
             after: g.tiles.length,
-            guestMp: false
+            guestMp,
+            optimistic,
+            hostApplied,
+            authorityApplied
         };
     }, { idx: tileIndex, holdMs });
     if (!triggered.ok && !triggered.guestMp) return triggered;
-    if (!triggered.guestMp) return triggered;
+    if (!triggered.guestMp) {
+        if (!syncAuthority) {
+            return { ...triggered, ok: !!triggered.hostApplied };
+        }
+        return triggered;
+    }
+    if (!syncAuthority) {
+        return {
+            ...triggered,
+            ok: triggered.ok || triggered.optimistic || triggered.authorityApplied
+        };
+    }
 
     const deadline = Date.now() + WAIT_MS;
     while (Date.now() < deadline) {
         if (hostPage) await flushHostBananaInteractions(hostPage);
         const ready = await frame.evaluate(({ idList }) => {
             const g = window.game;
-            return g.tiles.length === idList.length + 2;
+            const beforeUnique = new Set(idList).size;
+            const handUnique = new Set((g?.tiles || []).map((t) => t.id)).size;
+            return handUnique === beforeUnique + 2;
         }, { idList: triggered.beforeIds });
         if (ready) {
             return {
                 ok: true,
                 before: triggered.before,
                 beforeIds: triggered.beforeIds,
+                dumpedTileId: triggered.dumpedTileId,
                 after: triggered.beforeIds.length + 2
             };
         }
@@ -119,8 +156,8 @@ async function holdDump(frame, tileIndex = -1, holdMs = 480, hostPage = null) {
     return { ok: false, before: triggered.before, beforeIds: triggered.beforeIds, after };
 }
 
-async function dumpTile(frame, tileIndex = -1, { mobile = false, hostPage = null } = {}) {
-    if (mobile) return holdDump(frame, tileIndex, 480, hostPage);
+async function dumpTile(frame, tileIndex = -1, { mobile = false, hostPage = null, syncAuthority = true } = {}) {
+    if (mobile) return holdDump(frame, tileIndex, 450, hostPage, { syncAuthority });
     return rightClickDump(frame, tileIndex);
 }
 

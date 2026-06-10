@@ -60,6 +60,7 @@ async function runCtxProofScenario(scenarioCtx) {
         return (board?.peelSeq || 0) > seq && board?.peelActorUid === uid;
     }, { seq: peelSeqBefore, uid: ctx.host.uid }, WAIT_MS, ctx.mp);
     await lib.waitPoolAll(ctx, expectedPoolAfter);
+    await sync.waitAllPlayersBoardSynced(ctx, 'ctx-proof post-peel');
 
     const afterPeel = await core.capture.capturePlayerStates(ctx, 'ctx-proof-after-peel');
 

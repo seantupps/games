@@ -60,16 +60,10 @@ async function attemptPeel(scenarioCtx, actorIndex, opts = {}) {
         };
     });
 
-    if (actorIndex !== 0 && peelRes.peeled) {
-        await hostPage.waitForFunction(({ uid }) => {
-            const banana = document.getElementById('game-frame')?.contentWindow?.game
-                ?.roomData?.interactions?.banana?.[uid];
-            if (!banana) return false;
-            return Object.values(banana).some((m) => m?.type === 'peel');
-        }, { uid: player.uid }, { timeout: WAIT_MS });
+    if (peelRes.peeled) {
+        await flushHostBananaInteractions(hostPage);
     }
 
-    // Inspect host state BEFORE processing banana queue (explains drop vs register).
     const hostPeelDiag = actorIndex !== 0 ? await hostPage.evaluate(({ uid }) => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         const bananaNode = g?.roomData?.interactions?.banana?.[uid] || {};
@@ -79,6 +73,7 @@ async function attemptPeel(scenarioCtx, actorIndex, opts = {}) {
             return { hasPeelMsg: false, msgCount: msgs.length, bananaKeys: Object.keys(bananaNode) };
         }
         const layout = Array.isArray(last.positions) ? last.positions : null;
+        const owned = Array.isArray(last.owned) ? last.owned : null;
         const hand = g._handFromOwnedAndPositions?.(uid, layout) || [];
         const validation = window.BananaGrid?.validateGrid(hand, g._checker) || { ok: false };
         const partyLen = g._peelPartyUids?.(uid)?.length ?? -1;
@@ -97,8 +92,6 @@ async function attemptPeel(scenarioCtx, actorIndex, opts = {}) {
             poolOk: pool >= partyLen
         };
     }, { uid: player.uid }) : null;
-
-    await flushHostBananaInteractions(hostPage);
 
     let hostRegistered = false;
     let diag = {};
@@ -166,14 +159,7 @@ async function attemptPeelAfterGuestSend(scenarioCtx, actorIndex, peelRes) {
         return g?._tilePool?.length ?? -1;
     });
 
-    if (peelRes.peeled) {
-        await hostPage.waitForFunction(({ uid }) => {
-            const banana = document.getElementById('game-frame')?.contentWindow?.game
-                ?.roomData?.interactions?.banana?.[uid];
-            if (!banana) return false;
-            return Object.values(banana).some((m) => m?.type === 'peel');
-        }, { uid: player.uid }, { timeout: WAIT_MS });
-    }
+    await flushHostBananaInteractions(hostPage);
 
     const hostPeelDiag = await hostPage.evaluate(({ uid }) => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
@@ -184,6 +170,7 @@ async function attemptPeelAfterGuestSend(scenarioCtx, actorIndex, peelRes) {
             return { hasPeelMsg: false, msgCount: msgs.length, bananaKeys: Object.keys(bananaNode) };
         }
         const layout = Array.isArray(last.positions) ? last.positions : null;
+        const owned = Array.isArray(last.owned) ? last.owned : null;
         const hand = g._handFromOwnedAndPositions?.(uid, layout) || [];
         const validation = window.BananaGrid?.validateGrid(hand, g._checker) || { ok: false };
         const partyLen = g._peelPartyUids?.(uid)?.length ?? -1;
@@ -202,8 +189,6 @@ async function attemptPeelAfterGuestSend(scenarioCtx, actorIndex, peelRes) {
             poolOk: pool >= partyLen
         };
     }, { uid: player.uid });
-
-    await flushHostBananaInteractions(hostPage);
 
     let hostRegistered = false;
     let diag = {};

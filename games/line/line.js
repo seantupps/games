@@ -3,6 +3,44 @@ const params = new URLSearchParams(window.location.search);
 if (params.has('theme')) { document.documentElement.style.setProperty('--theme-color', params.get('theme')); }
 if (params.has('opp')) { document.documentElement.style.setProperty('--opponent-color', params.get('opp')); }
 
+const LINE_AI_TABLE_PATH = 'ai/line_ai_table.bin.gz';
+
+/** Hub reloads the game iframe on switch; keep the parsed table on the parent window. */
+function lineAiTableCacheRoot() {
+    try {
+        if (window.parent && window.parent !== window) return window.parent;
+    } catch (_) { /* cross-origin */ }
+    return window;
+}
+
+async function fetchLineAITable(tablePath = LINE_AI_TABLE_PATH) {
+    const response = await fetch(tablePath);
+    if (!response.ok) {
+        throw new Error(`status ${response.status}`);
+    }
+    const stream = response.body.pipeThrough(new DecompressionStream('gzip'));
+    const buffer = await new Response(stream).arrayBuffer();
+    const view = new DataView(buffer);
+    const count = view.getUint32(0, true);
+    return { count, buffer, view };
+}
+
+async function resolveLineAITable(tablePath = LINE_AI_TABLE_PATH) {
+    const root = lineAiTableCacheRoot();
+    if (root.__fiveLineAITable) return root.__fiveLineAITable;
+    if (!root.__fiveLineAITableLoad) {
+        root.__fiveLineAITableLoad = fetchLineAITable(tablePath)
+            .then((table) => {
+                root.__fiveLineAITable = table;
+                return table;
+            })
+            .finally(() => {
+                delete root.__fiveLineAITableLoad;
+            });
+    }
+    return root.__fiveLineAITableLoad;
+}
+
 class LineGame extends BaseGame {
     constructor() {
         super();
@@ -39,21 +77,17 @@ class LineGame extends BaseGame {
 
     async loadAITable() {
         if (this.isMultiplayer) return;
-        const tablePath = 'ai/line_ai_table.bin.gz';
+        const root = lineAiTableCacheRoot();
+        const cached = root.__fiveLineAITable;
         try {
-            console.log(`[AI] Attempting to load table: ${tablePath}`);
-            const response = await fetch(`${tablePath}?t=${Date.now()}`);
-            if (response.ok) {
-                const stream = response.body.pipeThrough(new DecompressionStream('gzip'));
-                const buffer = await new Response(stream).arrayBuffer();
-                const view = new DataView(buffer);
-                const count = view.getUint32(0, true);
-
-                this.aiTable = { count, buffer, view };
-                console.log(`[AI] SUCCESS: Loaded "${tablePath}" (${count.toLocaleString()} states)`);
-            } else {
-                console.error(`[AI] FAILED to load ${tablePath}: Status ${response.status}`);
+            if (cached) {
+                this.aiTable = cached;
+                console.log(`[AI] Using cached "${LINE_AI_TABLE_PATH}" (${cached.count.toLocaleString()} states)`);
+                return;
             }
+            console.log(`[AI] Attempting to load table: ${LINE_AI_TABLE_PATH}`);
+            this.aiTable = await resolveLineAITable();
+            console.log(`[AI] SUCCESS: Loaded "${LINE_AI_TABLE_PATH}" (${this.aiTable.count.toLocaleString()} states)`);
         } catch (e) {
             console.error(`[AI] ERROR loading AI Table:`, e);
         }

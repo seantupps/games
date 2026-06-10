@@ -18,19 +18,14 @@
         }
     };
 
-    /**
-     * Single dev-solve apply tick — pool + seq (layout follows via pendingSolveLayout in inventory).
-     * @returns {boolean} whether this board carries a new devSolveSeq
-     */
+    /** Dev-only pool bypass — writes game._tilePool cache only (not roomData wire). */
     Dev.applyDevSolveFromBoard = function applyDevSolveFromBoard(game, board) {
+        if (!Dev.allowAuthorityBypass) return false;
         if (!Dev.pendingSolveLayout(game, board)) return false;
+        if (!game?._isMultiplayerMode?.() || !game.canMutatePlayingBoard?.()) return false;
         if (Array.isArray(board.pool)) {
             game._tilePool = [...board.pool];
-            if (game.roomData?.global?.board) {
-                game.roomData.global.board.pool = [...board.pool];
-            }
-            const poolEl = document.getElementById('banana-pool-count');
-            if (poolEl) poolEl.textContent = String(game._tilePool.length);
+            game._refreshPoolHud?.();
         }
         return true;
     };
@@ -69,6 +64,13 @@
         game._devSolveSeq = 0;
         game._lastDevSolveSeqApplied = 0;
         game._lastDevSolvePoolSeq = 0;
+    };
+
+    /** Explicit opt-in for dev authority bypass paths (_hostSetPlayerTiles, board-solve). */
+    Dev.allowAuthorityBypass = true;
+
+    Dev.isDevBundleLoaded = function isDevBundleLoaded() {
+        return true;
     };
 
     /** Dev bundle is never loaded in production — fail loud by default. */

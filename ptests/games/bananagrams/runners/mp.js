@@ -26,8 +26,10 @@ const {
     parseScenarioArgv,
     parseWinSideArgv,
     listScenarios,
-    resolveBananagramsMpScenarioPlan
+    resolveBananagramsMpScenarioPlan,
+    MP_SCENARIOS
 } = require('../scenarios/registry');
+const { getMpScenario } = require('../scenarios/mp/index');
 const { playwrightHeadless } = require('../../../shared/infra/env-defaults');
 
 const { log } = lib;
@@ -47,6 +49,17 @@ async function beforeLoop(page1OrPages, page2OrCtx, ctxMaybe = {}) {
     const scenarios = resolveBananagramsMpScenarioPlan(cfg);
     if (!scenarios.length) return;
 
+    const runAll = String(cfg.scenario || '').trim().toLowerCase() === 'all';
+    const platform = ctx.isMobile ? 'mobile' : 'desktop';
+    const playerCount = pages.length;
+    if (runAll) {
+        const skipped = MP_SCENARIOS.filter((id) => !scenarios.includes(id));
+        if (skipped.length) {
+            log(`MP plan: skipping ${skipped.length} scenario(s) incompatible with `
+                + `${playerCount}p ${platform}: ${skipped.join(', ')}`);
+        }
+    }
+
     const winSide = parseWinSideArgv(process.argv);
     const rounds = cfg.rounds || 1;
     const roomId = ctx.roomId
@@ -54,6 +67,7 @@ async function beforeLoop(page1OrPages, page2OrCtx, ctxMaybe = {}) {
 
     for (let i = 0; i < scenarios.length; i++) {
         const scenario = scenarios[i];
+        const needsFresh = getMpScenario(scenario).meta.requiresFreshRoom;
         if (scenarios.length > 1) {
             log(`Bananagrams MP scenario ${i + 1}/${scenarios.length}: ${scenario}`);
         }
@@ -62,7 +76,7 @@ async function beforeLoop(page1OrPages, page2OrCtx, ctxMaybe = {}) {
             mobile: !!ctx.isMobile,
             scenario,
             focusDumpPeel: scenario === 'focus',
-            skipSeed: i > 0 || !!ctx.skipSeed,
+            skipSeed: runAll ? !!ctx.skipSeed : ((i > 0 && !needsFresh) || !!ctx.skipSeed),
             winSide,
             rounds,
             pause: !!cfg.pause,

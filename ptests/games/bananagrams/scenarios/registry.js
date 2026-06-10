@@ -9,9 +9,10 @@
  *   review  — last-bunch pool drain + solve/win/review loop (last-bunch alias)
  *   join    — sequential 3p invite join orders
  *   ctx-proof — MpCtx assertion smoke (pool, peel, banner) on 2p and 3p
+ *   dump-spawn — dump inventory stress (1 to pool, 3 from pool), timing + spawn stability
  */
 
-const MP_SCENARIOS = ['full', 'sync', 'focus', 'actions', 'solve', 'review', 'join', 'ctx-proof', 'peel-register-repro'];
+const MP_SCENARIOS = ['full', 'sync', 'focus', 'actions', 'solve', 'review', 'join', 'ctx-proof', 'peel-register-repro', 'dump-spawn'];
 /** Bare `--game=bananagrams` — single full audit (focus/solve/actions/review via `--scenario=`). */
 const MP_DEFAULT_SUITE = ['full'];
 const SP_SCENARIOS = ['all', 'hub', 'ui', 'actions', 'placement', 'dump', 'peel', 'solve'];
@@ -53,7 +54,9 @@ function resolveBananagramsMpScenarioPlan(config) {
     if (cfg.scenario) {
         let scenario = String(cfg.scenario).trim().toLowerCase();
         if (scenario === 'last-bunch') scenario = 'review';
-        if (scenario === 'all') return [...MP_SCENARIOS];
+        if (scenario === 'all') {
+            return filterBananagramsMpScenarioPlan([...MP_SCENARIOS], cfg);
+        }
         return [scenario];
     }
 
@@ -69,6 +72,56 @@ function resolveBananagramsMpScenarioPlan(config) {
     }
 
     return ['full'];
+}
+
+/**
+ * Keep only scenarios compatible with the active session (player count + topology).
+ * @param {string[]} ids
+ * @param {import('../../../shared/infra/run-spec').RunConfig} [config]
+ * @returns {string[]}
+ */
+function filterBananagramsMpScenarioPlan(ids, config) {
+    const cfg = config || (() => {
+        try {
+            return require('../../../shared/infra/run-config').getActiveRunConfig();
+        } catch (_) {
+            return {};
+        }
+    })();
+    const playerCount = cfg.players || cfg.playerCount
+        || (Array.isArray(cfg.playerCounts) && cfg.playerCounts.length === 1
+            ? cfg.playerCounts[0]
+            : 2);
+    const platform = cfg.topology === 'mobile' ? 'mobile' : 'desktop';
+    const { scenarioSupportsPlayerCount, scenarioSupportsPlatform } = require('./mp/index');
+
+    return ids.filter((id) => {
+        try {
+            return scenarioSupportsPlayerCount(id, playerCount)
+                && scenarioSupportsPlatform(id, platform);
+        } catch (_) {
+            return false;
+        }
+    });
+}
+
+/**
+ * Split `--scenario=all` into 2p-compatible vs 3p-only plans (e.g. join).
+ * @param {import('../../../shared/infra/run-spec').RunConfig} [config]
+ * @returns {{ twoPlayer: string[], threePlayer: string[] }}
+ */
+function resolveBananagramsMpAllScenarioParts(config) {
+    const cfg = config || (() => {
+        try {
+            return require('../../../shared/infra/run-config').getActiveRunConfig();
+        } catch (_) {
+            return {};
+        }
+    })();
+    const planned = [...MP_SCENARIOS];
+    const twoPlayer = filterBananagramsMpScenarioPlan(planned, { ...cfg, players: 2, playerCount: 2, topology: cfg.topology || 'desktop' });
+    const threePlayer = planned.filter((id) => !twoPlayer.includes(id));
+    return { twoPlayer, threePlayer };
 }
 
 function parseScenarioArgv(argv, defaultId = 'all') {
@@ -159,6 +212,8 @@ module.exports = {
     SP_ACTION_SLICES,
     inferBananagramsMpScenario,
     resolveBananagramsMpScenarioPlan,
+    filterBananagramsMpScenarioPlan,
+    resolveBananagramsMpAllScenarioParts,
     parseScenarioArgv,
     parseWinSideArgv,
     parseWinSideValue,

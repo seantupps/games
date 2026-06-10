@@ -12,6 +12,7 @@ const join = require('./join');
 const ctxProof = require('./ctx-proof');
 const template = require('./template');
 const peelRegisterRepro = require('./peel-register-repro-3p');
+const dumpSpawn = require('./dump-spawn');
 
 /** @type {Record<string, import('./contract').MpScenarioModule>} */
 const MP_SCENARIOS = {
@@ -24,7 +25,8 @@ const MP_SCENARIOS = {
     join,
     'ctx-proof': ctxProof,
     template,
-    'peel-register-repro': peelRegisterRepro
+    'peel-register-repro': peelRegisterRepro,
+    'dump-spawn': dumpSpawn
 };
 
 const ALIASES = {

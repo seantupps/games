@@ -10,6 +10,8 @@ const { assertAllPlayersPoolSynced } = require('./sync');
 const { log, WAIT_MS, waitOpts, waitForDiag, dragTileByIndex, hostPublishPartyBoard } = lib;
 const { captureAllMpStates } = require('../../../../shared/platform/mp-waits');
 const { timeoutError } = lib;
+const { dumpTile } = require('../../lib/mp-input');
+const { flushHostBananaInteractions } = require('../../../../shared/adapters/mp-client');
 
 /**
  * Pre-SPLIT: pool HUD layout, scoreboard, hub shell (after pool synced, before SPLIT).
@@ -100,6 +102,28 @@ async function assertPartyBoardOnRtdb(ctx, label) {
 }
 
 /**
+ * Advance peel/dump seq so refresh runs mid-game (peelSeq=0 passes even when layout restore is broken).
+ * @param {import('../lib/mp-ctx').MpCtx} ctx
+ * @param {import('playwright').Frame[]} frames
+ */
+async function advanceMidGameActionSeq(ctx, frames) {
+    log('Mid-game action seq: host dump before refresh test...');
+    const dumpResult = await dumpTile(frames[0], -1, {
+        mobile: !!ctx.mobile,
+        hostPage: ctx.host.page
+    });
+    if (!dumpResult.ok) {
+        failWithSnapshot('pre-refresh dump', ['host dump failed before refresh test'], { dumpResult });
+    }
+    await flushHostBananaInteractions(ctx.host.page);
+    await ctx.host.page.waitForFunction(() => {
+        const g = document.getElementById('game-frame')?.contentWindow?.game;
+        return (g?.roomData?.global?.board?.dumpSeq || 0) > 0;
+    }, waitOpts);
+    log('SUCCESS: dumpSeq advanced before refresh test.');
+}
+
+/**
  * @param {import('../lib/mp-ctx').MpCtx} ctx
  * @param {import('../scenarios/mp/contract').MpPlayerDef} player
  * @param {import('playwright').Frame} frame
@@ -150,7 +174,8 @@ async function assertRefreshPreservesLayout(ctx, player, frame, tileId) {
  * @returns {Promise<import('playwright').Frame[]>}
  */
 async function assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid) {
-    log('Refresh: each player restores layout from localStorage...');
+    log('Refresh: each player restores layout from localStorage (mid-game)...');
+    await advanceMidGameActionSeq(ctx, frames);
     await hostPublishPartyBoard(ctx.host.page);
     await assertPartyBoardOnRtdb(ctx, 'pre-refresh');
 

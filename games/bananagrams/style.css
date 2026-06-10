@@ -262,3 +262,12 @@ body:has(.scoreboard.show) .banana-hud {
     border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 70%, #000);
     box-shadow: none;
 }
+
+.tile.is-dump-pending {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+.tile.is-dump-pending .tile-face {
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.85);
+}

@@ -93,7 +93,10 @@ const SNAPSHOT_BROWSER_STATE = `() => {
         gap,
         winner: won,
         allPlaced,
-        gridOk: gridCheck.ok
+        gridOk: gridCheck.ok,
+        gridInvalidReason: gridCheck.ok ? null : (gridCheck.reason || null),
+        gridInvalidWord: gridCheck.ok ? null : (gridCheck.word || null),
+        gridWords: (gridCheck.words || []).slice(0, 14)
     };
 }`;
 

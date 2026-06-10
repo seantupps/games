@@ -3,6 +3,7 @@
  */
 const { STEP_MS } = require('../infra/timeouts');
 const { WAIT_MS: PROFILE_WAIT_MS } = require('../infra/speed-profiles');
+const { drainMpDiagRing } = require('../infra/mp-console-ring');
 
 const WAIT_MS = PROFILE_WAIT_MS ?? STEP_MS;
 const waitOpts = { timeout: WAIT_MS };
@@ -51,10 +52,62 @@ async function captureMpState(page, tag = 'page') {
     }
 }
 
+/** Bananagrams __bananaMpDebug enrichment when game iframe is loaded. */
+async function captureBananaMpDebug(page, tag = 'page') {
+    try {
+        return await page.evaluate(({ t }) => {
+            const w = document.getElementById('game-frame')?.contentWindow;
+            if (!w?.__bananaMpDebug) return null;
+            const snap = w.__bananaMpDebug.snapshot?.() ?? null;
+            const client = w.__bananaMpDebug.clientState?.() ?? snap?.clientState ?? null;
+            return {
+                client,
+                split: snap?.split ?? null,
+                gamePhase: snap?.gamePhase ?? null,
+                epoch: snap?.epoch ?? null,
+                coherence: snap?.coherence ?? null,
+                revision: snap?.revision ?? null,
+                lastInventoryApply: snap?.seq?.lastInventoryApply ?? null,
+                splitBundle: snap?.seq?.splitBundle ?? null,
+                boardApply: snap?.seq?.boardApply ?? null
+            };
+        }, { t: tag });
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Thin MP state + optional Bananagrams debug bundle + recent browser diag ring.
+ * @param {import('playwright').Page} page
+ * @param {string} [tag]
+ */
+async function captureMpDiag(page, tag = 'page') {
+    const [thin, banana] = await Promise.all([
+        captureMpState(page, tag),
+        captureBananaMpDebug(page, tag)
+    ]);
+    const consoleDiag = drainMpDiagRing(page);
+    return pruneEmpty({
+        ...thin,
+        banana: banana || undefined,
+        consoleDiag: consoleDiag.length ? consoleDiag : undefined
+    });
+}
+
+/** @param {Record<string, unknown>} obj */
+function pruneEmpty(obj) {
+    const out = { ...obj };
+    Object.keys(out).forEach((k) => {
+        if (out[k] === undefined) delete out[k];
+    });
+    return out;
+}
+
 async function captureBothMpStates(page1, page2, label) {
     const [host, guest] = await Promise.all([
-        captureMpState(page1, `${label} — host (P1)`),
-        captureMpState(page2, `${label} — guest (P2)`)
+        captureMpDiag(page1, `${label} — host (P1)`),
+        captureMpDiag(page2, `${label} — guest (P2)`)
     ]);
     return { label, host, guest };
 }
@@ -68,7 +121,7 @@ async function captureBothMpStates(page1, page2, label) {
 async function captureAllMpStates(pages, playerMeta, label = 'all players') {
     const snaps = await Promise.all(pages.map((page, i) => {
         const role = playerMeta?.[i]?.role || `P${i + 1}`;
-        return captureMpState(page, `${label} — ${role}`);
+        return captureMpDiag(page, `${label} — ${role}`);
     }));
     return { label, players: snaps };
 }
@@ -103,7 +156,7 @@ async function waitForDiag(page, label, predicate, arg, timeoutMs = WAIT_MS, mpP
         } else if (mpPages?.page1 && mpPages?.page2) {
             snaps = await captureBothMpStates(mpPages.page1, mpPages.page2, label);
         } else {
-            snaps = { label, target: await captureMpState(page, label) };
+            snaps = { label, target: await captureMpDiag(page, label) };
         }
         throw timeoutError(label, timeoutMs, snaps, err.message);
     }
@@ -124,6 +177,7 @@ module.exports = {
     WAIT_MS,
     waitOpts,
     captureMpState,
+    captureMpDiag,
     captureBothMpStates,
     captureAllMpStates,
     resolveMpSnapshotPages,

@@ -66,7 +66,7 @@ function buildAiSideCtxs(ctx, opts = {}) {
         actorIndex: i,
         isGuest: i > 0,
         mp: ctx.mp,
-        label: `${p.role}${i === 0 ? ' (Host)' : ''}`,
+        label: `${p.role}${i === 0 ? ' (Host)' : ' (Guest)'}`,
         ...opts
     }));
 }

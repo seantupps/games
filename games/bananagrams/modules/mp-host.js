@@ -6,9 +6,9 @@
             /** Drop players no longer in room playerData (non-host left). */
             _hostPurgeDepartedPlayers() {
                 if (!this._isMultiplayerMode() || !this.isHost()) return false;
-                // During active play (post-SPLIT), transient room snapshots can briefly omit playerData.
-                // Avoid destructive purges that can erase live inventory/ownership state.
-                if (this.gameStarted) return false;
+                // Pre-split: roster still settling — transient playerData must not erase dealt hands.
+                // Post-SPLIT: same — brief omissions must not wipe live inventory.
+                if (!this.gameStarted) return false;
                 const active = new Set(this._getPlayerUids());
                 const hostUid = this.roomData?.host || this._myUid();
                 if (hostUid) active.add(hostUid);
@@ -50,13 +50,22 @@
 
             _maybeSetupMultiplayer() {
                 if (!this._isMultiplayerMode() || !this.isHost()) return;
-                if (!this.canMutatePlayingBoard?.()) return;
                 if (typeof BananaRules === 'undefined') return;
                 const uids = this._getPlayerUids();
                 if (uids.length < 2) return;
                 const board = this._mpBoardFromRoom();
                 if (board && this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW) return;
                 if (board?.gameStarted) return;
+                const hands = board?.tilesOwnedByPlayer || {};
+                const needsInitialDeal = !Object.values(hands).some((h) => h?.length > 0);
+                if (needsInitialDeal) {
+                    this._hostReviewCompleting = false;
+                    this._hostReviewTransitionActive = false;
+                    this._exitReviewLocalState?.();
+                    this._setGamePhase?.('playing');
+                } else if (!this.canMutatePlayingBoard?.()) {
+                    return;
+                }
                 const hasDealtBoard = board?.version >= 2
                     && board.tilesOwnedByPlayer
                     && Object.values(board.tilesOwnedByPlayer).some((hand) => hand?.length > 0);
@@ -80,9 +89,54 @@
                 this._setupMultiplayerHand(uids);
             },
 
+            /**
+             * Host authority → network snapshot shape.
+             * Same structure guests receive; used for local projection before/after publish.
+             */
+            _hostAuthorityBoardSnapshot(uids) {
+                const party = uids || [];
+                this._hostEnsureMpStores?.();
+                const tilesOwnedByPlayer = {};
+                const tilePositionsByPlayer = {};
+                party.forEach((uid) => {
+                    const ownedRaw = this._mpOwned?.[uid] || [];
+                    if (ownedRaw.length) {
+                        tilesOwnedByPlayer[uid] = ownedRaw.map((t) => ({
+                            id: String(t.id),
+                            faceUp: !!t.faceUp
+                        }));
+                    }
+                    const positions = this._mpPlayerLayouts?.[uid];
+                    if (positions && Object.keys(positions).length) {
+                        const list = Object.entries(positions)
+                            .filter(([, p]) => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+                            .map(([id, p]) => ({
+                                id,
+                                x: Math.round(p.x),
+                                y: Math.round(p.y)
+                            }));
+                        if (list.length) tilePositionsByPlayer[uid] = list;
+                    }
+                });
+                return {
+                    version: this._mpPoolUsesTileIds?.() ? 5 : 4,
+                    gameStarted: false,
+                    started: true,
+                    tilesOwnedByPlayer,
+                    tilePositionsByPlayer,
+                    inventorySeq: { ...(this._mpInventorySeq || {}) }
+                };
+            },
+
             _setupMultiplayerHand(uids) {
                 if (typeof BananaRules === 'undefined') return;
                 if (!uids || uids.length < 2) return;
+                if (this._hostInitialDealInFlight) return;
+                this._hostInitialDealInFlight = true;
+                try {
+                this._hostReviewCompleting = false;
+                this._hostReviewTransitionActive = false;
+                this._exitReviewLocalState?.();
                 this._stopTimer();
                 this.started = true;
                 this.gameStarted = false;
@@ -91,10 +145,10 @@
                 this._setGamePhase?.('playing');
                 const handSize = this._handSizeForParty();
                 const origin = { x: this.ORIGIN, y: this.ORIGIN };
-                this._mpOwned = {};
-                this._mpInventorySeq = {};
                 const shuffledIds = this._mpMaterializeDeck?.();
                 if (!shuffledIds?.length) return;
+                this._mpOwned = {};
+                this._mpInventorySeq = {};
                 this._tilePool = shuffledIds;
                 const myUid = this._myUid();
                 uids.forEach((uid) => {
@@ -130,22 +184,51 @@
                 this._selectionHighlight = false;
                 this._bannerText = '';
                 this._peelSeq = 0;
+                this._dumpSeq = 0;
+                this._lastPeelSeq = 0;
+                this._lastDumpSeq = 0;
                 this._lastPeelDraws = null;
                 this._localInventorySeq = 0;
                 this._updateHudEl();
-                this.tiles = this._mergeInventoryWithLayout(
-                    this._mpOwned[myUid],
-                    this._mpPlayerLayouts[myUid] || {},
-                    null
-                );
-                this._localInventorySeq = this._mpInventorySeq[myUid] || 1;
-                this._hostSyncBoard({ immediate: true });
-                this._applyDefaultPlayingViewport?.();
-                this.requestRender();
-                this._syncViewportAfterLayout();
+                const dealBoard = this._hostAuthorityBoardSnapshot(uids);
+                const deckSize = uids.length * handSize + (this._tilePool?.length || 0);
+                const dealTxn = {
+                    uids,
+                    handSize,
+                    deckSize,
+                    pool: [...this._tilePool],
+                    tilesOwnedByPlayer: dealBoard.tilesOwnedByPlayer,
+                    inventorySeq: dealBoard.inventorySeq
+                };
+                if (typeof this._hostValidateDealTxn === 'function'
+                    && !this._hostValidateDealTxn(dealTxn)) {
+                    const reason = typeof this._hostDealTxnFailureReason === 'function'
+                        ? (this._hostDealTxnFailureReason(dealTxn) || 'unknown')
+                        : 'unknown';
+                    console.error('[Bananagrams][deal-txn] validation failed', reason, dealTxn);
+                    return;
+                }
+                const myInvSeq = this._mpInventorySeq[myUid] || 1;
+                const projected = this._applyMpInventoryAxis(dealBoard, myUid, {
+                    force: true,
+                    reset: true,
+                    inventorySeq: myInvSeq,
+                    _inventoryApplySource: 'host-initial-deal'
+                });
+                if (!projected) {
+                    this._logInventoryProjectionFailure?.('host-initial-deal', dealBoard, myUid);
+                }
                 this._mpLetterIntegrityCheck?.('initial-deal');
                 this._mpDistributionInvariantCheck?.('initial-deal');
                 this._mpAssertDealEpochMembership?.('initial-deal');
+                this._hostSyncBoard({ immediate: true });
+                if (!projected) return;
+                this._applyDefaultPlayingViewport?.();
+                this.requestRender();
+                this._syncViewportAfterLayout();
+                } finally {
+                    this._hostInitialDealInFlight = false;
+                }
             },
 
             setupNewHand() {
@@ -159,12 +242,17 @@
                 this.gameStarted = false;
                 this._tilePool = this._buildTilePool();
                 this._nextTileId = 0;
-                this.tiles = BananaRules.dealSoloHand(
+                const dealt = BananaRules.dealSoloHand(
                     this._tilePool,
                     { x: this.ORIGIN, y: this.ORIGIN },
                     BananaRules.SOLO_HAND,
                     this._nextTileId
                 );
+                this._commitMpTilesProjection?.(dealt, {
+                    mode: 'playing',
+                    source: 'setupNewHand-solo',
+                    tileCount: dealt.length
+                }) || (this.tiles = dealt);
                 this._nextTileId += this.tiles.length;
                 this.elapsedMs = 0;
                 this._timerStart = null;
@@ -181,34 +269,22 @@
             },
 
             _hostBeginSplit() {
-                if (this.gameStarted) return;
-                if (!this.canMutatePlayingBoard?.()) {
-                    return;
-                }
-                const startedAt = Date.now();
-                this.gameStarted = true;
-                this._mpStartedAt = startedAt;
-                Object.values(this._mpOwned || {}).forEach((owned) => {
-                    owned.forEach((t) => { t.faceUp = true; });
-                });
-                this._syncMpTimerFromBoard(startedAt);
-                this._hostSyncBoard({ immediate: true });
-                this.requestRender();
+                return this._hostCommitSplitTransaction?.() ?? false;
             },
 
-            /** Guest: mirror host SPLIT locally so drag positions are not wiped by stale pre-split boards. */
-            _guestBeginSplit() {
-                if (this.gameStarted) return;
-                if (!this.canMutatePlayingBoard?.()) {
-                    return;
-                }
-                const startedAt = Date.now();
-                this.gameStarted = true;
-                this._mpStartedAt = startedAt;
-                this.tiles.forEach((t) => { t.faceUp = true; });
-                this._timerStart = startedAt;
-                this._startTimer();
+            /** Guest: face-up/timer/deferred-board projection only after coherent split bundle. */
+            _projectGuestSplitFromBoard(board) {
+                if (this.isHost?.()) return;
+                const snapBoard = board || this._mpBoardFromRoom?.(this.roomData);
+                if (!this._mpGuestWireGameStarted?.(snapBoard)) return;
+                if (!this.canMutatePlayingBoard?.()) return;
+                this._setGamePhase?.('playing');
+                this._mutateMpTilesInPlace?.('guest-split-face-up', (tiles) => {
+                    tiles.forEach((t) => { t.faceUp = true; });
+                    return true;
+                }, { mode: 'playing' });
                 this._mpDeferredBoard = null;
+                this._flushDeferredBoardApply?.();
                 this.requestRender();
             },
 
@@ -217,118 +293,35 @@
                 this._dumpActorUid = uid;
             },
 
+            _hostBumpPeel(uid) {
+                this._peelSeq = (this._peelSeq || 0) + 1;
+                this._peelActorUid = uid;
+            },
+
+            /** @see mp-dump.js — _hostCommitDumpTransaction */
             _hostApplyDump(uid, tileId) {
-                const result = this._hostApplyDumpInventoryOnly(uid, tileId);
-                if (!result.ok) return false;
-                this._hostBumpInventorySeq(uid);
-                this._hostBumpDump(uid);
-                this._hostApplyLocalOwnedToTiles?.(uid, result.removedId || tileId);
-                this._hostSyncBoard({ immediate: true });
-                this._mpDistributionInvariantCheck?.('host-dump');
-                this._mpLetterIntegrityCheck?.('host-dump');
-                return true;
+                return this._hostCommitDumpTransaction(uid, tileId);
             },
 
-            _hostApplyDumpInventoryOnly(uid, tileId) {
-                this._mpEnsureIdPoolModeFromPool?.();
-                this._hostHydrateOwnedFromBoard?.(uid);
-                const owned = [...(this._mpOwned[uid] || [])];
-                const idx = owned.findIndex((o) => o.id === tileId);
-                if (idx < 0) return { ok: false, reason: 'tile-not-found' };
-                const min = typeof BananaRules !== 'undefined' ? BananaRules.DUMP_DRAW_COUNT : 3;
-                if ((this._tilePool?.length ?? 0) < min) return { ok: false, reason: 'short-pool' };
-
-                const removed = owned[idx];
-                const beforePoolSig = this._mpLetterSigFromPool?.(this._tilePool)
-                    ?? this._mpLetterSigFromLetters?.(this._tilePool);
-                if (!this._mpAssertIdPoolForMutation?.('host-dump')) {
-                    return { ok: false, reason: 'no-id-pool' };
-                }
-                const nextPool = [...this._tilePool];
-                const drawnIds = this._mpDumpTileIdToPool(nextPool, removed.id, min);
-                if (drawnIds.length < min) return { ok: false, reason: 'short-pool' };
-                this._tilePool = nextPool;
-                owned.splice(idx, 1);
-                const drawnTiles = [];
-                drawnIds.forEach((id) => {
-                    owned.push({ id, faceUp: true });
-                    drawnTiles.push({ id, letter: this._mpLetter(id) });
-                });
-
-                this._mpOwned[uid] = owned;
-                this._hostRepairOwnedFromCanonical?.('host-dump');
-                this._mpPoolAudit?.('dump', {
-                    beforePoolSig,
-                    returnedTile: {
-                        id: removed.id,
-                        runtimeLetter: removed.letter,
-                        canonicalLetter: this._mpLetter(removed.id)
-                    },
-                    drawnTiles,
-                    afterPoolSig: this._mpLetterSigFromPool?.(this._tilePool)
-                        ?? this._mpLetterSigFromLetters?.(this._tilePool),
-                    ownedSig: this._mpCombinedOwnedSig?.(),
-                    combinedSig: `${this._mpLetterSigFromPool?.(this._tilePool) ?? ''}+${this._mpCombinedOwnedSig?.()}`
-                });
-                return { ok: true, removedId: removed.id };
-            },
-
-            /** Host local bunch during play; guests read synced global/board pool. */
-            _mpAuthoritativeBunchLen() {
-                if (this.isHost?.()) return this._tilePool?.length ?? 0;
+            /** Debug/triage — wire board.pool length (guest should match _tilePool after sync). */
+            _mpGuestPoolWireLen() {
                 const board = this._mpBoardFromRoom?.(this.roomData);
-                if (Array.isArray(board?.pool)) {
-                    const remote = board.pool.length;
-                    const local = this._tilePool?.length ?? 0;
-                    if (this.gameStarted && !this._winnerUid && remote !== local) {
-                        // Pool only decreases on host peel/dump — never inflate local from stale board echo.
-                        if (remote < local) this._tilePool = [...board.pool];
-                    }
-                    // Host is pool authority: trust local drain when RTDB board.pool lags after host peel.
-                    if (local === 0 && remote > 0) return 0;
-                    return remote;
-                }
+                return Array.isArray(board?.pool) ? board.pool.length : null;
+            },
+
+            _mpGuestPoolCacheLen() {
                 return this._tilePool?.length ?? 0;
             },
 
-            /** Active MP players for peel draws — roster with live hands, not stale room slots. */
-            _peelPartyUids(actorUid) {
-                const roster = this._getPlayerUids().filter(Boolean);
-                this._hostEnsureMpStores?.();
-                const board = this._mpBoardFromRoom?.(this.roomData) || {};
-                const roomOwned = board.tilesOwnedByPlayer || {};
-                const localOwned = this._mpOwned || {};
-                const handLen = (uid) => {
-                    const local = localOwned[uid];
-                    if (Array.isArray(local) && local.length > 0) return local.length;
-                    const remote = roomOwned[uid];
-                    return Array.isArray(remote) ? remote.length : 0;
-                };
-                let party = roster.filter((uid) => handLen(uid) > 0);
-                if (party.length < 2) party = [...roster];
-                if (party.length < 2) {
-                    const hostUid = this.roomData?.host || this._myUid();
-                    party = [...new Set([hostUid, actorUid].filter(Boolean))];
-                }
-                return [...new Set(party)].sort();
+            /** Host: live _tilePool. Guest: _tilePool mirrored from wire on every board apply. */
+            _mpAuthoritativeBunchLen() {
+                if (this.isHost?.()) return this._tilePool?.length ?? 0;
+                this._mpGuestEnsurePoolSynced?.();
+                return this._tilePool?.length ?? 0;
             },
 
-            /** Guest: align local bunch with host board pool before optimistic peel draws. */
-            _guestAdoptAuthoritativePoolForPeel() {
-                if (this.isHost?.() || !this._isMultiplayerMode?.()) return;
-                const board = this._mpBoardFromRoom?.(this.roomData);
-                if (!Array.isArray(board?.pool)) return;
-                const local = this._tilePool?.length ?? 0;
-                const remote = board.pool.length;
-                if (remote < local || local === 0) {
-                    this._tilePool = [...board.pool];
-                    if (Number.isFinite(board.nextTileId)) this._nextTileId = board.nextTileId;
-                }
-            },
-
-            /** Guest peel: board sync is authoritative (no local pool draw or id minting). */
-            _guestApplyOptimisticPeel() {
-                return false;
+            _mpDisplayPoolLen() {
+                return this._mpAuthoritativeBunchLen?.() ?? (this._tilePool?.length ?? 0);
             },
 
             /** Flush latest MP layouts/inventory before host registers win (real peel-win or dev /win). */
@@ -377,116 +370,6 @@
                 return true;
             },
 
-            _hostPeelForPlayer(uid, guestLayout = null) {
-                if (!this._checker || !BananaGrid) return false;
-                if (!this.canMutatePlayingBoard?.()) return false;
-                this._hostEnsureMpStores();
-                const myUid = this._myUid();
-                if (guestLayout && uid !== myUid) {
-                    if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
-                    const positions = {};
-                    guestLayout.forEach((p) => {
-                        if (p?.id != null) positions[p.id] = { x: p.x, y: p.y };
-                    });
-                    this._mpPlayerLayouts[uid] = positions;
-                }
-                const handRaw = uid === myUid
-                    ? this.tiles
-                    : (guestLayout ? this._handFromOwnedAndPositions(uid, guestLayout) : null);
-                const hand = this._snapHandForValidation?.(handRaw) || handRaw;
-                if (!hand?.length || hand.length < 3) return false;
-                const result = BananaGrid.validateGrid(hand, this._checker);
-                if (!result.ok || !this._allTilesPlacedOn(hand)) return false;
-                const hasThreeTileWord = (result.words || []).some((w) => String(w || '').length >= 3);
-                if (!hasThreeTileWord) return false;
-        
-                const board = this._mpBoardFromRoom?.(this.roomData) || {};
-                const uids = this._peelPartyUids(uid);
-                const roomOwned = board?.tilesOwnedByPlayer || {};
-                const ownedByUid = {};
-                // Peel uses an explicit in-memory baseline to avoid room snapshot races.
-                // Prefer in-memory owned; fall back to board only when local is empty.
-                uids.forEach((u) => {
-                    const remote = Array.isArray(roomOwned?.[u])
-                        ? this._mpNormalizeBoardOwned?.(roomOwned[u], true)
-                            || roomOwned[u].map((t) => ({ id: t.id, faceUp: !!t.faceUp }))
-                        : [];
-                    const local = Array.isArray(this._mpOwned?.[u])
-                        ? this._mpOwned[u].map((t) => ({ id: t.id, faceUp: !!t.faceUp }))
-                        : [];
-                    if (local.length) {
-                        ownedByUid[u] = local;
-                        return;
-                    }
-                    if (remote.length) {
-                        ownedByUid[u] = remote;
-                        return;
-                    }
-                    this._hostHydrateOwnedFromBoard?.(u);
-                    ownedByUid[u] = (this._mpOwned?.[u] || []).map((t) => ({
-                        id: t.id,
-                        faceUp: !!t.faceUp
-                    }));
-                });
-                const playerCount = uids.length;
-                if (!this._tilePool.length || this._tilePool.length < playerCount) return false;
-                if (!this._mpAssertIdPoolForMutation?.('host-peel')) return false;
-                const beforePoolSig = this._mpLetterSigFromPool?.(this._tilePool)
-                    ?? this._mpLetterSigFromLetters?.(this._tilePool);
-                const drawn = {};
-                const drawnIds = {};
-                const drawnTiles = [];
-                uids.forEach((u) => {
-                    const ids = this._mpDrawIdsFromPool(this._tilePool, 1);
-                    if (!ids.length) return;
-                    const id = ids[0];
-                    if (!ownedByUid[u]) ownedByUid[u] = [];
-                    const letter = this._mpLetter(id);
-                    ownedByUid[u].push({ id, faceUp: true });
-                    drawn[u] = letter;
-                    drawnIds[u] = id;
-                    drawnTiles.push({ id, letter, player: u });
-                });
-                if (Object.keys(drawn).length !== playerCount) return false;
-                uids.forEach((u) => {
-                    this._mpOwned[u] = ownedByUid[u] || [];
-                });
-                if (uids.includes(myUid)) {
-                    this._hostApplyLocalOwnedToTiles?.(myUid);
-                }
-                this._mpPoolAudit?.('peel', {
-                    beforePoolSig,
-                    returnedTile: null,
-                    drawnTiles,
-                    afterPoolSig: this._mpLetterSigFromPool?.(this._tilePool)
-                        ?? this._mpLetterSigFromLetters?.(this._tilePool),
-                    ownedSig: this._mpCombinedOwnedSig?.(),
-                    combinedSig: `${this._mpLetterSigFromPool?.(this._tilePool) ?? ''}+${this._mpCombinedOwnedSig?.()}`
-                });
-                this._lastPeelDraws = drawn;
-                this._peelSeq = (this._peelSeq || 0) + 1;
-                this._peelActorUid = uid;
-                uids.forEach((u) => this._hostBumpInventorySeq(u));
-                if (typeof this._hostCancelPendingBoardSync === 'function') {
-                    this._hostCancelPendingBoardSync();
-                }
-                this._hostRepairOwnedFromCanonical?.('host-peel');
-                if (typeof this._hostWriteBoard === 'function') {
-                    this._hostWriteBoard('playing');
-                } else {
-                    this._hostSyncBoard({ immediate: true });
-                }
-                const poolEl = document.getElementById('banana-pool-count');
-                if (poolEl) poolEl.textContent = String(this._tilePool.length);
-                this.requestRender?.();
-                if (this.roomData?.global?.board && Array.isArray(this._tilePool)) {
-                    this._syncHostPoolOnRoomCaches?.();
-                }
-                this._mpDistributionInvariantCheck?.('host-peel');
-                this._mpLetterIntegrityCheck?.('host-peel');
-                return true;
-            },
-
             /**
              * @returns {'handled'|'drop'|'retry'} handled = success; drop = stale/permanent fail; retry = leave queued
              */
@@ -509,16 +392,10 @@
                     return 'handled';
                 }
                 if (msg.type === 'dump' && msg.tileId) {
-                    this._mpLetterIntegrityCheck?.('host-dump-reconcile');
-                    this._mpDistributionInvariantCheck?.('host-dump-reconcile');
-                    if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
-                    console.warn('[Bananagrams] guest dump failed on host for', uid, msg.tileId);
-                    return 'retry';
+                    return this._hostHandleDumpInteraction(uid, msg);
                 }
                 if (msg.type === 'peel') {
-                    const layout = Array.isArray(msg.positions) ? msg.positions : null;
-                    if (this._hostPeelForPlayer(uid, layout)) return 'handled';
-                    return 'drop';
+                    return this._hostHandlePeelInteraction(uid, msg);
                 }
                 if (msg.type === 'bananas') {
                     const layout = Array.isArray(msg.positions) ? msg.positions : null;
@@ -536,6 +413,12 @@
                     }
                     const filtered = msg.tiles.filter((t) => t?.id);
                     if (!filtered.length) return 'drop';
+                    filtered.forEach((t) => {
+                        const norm = this._mpNormLetter?.(t.letter);
+                        if (norm && /^[A-Z]$/.test(norm)) {
+                            this._mpCanonicalRegister?.(t.id, norm, 'victory-layout');
+                        }
+                    });
                     this._hostSetOwned(uid, filtered.map((t) => ({
                         id: t.id,
                         faceUp: !!t.faceUp
@@ -548,18 +431,27 @@
                     if (!this._reviewLayouts) this._reviewLayouts = {};
                     this._reviewLayouts[uid] = filtered.map((t) => ({
                         ...t,
-                        letter: this._mpCanonicalLetter(t.id, t.letter, 'victory-layout-tile')
+                        letter: this._mpNormLetter?.(t.letter) || t.letter
                     }));
                     if (typeof this._logReviewBoards === 'function') {
                         this._logReviewBoards('host-received-ending', { [uid]: filtered });
                     }
                     if (this._hostMaySyncReview?.()) {
-                        this._ensureReviewLayoutsSnapshot();
-                        const display = this._displayReviewLayoutsFromOrig(this._reviewLayouts);
+                        const orig = this._ensureReviewLayoutsSnapshot();
+                        const party = this._getPlayerUids?.() || [];
+                        const display = this._displayReviewLayoutsFromOrig(orig);
                         const fp = this._reviewLayoutsFingerprint(display);
                         if (!fp || fp !== this._reviewLayoutsSyncedFp) {
                             this._reviewLayoutsSyncedFp = fp;
                             this._hostSyncReviewState({ processBananaInteractions: false });
+                        }
+                        if (this._reviewLayoutsReady?.(orig, party)) {
+                            this._reviewLayoutsFp = null;
+                            this._applyReviewLayouts(display);
+                            this._ensureReviewTilesProjected?.(this._boardReviewSnapshot?.());
+                            if (!this._postGameReview) {
+                                this._activateReviewUi?.();
+                            }
                         }
                     }
                     return 'handled';

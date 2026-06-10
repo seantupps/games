@@ -92,7 +92,9 @@ function printBenchmarkResults(opts) {
         if (!res.success) {
             allPassed = false;
             if (res.error) {
-                console.log(`${RED}Error output for ${res.name}:${RESET}\n${formatAuditError({ message: res.error, details: res.details, stack: res.stack })}\n`);
+                const body = formatAuditError({ message: res.error, details: res.details, stack: res.stack });
+                // Failures always emit to stderr — never gated by FIVE_RUNNER_QUIET.
+                console.error(`${RED}Error output for ${res.name}:${RESET}\n${body}\n`);
             }
         }
     }

@@ -92,7 +92,7 @@
     /**
      * Whether an incoming board should be applied (same rules as merge).
      */
-    function shouldApplyBoard(cachedResetCount, incomingResetCount, cachedBoardSeq, incomingBoard) {
+    function shouldApplyBoard(cachedResetCount, incomingResetCount, cachedBoardSeq, incomingBoard, cachedStartedAt) {
         if (!incomingBoard || typeof incomingBoard !== 'object') return false;
         const inRc = incomingResetCount ?? 0;
         const cRc = cachedResetCount ?? 0;
@@ -100,7 +100,70 @@
         if (inRc < cRc) return false;
         const incSeq = incomingBoard.seq ?? 0;
         const cSeq = cachedBoardSeq ?? 0;
-        return incSeq >= cSeq;
+        if (incSeq >= cSeq) return true;
+        const incStarted = incomingBoard.startedAt ?? 0;
+        const prevStarted = cachedStartedAt ?? 0;
+        return incStarted > 0 && incStarted > prevStarted;
+    }
+
+    /** Per-player nested board fields — never replace a non-empty hand with an empty RTDB partial. */
+    function mergePerPlayerBoardField(prevObj, incObj) {
+        const out = { ...(prevObj || {}) };
+        if (!incObj || typeof incObj !== 'object') return out;
+        Object.entries(incObj).forEach(([uid, val]) => {
+            if (val === undefined) return;
+            if (Array.isArray(val) && val.length === 0
+                && Array.isArray(out[uid]) && out[uid].length > 0) {
+                return;
+            }
+            out[uid] = val;
+        });
+        return out;
+    }
+
+    /** Per-player inventorySeq — take the higher seq per uid (monotonic within epoch). */
+    function mergePerPlayerInventorySeq(prevObj, incObj) {
+        const out = { ...(prevObj || {}) };
+        if (!incObj || typeof incObj !== 'object') return out;
+        Object.entries(incObj).forEach(([uid, seq]) => {
+            if (typeof seq !== 'number' || !Number.isFinite(seq)) return;
+            out[uid] = Math.max(out[uid] ?? 0, seq);
+        });
+        return out;
+    }
+
+    function mergeBoardInventoryFields(prevBoard, incBoard, merged) {
+        if (!merged || typeof merged !== 'object') return merged;
+        const prev = prevBoard || {};
+        const inc = incBoard || {};
+        if (prev.tilesOwnedByPlayer || inc.tilesOwnedByPlayer) {
+            merged.tilesOwnedByPlayer = mergePerPlayerBoardField(
+                prev.tilesOwnedByPlayer,
+                inc.tilesOwnedByPlayer
+            );
+        }
+        if (prev.hands || inc.hands) {
+            merged.hands = mergePerPlayerBoardField(prev.hands, inc.hands);
+        }
+        if (prev.inventorySeq || inc.inventorySeq) {
+            merged.inventorySeq = mergePerPlayerInventorySeq(
+                prev.inventorySeq,
+                inc.inventorySeq
+            );
+        }
+        if (prev.tilePositionsByPlayer || inc.tilePositionsByPlayer) {
+            merged.tilePositionsByPlayer = mergePerPlayerBoardField(
+                prev.tilePositionsByPlayer,
+                inc.tilePositionsByPlayer
+            );
+        }
+        if (prev.layoutSeq || inc.layoutSeq) {
+            merged.layoutSeq = mergePerPlayerInventorySeq(prev.layoutSeq, inc.layoutSeq);
+        }
+        if (merged.tilesOwnedByPlayer) {
+            delete merged.hands;
+        }
+        return merged;
     }
 
     /**
@@ -122,12 +185,26 @@
         }
         const prevSeq = prevBoard.seq ?? 0;
         const incSeq = incBoard.seq ?? 0;
+        const prevStarted = prevBoard.startedAt ?? 0;
+        const incStarted = incBoard.startedAt ?? 0;
         const prevReview = prevBoard.phase === 'review' || prevBoard.reviewPhase === true;
         const incReview = incBoard.phase === 'review' || incBoard.reviewPhase === true;
         if (incSeq === prevSeq && prevReview && !incReview) {
             return prevBoard;
         }
+        // Same-epoch soft reset: seq restarts on redeals but startedAt advances at SPLIT.
+        if (incSeq < prevSeq && incStarted > 0 && incStarted > prevStarted) {
+            const merged = { ...prevBoard, ...incBoard };
+            merged.boardRevision = Math.max(
+                prevBoard.boardRevision ?? 0,
+                incBoard.boardRevision ?? 0
+            );
+            return mergeBoardInventoryFields(prevBoard, incBoard, merged);
+        }
         if (incSeq >= prevSeq) {
+            if (incStarted > 0 && prevStarted > 0 && incStarted < prevStarted) {
+                return prevBoard;
+            }
             const merged = { ...prevBoard, ...incBoard };
             const prevPlayingReset = prevBoard.phase === 'playing'
                 && prevBoard.reviewPhase !== true
@@ -147,7 +224,11 @@
                     delete merged.reviewLayoutsOrig;
                 }
             }
-            return merged;
+            merged.boardRevision = Math.max(
+                prevBoard.boardRevision ?? 0,
+                incBoard.boardRevision ?? 0
+            );
+            return mergeBoardInventoryFields(prevBoard, incBoard, merged);
         }
         return prevBoard;
     }
@@ -171,15 +252,9 @@
         const rc = meta.resetCount ?? legacyGlobal.resetCount ?? 0;
         const stateBoard = state.board;
         const legacyBoard = legacyGlobal.board;
-        if (stateBoard && legacyBoard && stateBoard !== legacyBoard) {
-            const stateSeq = stateBoard.seq ?? 0;
-            const legacySeq = legacyBoard.seq ?? 0;
-            if (stateSeq > legacySeq) return stateBoard;
-            if (legacySeq > stateSeq) return legacyBoard;
-            // Same seq: canonical storage (state/board) wins over stale legacy global/board.
-            return { ...legacyBoard, ...stateBoard };
-        }
-        return stateBoard ?? legacyBoard ?? null;
+        // state/board is canonical; legacy global/board is read-compat only and may lag in-memory.
+        if (stateBoard) return stateBoard;
+        return legacyBoard ?? null;
     }
 
     /**

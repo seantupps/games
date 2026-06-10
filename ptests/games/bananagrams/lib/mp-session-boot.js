@@ -79,9 +79,12 @@ async function bootMpPlaySessionThroughDeal(ctx, opts = {}) {
 async function bootMpPlaySessionSplit(ctx, frames, opts = {}) {
     const mobile = !!opts.mobile;
     const mp = ctx.mp;
+    const realPlayBanners = !!opts.realPlayBanners;
 
     log('SPLIT: host starts game; remotes sync...');
-    await Promise.all(frames.map((f) => enableFastBanners(f)));
+    if (!realPlayBanners) {
+        await Promise.all(frames.map((f) => enableFastBanners(f)));
+    }
 
     const alreadySplit = await ctx.host.page.evaluate(() => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;

@@ -9,18 +9,18 @@ const {
     WAIT_MS,
     enableFastBanners,
     dismissBanners,
-    assertActionBannerOnBoth,
     waitForDiag,
     dumpTile,
     syncGuestInventoryToHost,
-    flushHostBananaInteractions,
-    assertAllTilesVisible
+    flushHostBananaInteractions
 } = lib;
-const { sync, accounting, core } = require('../../assertions');
+const { sync, accounting, core, spawn, authority } = require('../../assertions');
+const { assertAllTilesVisible } = spawn.visibility;
+const { assertActionBannerOnBoth } = authority;
+const { assertDumpSpawnComplete } = spawn.dump;
 const { assertAllPlayersSynced } = sync;
 const { assertPeelAccounting } = accounting;
 const { capturePlayerStates } = core.capture;
-const { solveAndApplyAiMove } = require('../../lib/ai-playthrough-apply');
 const { patchMpThreeLetterChecker } = require('../../fixtures/mp-four-tile');
 
 async function captureTileOffsets(page, ids) {
@@ -243,7 +243,8 @@ async function runFocusDumpPeelStress(opts) {
 
     const {
         setGuestPeelFixtureOnHost,
-        prepareGuestPeelGridOnClient
+        prepareGuestPeelGridOnClient,
+        setupHostPeelGrid
     } = require('../../fixtures/peel-grid');
 
     const setGuestPeelFixture = (suffix) => setGuestPeelFixtureOnHost({
@@ -293,6 +294,22 @@ async function runFocusDumpPeelStress(opts) {
             const board = (typeof RtdbSchema !== 'undefined' && room) ? RtdbSchema.readBoardFromRoom(room) : room?.global?.board;
             return (board?.dumpSeq || 0) > seq && board?.dumpActorUid === 'u_banana_guest';
         }, { seq: guestDumpBeforeSeq }, WAIT_MS, mp);
+        if (mobile) {
+            const spawn = await assertDumpSpawnComplete(
+                frame2,
+                guestDump.beforeIds,
+                `focus guest dump spawn r${i}`,
+                {
+                    mobile: true,
+                    hostPage: page1,
+                    dumpSeqBefore: guestDumpBeforeSeq,
+                    hostUid: HOST_UID
+                }
+            );
+            if (!spawn.ok) {
+                throw new Error(`focus guest dump spawn r${i} failed: ${JSON.stringify(spawn)}`);
+            }
+        }
         await waitJitter();
         const afterGuestDump = await capturePair(`r${i}-after-guest-dump`);
         const guestDumpAdded = afterGuestDump.guest.handIds.filter((id) => !guestDumpBeforeHand.has(id));
@@ -311,10 +328,11 @@ async function runFocusDumpPeelStress(opts) {
         );
 
         log(`FOCUS round ${i}/${focusRounds}: host peel`);
-        const hostPeelSetup = await solveAndApplyAiMove(frame1);
-        if (!hostPeelSetup.ok) {
-            throw new Error(`focus host peel solve failed r${i}: ${JSON.stringify(hostPeelSetup)}`);
+        const hostPeelSetup = await setupHostPeelGrid(frame1);
+        if (!hostPeelSetup.placed || !hostPeelSetup.valid) {
+            throw new Error(`focus host peel grid failed r${i}: ${JSON.stringify(hostPeelSetup)}`);
         }
+        await flushHostBananaInteractions(page1);
         await Promise.all([settleRender(page1), settleRender(page2)]);
         const beforeHostPeel = await capturePair(`r${i}-before-host-peel`);
         const hostPeelBeforeSeq = beforeHostPeel.host.peelSeq;

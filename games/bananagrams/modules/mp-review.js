@@ -24,6 +24,185 @@
                 return this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW;
             },
 
+            /** Wire board.phase — single network authority for client lifecycle phase. */
+            _wireGamePhase(board = this._boardReviewSnapshot()) {
+                return board ? this._boardPhase(board) : null;
+            },
+
+            /** Sync client board phase mirror from wire on every board apply. */
+            _syncClientPhaseFromBoard(board) {
+                if (!board) return;
+                this._setClientPhaseMirror(this._boardPhase(board), 'wire-apply');
+            },
+
+            /** Non-wire writes to _mpClientBoardPhase — logged for triage. */
+            _setClientPhaseMirror(phase, reason = 'manual') {
+                if (!phase) return;
+                this._mpClientBoardPhase = phase;
+                this._lastClientPhaseMirror = {
+                    phase,
+                    reason: reason || null,
+                    at: Date.now()
+                };
+            },
+
+            _clearClientPhaseMirror(reason = 'clear') {
+                this._mpClientBoardPhase = null;
+                this._lastClientPhaseMirror = {
+                    phase: null,
+                    reason: reason || null,
+                    at: Date.now()
+                };
+            },
+
+            _mpClientMirrorInReview() {
+                return this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW;
+            },
+
+            /**
+             * Single client phase struct — wire-primary command + transition overlay.
+             * All gating reads this (via deriveGamePhase / _mpInReviewProjectionPhase).
+             */
+            _clientMpPhaseSnapshot(board = this._boardReviewSnapshot?.()) {
+                const REVIEW = BananagramsGame.MP_PHASE.REVIEW;
+                const wire = this._wireGamePhase(board);
+                const wireMirror = this._mpClientBoardPhase || null;
+                const uiReview = !!this._postGameReview;
+                const completing = !!this._hostReviewCompleting;
+                const hostTransition = !!this._hostReviewTransitionActive;
+                const winPending = this._isWinPendingTransition(board);
+                const layoutsReady = !!this._hasLocalReviewLayoutsReady?.();
+                const tilesReview = this._mpTilesProjectionMode === 'review';
+
+                let transition = null;
+                if (completing) transition = 'completing';
+                else if (hostTransition) transition = 'host-review-transition';
+                else if (winPending) transition = 'win-pending';
+
+                let command = 'playing';
+                if (completing) {
+                    command = 'done';
+                } else if (this._isMultiplayerMode?.()) {
+                    if (wire === REVIEW || uiReview) command = 'review';
+                    else if (winPending) command = 'win-pending';
+                    else command = 'playing';
+                } else {
+                    command = this._deriveSoloGamePhase();
+                }
+
+                const reviewProjection = wire === REVIEW || uiReview
+                    || (winPending && layoutsReady)
+                    || tilesReview;
+
+                return {
+                    wire,
+                    wireMirror,
+                    transition,
+                    command,
+                    uiReview,
+                    winPending,
+                    layoutsReady,
+                    reviewProjection,
+                    tilesProjectionMode: this._mpTilesProjectionMode || null,
+                    phaseDrift: wire != null && wireMirror != null && wire !== wireMirror,
+                    storedPhase: this._gamePhase || null,
+                    lastMirrorWrite: this._lastClientPhaseMirror
+                        ? { ...this._lastClientPhaseMirror }
+                        : null
+                };
+            },
+
+            /** Solo-only phase merge — MP uses _clientMpPhaseSnapshot. */
+            _deriveSoloGamePhase() {
+                const order = { playing: 0, 'win-pending': 1, review: 2, done: 3 };
+                const candidates = [];
+                if (this._reviewUiActive?.()) {
+                    candidates.push('review');
+                } else if (this._isBoardInReview?.()) {
+                    candidates.push('review');
+                }
+                if (this._hostReviewTransitionActive) candidates.push('win-pending');
+                if (this._winnerUid || this._victoryRegistered || this.isOver) {
+                    candidates.push('win-pending');
+                }
+                if (this._hostReviewCompleting) candidates.push('done');
+                if (!candidates.length) return 'playing';
+                return candidates.reduce(
+                    (best, phase) => (order[phase] >= order[best] ? phase : best),
+                    'playing'
+                );
+            },
+
+            /** True when review tile projection may commit (wire, UI, or win-pending + layouts). */
+            _mpInReviewProjectionPhase(board = this._boardReviewSnapshot?.()) {
+                return !!this._clientMpPhaseSnapshot(board).reviewProjection;
+            },
+
+            /**
+             * Win-pending bridge — project review tiles before wire board.phase flips.
+             * Playing projection stays blocked; avoids empty hand between win and review.
+             */
+            _tryWinPendingReviewProjection(board = this._boardReviewSnapshot?.()) {
+                if (!this._isMultiplayerMode?.() || !board) return false;
+                const snap = this._clientMpPhaseSnapshot(board);
+                if (!snap.winPending || snap.uiReview) return false;
+                if (snap.wire === BananagramsGame.MP_PHASE.REVIEW) return false;
+
+                if (!this.isHost?.() && board.winnerUid && !this._myEndingLayoutPublished) {
+                    this._freezeMyEndingLayout?.();
+                    if (!this._hasLocalReviewLayoutsReady?.()) {
+                        this._publishMyEndingLayout?.();
+                    }
+                }
+
+                let orig = this._reviewLayouts;
+                if (!orig || !Object.keys(orig).length) {
+                    orig = board.reviewLayoutsOrig || board.reviewLayouts;
+                }
+                if (!orig || !Object.keys(orig).length) return false;
+
+                const partyUids = this._getPlayerUids?.() || [];
+                if (partyUids.length >= 2 && !this._reviewLayoutsReady?.(orig, partyUids)) {
+                    return false;
+                }
+
+                const display = typeof this._displayReviewLayoutsFromOrig === 'function'
+                    ? this._displayReviewLayoutsFromOrig(orig)
+                    : orig;
+                this._reviewLayouts = { ...(orig || {}) };
+                this._applyReviewLayouts(display);
+                this._primeWinPendingReviewChrome();
+                this.requestRender?.();
+                return true;
+            },
+
+            /** Read-only + render during win-pending after review tiles projected. */
+            _primeWinPendingReviewChrome() {
+                if (this._postGameReview) return;
+                this._setBoardReadOnly(true);
+            },
+
+            _hasLocalReviewLayoutsReady() {
+                const layouts = this._reviewLayouts;
+                if (!layouts || !Object.keys(layouts).length) return false;
+                const party = this._getPlayerUids?.() || [];
+                if (!party.length) return true;
+                return typeof this._reviewLayoutsReady === 'function'
+                    && this._reviewLayoutsReady(layouts, party);
+            },
+
+            /** True during win → review before wire board.phase flips to REVIEW. */
+            _isWinPendingTransition(board = this._boardReviewSnapshot()) {
+                if (this._hostReviewTransitionActive) return true;
+                if (this._wireGamePhase(board) === BananagramsGame.MP_PHASE.REVIEW) return false;
+                return !!(
+                    board?.winnerUid
+                    || this._winnerUid
+                    || this._victoryRegistered
+                    || this.isOver
+                );
+            },
+
             /** UI-only: review viewport, drag lock, Done — set from board apply, not a sync authority. */
             _reviewUiActive() {
                 return !!this._postGameReview;
@@ -34,17 +213,39 @@
                 return !this.canMutatePlayingBoard();
             },
 
+            /** Pre-SPLIT deal: tiles dealt face-down, started=true, gameStarted=false. */
+            _isPreSplitDealBoard(board) {
+                return !!(board?.started && !board?.gameStarted);
+            },
+
             /**
              * One-way projection gate — playing inventory may rebuild this.tiles only while
              * global/board is in playing phase AND the client is not in win/review.
              * Review tiles are projected only from reviewLayouts (_applyReviewLayouts).
              */
+            /** Win-pending blocks playing projection; wire REVIEW blocks unless reset/force. */
             _shouldProjectPlayingInventory(board, options = {}) {
                 if (options.reset && options.force) return true;
-                if (this._boardPhase(board) === BananagramsGame.MP_PHASE.REVIEW) return false;
-                if (this._reviewUiActive?.()) return false;
-                if (this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW && !options.reset) {
-                    return false;
+                const uid = this._myUid?.();
+                const preSplit = this._isPreSplitDealBoard(board);
+                if (this._mpInReviewProjectionPhase?.(board)) return false;
+                if (this._isWinPendingTransition?.(board)) return false;
+                // Authority pipeline (host write echo, peel/dump refresh) must project even when
+                // gameStarted briefly lags board.gameStarted on a stale network merge.
+                if (options.force) return true;
+                if (preSplit) {
+                    if (options.reset || options.force) return true;
+                    if (uid && board && this._mpInventorySeqLag?.(board, uid)) return true;
+                    const owned = board?.tilesOwnedByPlayer?.[uid];
+                    if (Array.isArray(owned) && owned.length > 0 && !(this.tiles?.length)) {
+                        return true;
+                    }
+                }
+                if (uid && !this.isHost?.()) {
+                    if (this._mpInventorySeqLag?.(board, uid)) return true;
+                }
+                if (this.isHost?.() && (options._hostAuthorityProjection || options.reset || options.force)) {
+                    return true;
                 }
                 if (!this.canMutatePlayingBoard?.()) return false;
                 return true;
@@ -80,6 +281,14 @@
                     .filter(Boolean)).size;
                 if ((this.tiles?.length || 0) >= expectedTiles
                     && visiblePlayers >= partyUids.length) {
+                    return;
+                }
+                if (!this._mpAllowReviewTilesCommit?.()) {
+                    if (this._reviewTraceOn()) {
+                        console.warn('[REVIEW] ensureReviewTilesProjected blocked — not in review phase', {
+                            projectionMode: this._mpTilesProjectionMode
+                        });
+                    }
                     return;
                 }
                 this._reviewLayoutsFp = null;
@@ -126,30 +335,9 @@
                 this._gamePhase = phase;
             },
 
-            /**
-             * Single derived phase for command gating (host authority + dev commands).
-             * Most restrictive signal wins — stored _gamePhase never overrides win/review flags.
-             * @returns {'playing'|'win-pending'|'review'|'done'}
-             */
+            /** Command gating — delegates to _clientMpPhaseSnapshot.command. */
             deriveGamePhase() {
-                if (this._hostReviewCompleting) return 'done';
-                const order = { playing: 0, 'win-pending': 1, review: 2, done: 3 };
-                const candidates = [];
-                if (this._reviewUiActive?.() || this._isBoardInReview?.()) {
-                    candidates.push('review');
-                }
-                if (this._hostReviewTransitionActive) candidates.push('win-pending');
-                if (this._winnerUid || this._victoryRegistered || this.isOver) {
-                    candidates.push('win-pending');
-                }
-                if (this.isHost?.() && this._gamePhase && this._gamePhase !== 'playing') {
-                    candidates.push(this._gamePhase);
-                }
-                if (!candidates.length) return 'playing';
-                return candidates.reduce(
-                    (best, phase) => (order[phase] >= order[best] ? phase : best),
-                    'playing'
-                );
+                return this._clientMpPhaseSnapshot?.().command ?? 'playing';
             },
 
             /** Host playing writes, peel, dump, drag, dev solve — only while phase is playing. */
@@ -157,9 +345,13 @@
                 return this.deriveGamePhase() === 'playing';
             },
 
-            /** @deprecated alias — use !canMutatePlayingBoard() */
-            isPostWinOrReview() {
-                return !this.canMutatePlayingBoard();
+            /**
+             * Peel, dump, drag layout — guest needs board.gameStarted + inventorySynced;
+             * host keeps local split optimism via canMutatePlayingBoard only.
+             */
+            _canMutatePlayingHand() {
+                if (!this.canMutatePlayingBoard()) return false;
+                return this._mpGuestAuthorityReadyForPlay?.() ?? true;
             },
 
             /** Dev/test snapshot when phase flags drift from board.phase. */
@@ -167,18 +359,24 @@
                 const board = typeof this._boardReviewSnapshot === 'function'
                     ? this._boardReviewSnapshot()
                     : null;
+                const snap = this._clientMpPhaseSnapshot(board);
                 return {
-                    phase: this.deriveGamePhase(),
-                    storedPhase: this._gamePhase || null,
-                    postGameReview: !!this._postGameReview,
+                    ...snap,
+                    phase: snap.command,
+                    boardPhase: board ? this._boardPhase(board) : null,
+                    mpClientBoardPhase: snap.wireMirror,
+                    postGameReview: snap.uiReview,
                     hostReviewTransition: !!this._hostReviewTransitionActive,
                     hostReviewCompleting: !!this._hostReviewCompleting,
-                    boardPhase: board ? this._boardPhase(board) : null,
                     winnerUid: this._winnerUid || null,
                     victoryRegistered: !!this._victoryRegistered,
                     isOver: !!this.isOver,
                     boardSeq: this._boardSeq ?? 0,
-                    devSolveSeq: this._devSolveSeq ?? 0
+                    devSolveSeq: this._devSolveSeq ?? 0,
+                    canMutateHand: this._canMutatePlayingHand?.() ?? null,
+                    guestAuthorityReady: this._mpGuestAuthorityReadyForPlay?.() ?? null,
+                    boardGameStarted: board?.gameStarted ?? null,
+                    localReviewLayoutsReady: snap.layoutsReady
                 };
             },
 
@@ -205,7 +403,7 @@
                 this._reviewViewportSettled = false;
                 this._reviewFitRetries = 0;
                 this._reviewViewportRetry = 0;
-                this._mpClientBoardPhase = BananagramsGame.MP_PHASE.REVIEW;
+                this._syncClientPhaseFromBoard(this._boardReviewSnapshot?.());
                 this._setBoardReadOnly(true);
                 this._syncDoneButton();
                 if (this._isMultiplayerMode?.() && this._winnerUid && !this._victoryRegistered) {
@@ -295,7 +493,30 @@
             _reviewLayoutsReady(layouts, partyUids = null) {
                 const uids = (partyUids || this._getPlayerUids()).filter(Boolean);
                 if (uids.length < 2) return true;
-                return uids.every((uid) => Array.isArray(layouts?.[uid]) && layouts[uid].length > 0);
+                return uids.every((uid) => {
+                    const list = layouts?.[uid];
+                    if (!Array.isArray(list) || !list.length) return false;
+                    if (this.isHost?.() && uid !== this._myUid?.()) {
+                        return this._remoteReviewLayoutAuthoritative(list);
+                    }
+                    return true;
+                });
+            },
+
+            /** Remote player grids are guest-authoritative — reject rack-stacked placeholders. */
+            _remoteReviewLayoutAuthoritative(tileList) {
+                const placed = (tileList || []).filter(
+                    (t) => Number.isFinite(t?.x) && Number.isFinite(t?.y)
+                );
+                if (placed.length < 6) return false;
+                const cells = new Map();
+                placed.forEach((t) => {
+                    const k = `${Math.round(t.x)},${Math.round(t.y)}`;
+                    cells.set(k, (cells.get(k) || 0) + 1);
+                });
+                const maxPerCell = Math.max(...cells.values());
+                if (maxPerCell > 1) return false;
+                return cells.size >= Math.min(placed.length, 6);
             },
 
             /** Authoritative end-of-game layout for one uid on THIS client only. */
@@ -333,18 +554,15 @@
                     const source = owned.length
                         ? runtimeMine.filter((t) => ownedIds.has(t.id))
                         : runtimeMine;
-                    const extras = owned.length
-                        ? runtimeMine.filter((t) => !ownedIds.has(t.id))
-                        : [];
-                    const merged = [...source, ...extras];
-                    const use = merged.length ? merged : runtimeMine;
-                    return this._serializeHandTiles(use.map((t) => ({
-                        id: t.id,
-                        letter: letterForId(t.id, t.letter),
-                        x: t.x,
-                        y: t.y,
-                        faceUp: !!t.faceUp
-                    })));
+                    if (source.length) {
+                        return this._serializeHandTiles(source.map((t) => ({
+                            id: t.id,
+                            letter: letterForId(t.id, t.letter),
+                            x: t.x,
+                            y: t.y,
+                            faceUp: !!t.faceUp
+                        })));
+                    }
                 }
 
                 const ownedOnRuntime = owned.filter((o) => runtimeById[o.id]).length;
@@ -1005,7 +1223,7 @@
             },
 
             _exitReviewLocalState() {
-                const wasInReviewPhase = this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW;
+                const wasInReviewPhase = this._mpClientMirrorInReview?.();
                 const hadReviewViewport = !!this._reviewViewportSettled;
                 const leavingVictory = this._reviewUiActive() || this._victoryRegistered || this.isOver;
                 const needsViewportReset = leavingVictory || wasInReviewPhase || hadReviewViewport;
@@ -1028,8 +1246,11 @@
                 if (needsViewportReset) {
                     this._resetPlayingViewportAfterReview();
                 }
-                if (this._mpClientBoardPhase === BananagramsGame.MP_PHASE.REVIEW) {
-                    this._mpClientBoardPhase = BananagramsGame.MP_PHASE.PLAYING;
+                const board = this._boardReviewSnapshot?.();
+                if (board) {
+                    this._syncClientPhaseFromBoard(board);
+                } else {
+                    this._setClientPhaseMirror(BananagramsGame.MP_PHASE.PLAYING, 'exit-review-local');
                 }
                 this._setBoardReadOnly(false);
                 this._syncDoneButton();
@@ -1038,43 +1259,11 @@
 
             _captureRemoteEndingLayoutForUid(uid) {
                 if (!uid || uid === this._myUid()) return [];
-                const board = this._boardReviewSnapshot?.() || this._mpBoardFromRoom?.(this.roomData) || {};
-                const owned = this._mpOwned?.[uid]
-                    || board?.tilesOwnedByPlayer?.[uid]
-                    || [];
-                if (!owned.length) return [];
-                const roomList = board?.tilePositionsByPlayer?.[uid];
-                let positions = {};
-                if (Array.isArray(roomList) && roomList.length) {
-                    positions = { ...this._positionsMapFromList(roomList) };
-                }
-                const staged = this._mpPlayerLayouts?.[uid] || {};
-                if (Object.keys(staged).length) {
-                    positions = { ...positions, ...staged };
-                }
-                if (!Object.keys(positions).length) {
-                    positions = this._layoutMapForPlayer(board, uid, owned);
-                }
-                const merged = [];
-                owned.forEach((o) => {
-                    const p = positions[o.id];
-                    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
-                        merged.push({
-                            id: o.id,
-                            letter: o.letter,
-                            x: Math.round(p.x),
-                            y: Math.round(p.y),
-                            faceUp: !!o.faceUp
-                        });
-                    }
-                });
-                const mergedIds = new Set(merged.map((t) => t.id));
-                const missing = owned.filter((o) => !mergedIds.has(o.id));
-                if (missing.length) {
-                    merged.push(...this._rackTilesFromOwned(missing));
-                }
-                if (!merged.length) return [];
-                return this._serializeHandTiles(merged);
+                const cached = this._reviewLayouts?.[uid]
+                    || this._endingLayoutsCache?.[uid];
+                if (!Array.isArray(cached) || !cached.length) return [];
+                if (!this._remoteReviewLayoutAuthoritative(cached)) return [];
+                return this._serializeHandTiles(cached);
             },
 
             _ensureReviewLayoutsSnapshot() {
@@ -1114,6 +1303,7 @@
                 this._stopTimer();
                 this.resetGame();
                 this._hostReviewCompleting = false;
+                this._setGamePhase('playing');
             },
 
             _applyReviewLayouts(layouts) {
@@ -1155,29 +1345,21 @@
 
                 if (!merged.length) return;
 
-                const canonicalOwner = (id) => {
-                    const board = this._boardReviewSnapshot?.() || {};
-                    for (const uid of uids) {
-                        const owned = this._mpOwned?.[uid]
-                            || board.tilesOwnedByPlayer?.[uid]
-                            || [];
-                        if (owned.some((o) => o.id === id)) return uid;
+                if (!this._mpAllowReviewTilesCommit?.()) {
+                    if (this._reviewTraceOn()) {
+                        console.warn('[REVIEW] applyReviewLayouts blocked — not in review phase', {
+                            projectionMode: this._mpTilesProjectionMode,
+                            tileCount: merged.length
+                        });
                     }
-                    return null;
-                };
+                    return;
+                }
 
+                // Review SSOT: owner comes from reviewLayouts keys only — never playing inventory.
                 const byId = new Map();
                 merged.forEach((t) => {
                     if (!t?.id) return;
-                    const canon = canonicalOwner(t.id) || t.ownerUid;
-                    const existing = byId.get(t.id);
-                    if (!existing) {
-                        byId.set(t.id, { ...t, ownerUid: canon });
-                        return;
-                    }
-                    if (canon && t.ownerUid === canon && existing.ownerUid !== canon) {
-                        byId.set(t.id, { ...t, ownerUid: canon });
-                    }
+                    if (!byId.has(t.id)) byId.set(t.id, t);
                 });
                 const deduped = [...byId.values()];
 
@@ -1196,7 +1378,11 @@
                     }
                 }
 
-                this.tiles = deduped;
+                this._commitMpTilesProjection(deduped, {
+                    mode: 'review',
+                    source: 'review-layouts',
+                    tileCount: deduped.length
+                });
                 this._reviewLayoutsFp = fingerprint;
                 this._reviewAppliedPlayerCount = nextPlayers;
                 this._setBoardReadOnly(true);

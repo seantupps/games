@@ -3,6 +3,11 @@
  * Assertions consume these; they never mutate game state.
  */
 const { HOST_UID, GUEST_UID, playerUids } = require('../../lib/mp-ctx');
+const {
+    readMpDebugCoherence,
+    readMpRequireCoherent,
+    readMpDebugClientState
+} = require('../../lib/mp-debug-bridge');
 
 /**
  * @param {import('playwright').Page} page
@@ -39,6 +44,12 @@ async function readMpBoardHealthState(page, playerIdxOrOpts, legacyOpts = {}) {
             uid: me,
             localPool: g?._tilePool?.length ?? -1,
             boardPool: Array.isArray(board?.pool) ? board.pool.length : -1,
+            boardRevision: board?.boardRevision ?? null,
+            appliedRevision: g?._mpAppliedBoardRevision ?? null,
+            revisionPending: !!g?._mpPendingRevisionBoard,
+            revisionCoherent: typeof g?._mpGuestRevisionCoherent === 'function'
+                ? g._mpGuestRevisionCoherent(board, g._myUid?.())
+                : null,
             boardSeq: board?.seq ?? null,
             peelSeq: board?.peelSeq ?? null,
             dumpSeq: board?.dumpSeq ?? null,
@@ -64,6 +75,11 @@ async function readAllMpBoardHealthStates(ctxOrLegacy, opts = {}) {
         playerLabel: p.role || `P${i + 1}`,
         uids: uids.length ? uids : [p.uid]
     })));
+}
+
+/** @param {import('playwright').Page|import('playwright').Frame} pageOrFrame */
+async function readMpCoherence(pageOrFrame, why = 'ptest') {
+    return readMpDebugCoherence(pageOrFrame, why);
 }
 
 /**
@@ -95,20 +111,29 @@ async function captureActionState(page, clientLabel, action, uids) {
         }
         const banner = doc?.getElementById('banana-banner');
         const doneBtn = doc?.querySelector('button#done-button,[data-action="done"],.done-button');
+        const client = typeof __bananaMpDebug?.clientState === 'function'
+            ? __bananaMpDebug.clientState()
+            : (typeof g?._mpDebugClientState === 'function' ? g._mpDebugClientState() : null);
+        const coherence = typeof g?._mpCoherenceSnapshot === 'function'
+            ? g._mpCoherenceSnapshot(board, me, a)
+            : (typeof __bananaMpDebug?.coherence === 'function' ? __bananaMpDebug.coherence() : null);
         return {
             client: c,
             uid: me,
             action: a,
             handIds,
             boardTileIds,
-            pileCount: g?._tilePool?.length ?? -1,
-            boardPileCount: Array.isArray(board?.pool) ? board.pool.length : -1,
+            pileCount: client?.localPoolLen ?? g?._tilePool?.length ?? -1,
+            boardPileCount: client?.boardPoolLen ?? (Array.isArray(board?.pool) ? board.pool.length : -1),
             ownedCountsByUid,
             boardSeq: board?.seq ?? null,
-            inventorySeq: g?._localInventorySeq ?? null,
-            boardInventorySeq: board?.inventorySeq?.[me || ''] ?? null,
+            inventorySeq: client?.clientInventorySeq ?? g?._mpClientInventorySeq?.(me) ?? 0,
+            boardInventorySeq: client?.boardInventorySeq ?? board?.inventorySeq?.[me || ''] ?? null,
             peelSeq: board?.peelSeq ?? 0,
             dumpSeq: board?.dumpSeq ?? 0,
+            coherence,
+            coherenceFailed: coherence?.failed?.length ? coherence.failed : null,
+            dumpUiPending: client?.dumpUiPending ?? null,
             bannerVisible: !!(banner && banner.classList.contains('is-visible')),
             bannerText: banner?.textContent?.trim() || '',
             winner: g?._winnerUid ?? board?.winnerUid ?? null,
@@ -309,6 +334,10 @@ async function captureDistributionState(ctx, endingSnapshots = null) {
 module.exports = {
     HOST_UID,
     GUEST_UID,
+    readMpCoherence,
+    readMpDebugClientState,
+    readMpDebugCoherence,
+    readMpRequireCoherent,
     readMpBoardHealthState,
     readAllMpBoardHealthStates,
     readBoardField,

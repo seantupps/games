@@ -16,6 +16,16 @@ const PROFILES = {
         FIVE_MP_PEEL_STABILITY_SETTLE_MS: '40',
         FIVE_VICTORY_DWELL_MS: '50'
     },
+    'dump-spawn': {
+        FIVE_BANANA_BANNER_INSTANT_MS: '50',
+        FIVE_MP_VICTORY_MS: '400',
+        FIVE_MP_REVIEW_SYNC_MS: '400',
+        FIVE_MP_BANANA_RESET_MS: '4000',
+        FIVE_MP_DUMP_AUTHORITY_MS: '6000',
+        FIVE_MP_DUMP_PAINT_MS: '4500',
+        FIVE_MP_SPAWN_DEBUG: '0',
+        FIVE_MP_ACTIONS_POLL_MS: '16'
+    },
     dev: {
         FIVE_STEP_TIMEOUT_MS: '3000',
         FIVE_VICTORY_DWELL_MS: '150',
@@ -33,7 +43,8 @@ const PROFILES = {
 const SCENARIO_PROFILES = {
     actions: 'ci',
     smoke: 'ci',
-    focus: 'dev'
+    focus: 'dev',
+    'dump-spawn': 'dump-spawn'
 };
 
 function applySpeedProfile(tier, options = {}) {

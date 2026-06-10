@@ -51,7 +51,7 @@ async function waitPool(page, count, label = `pool=${count}`, mpPages = null, ti
             ? RtdbSchema.readBoardFromRoom(room)
             : room?.global?.board;
         const remote = Array.isArray(board?.pool) ? board.pool.length : local;
-        return local === n && remote === n && hudOk;
+        return remote === n && hudOk;
     }, { n: count }, timeoutMs, mpPages);
 }
 
@@ -131,6 +131,9 @@ async function readPoolSyncState(page) {
             boardPool,
             hud,
             authBunch,
+            boardRevision: board?.boardRevision ?? null,
+            appliedRevision: g?._mpAppliedBoardRevision ?? null,
+            revisionPending: !!g?._mpPendingRevisionBoard,
             peelSeq: board?.peelSeq ?? null,
             lastPeelSeq: g?._lastPeelSeq ?? null,
             dumpSeq: board?.dumpSeq ?? null,

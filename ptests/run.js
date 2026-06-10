@@ -168,6 +168,51 @@ async function runMp(spec) {
     }
 
     if (includesPlayerCount(spec, 2)) {
+        const isBananagramsAll = matchesGameFilter(spec.game, 'bananagrams')
+            && String(spec.scenario || '').trim().toLowerCase() === 'all';
+        if (isBananagramsAll) {
+            const { resolveBananagramsMpAllScenarioParts } = require('./games/bananagrams/scenarios/registry');
+            const { twoPlayer, threePlayer } = resolveBananagramsMpAllScenarioParts(spec);
+            const { runMpSuite } = require('./platform/desktop/run-mp');
+            const totalStart = Date.now();
+            const out = await runMpSuite({ summarize: false, spec });
+            const results = [...(out.results || [])];
+            let allPassed = out.allPassed;
+
+            if (allPassed && threePlayer.length) {
+                const { runnerLog } = require('./shared/infra/runner-results');
+                runnerLog(`[RUNNER] Bananagrams 3p-only scenarios (${threePlayer.join(', ')})...`);
+                for (const scenarioId of threePlayer) {
+                    const mp3 = await runMpBananagramsN(
+                        {
+                            ...spec,
+                            scenario: scenarioId,
+                            players: 3,
+                            playerCount: 3,
+                            skipStackCheck: true
+                        },
+                        { summarize: false }
+                    );
+                    if (mp3.results?.length) results.push(...mp3.results);
+                    if (!mp3.allPassed) {
+                        allPassed = false;
+                        break;
+                    }
+                }
+            }
+
+            const combined = {
+                results,
+                allPassed,
+                totalDuration: ((Date.now() - totalStart) / 1000).toFixed(2)
+            };
+            if (!summarize) return combined;
+            if (!allPassed) {
+                throw new Error('Desktop MP suite had failures');
+            }
+            return combined;
+        }
+
         const { runMpSuite } = require('./platform/desktop/run-mp');
         const out = await runMpSuite({ summarize, spec });
         if (!summarize) return out;

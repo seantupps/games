@@ -41,6 +41,11 @@ async function readGuestTileLetters(guestPage) {
 
 /** Guest drag on first tile — starts SPLIT (Playwright mouse, same threshold as splitViaDrag). */
 async function guestTouchTileToStart(guestPage, options = {}) {
+    const { flushHostBananaInteractions } = require('../../../../shared/adapters/mp-client');
+    const hostPage = options.hostPage || null;
+    const timeoutMs = options.timeoutMs ?? 8000;
+    const pollMs = options.pollMs ?? 16;
+
     const iframe = guestPage.frameLocator('#game-frame');
     const tile = iframe.locator('.tile').first();
     await tile.waitFor({ state: 'visible', timeout: 5000 });
@@ -57,17 +62,29 @@ async function guestTouchTileToStart(guestPage, options = {}) {
         requestAnimationFrame(() => requestAnimationFrame(res));
     }));
 
-    return guestPage.evaluate(() => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        const tileEl = document.getElementById('game-frame')?.contentDocument?.querySelector('.tile');
-        const faceUp = tileEl && !tileEl.classList.contains('is-face-down');
-        return {
-            ok: !!(g?.gameStarted && faceUp),
-            gameStarted: !!g?.gameStarted,
-            faceUp: !!faceUp,
-            tileId: tileEl?.dataset?.tileId || null
-        };
-    });
+    const deadline = Date.now() + timeoutMs;
+    let last = { ok: false, reason: 'timeout' };
+    while (Date.now() < deadline) {
+        if (hostPage) await flushHostBananaInteractions(hostPage).catch(() => {});
+        last = await guestPage.evaluate(() => {
+            const g = document.getElementById('game-frame')?.contentWindow?.game;
+            const board = g?.roomData?.global?.board;
+            const tileEl = document.getElementById('game-frame')?.contentDocument?.querySelector('.tile');
+            const faceUp = tileEl && !tileEl.classList.contains('is-face-down');
+            const boardStarted = !!board?.gameStarted;
+            const localStarted = !!g?.gameStarted;
+            return {
+                ok: localStarted && boardStarted && faceUp,
+                gameStarted: localStarted,
+                boardGameStarted: boardStarted,
+                faceUp: !!faceUp,
+                tileId: tileEl?.dataset?.tileId || null
+            };
+        });
+        if (last.ok) return last;
+        await guestPage.waitForTimeout(pollMs);
+    }
+    return last;
 }
 
 /**
@@ -132,10 +149,48 @@ async function assertGuestFirstSplitStableAfterReset(hostPage, guestPage, lib, o
         failWithSnapshot('assertion', [`${label}: expected face-down pre-SPLIT hand (${JSON.stringify(preTouch)})`], {});
     }
 
+    const preGate = await guestPage.evaluate(() => {
+        const g = document.getElementById('game-frame')?.contentWindow?.game;
+        const board = g?.roomData?.global?.board;
+        return {
+            canMutate: g?.canMutatePlayingBoard?.() ?? false,
+            handMutate: g?._canMutatePlayingHand?.() ?? false,
+            authorityReady: g?._mpGuestAuthorityReadyForPlay?.() ?? false,
+            boardGameStarted: !!board?.gameStarted
+        };
+    });
+    if (!preGate.canMutate) {
+        failWithSnapshot('assertion', [`${label}: canMutatePlayingBoard must be true pre-SPLIT (${JSON.stringify(preGate)})`], {});
+    }
+    if (preGate.handMutate || preGate.authorityReady || preGate.boardGameStarted) {
+        failWithSnapshot('assertion', [`${label}: guest hand mutations blocked pre-SPLIT (${JSON.stringify(preGate)})`], {});
+    }
+
     log(`${label}: (2) guest touches tile to start game`);
-    const touch = await guestTouchTileToStart(guestPage, { mobile });
-    if (!touch.ok || !touch.gameStarted) {
+    const touch = await guestTouchTileToStart(guestPage, { mobile, hostPage });
+    if (!touch.ok || !touch.gameStarted || !touch.boardGameStarted) {
         failWithSnapshot('assertion', [`${label}: guest touch did not start game (${JSON.stringify(touch)})`], {});
+    }
+
+    const gateDeadline = Date.now() + (WAIT_MS || 6000);
+    let postGate = { handMutate: false, authorityReady: false, inventorySynced: null };
+    while (Date.now() < gateDeadline) {
+        postGate = await guestPage.evaluate(() => {
+            const win = document.getElementById('game-frame')?.contentWindow;
+            const g = win?.game;
+            const dbg = win?.__bananaMpDebug;
+            const coh = typeof dbg?.coherence === 'function' ? dbg.coherence() : null;
+            return {
+                handMutate: g?._canMutatePlayingHand?.() ?? false,
+                authorityReady: g?._mpGuestAuthorityReadyForPlay?.() ?? false,
+                inventorySynced: coh?.inventorySynced ?? null
+            };
+        });
+        if (postGate.handMutate && postGate.authorityReady) break;
+        await guestPage.waitForTimeout(50);
+    }
+    if (!postGate.handMutate || !postGate.authorityReady) {
+        failWithSnapshot('assertion', [`${label}: guest hand mutations must be allowed after SPLIT (${JSON.stringify(postGate)})`], {});
     }
     await flushHostBananaInteractions(hostPage).catch(() => {});
 
