@@ -266,6 +266,7 @@ async function runMpBlockFull(browser, mpTests, spec) {
                 mpResults.push(await runStep(t.name, () => runMobileMP(browser, t), MP_GAME_MS));
             } catch (err) {
                 mpResults.push({ name: t.name, success: false, error: err.message });
+                break;
             }
         }
     } else {
@@ -290,6 +291,7 @@ async function runMpBlockFull(browser, mpTests, spec) {
                     mpResults.push(await runStep(t.name, () => runMobileMP(browser, t, pair), MP_GAME_MS));
                 } catch (err) {
                     mpResults.push({ name: t.name, success: false, error: err.message });
+                    break;
                 }
             }
         } finally {

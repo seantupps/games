@@ -428,6 +428,88 @@
         return placed;
     }
 
+    /** True when every spot fits inside viewport (with spawn pad). */
+    function spawnSpotsInViewport(spots, viewportBounds) {
+        if (!spots?.length || !viewportBounds) return false;
+        const size = TILE_SIZE;
+        const pad = spawnViewportPad();
+        return spots.every((s) => (
+            Number.isFinite(s.x) && Number.isFinite(s.y)
+            && s.x >= viewportBounds.left + pad
+            && s.y >= viewportBounds.top + pad
+            && s.x + size <= viewportBounds.right - pad
+            && s.y + size <= viewportBounds.bottom - pad
+        ));
+    }
+
+    /** Scan visible grid cells — last resort when anchor/cluster allocators fail. */
+    function spawnForceVisibleSlots(existingTiles, letters, viewportBounds) {
+        const n = letters?.length ?? 0;
+        if (!n || !viewportBounds) return null;
+        const gap = TILE_GAP;
+        const size = TILE_SIZE;
+        const pad = spawnViewportPad();
+        const left = viewportBounds.left + pad;
+        const top = viewportBounds.top + pad;
+        const right = viewportBounds.right - pad - size;
+        const bottom = viewportBounds.bottom - pad - size;
+        if (right < left || bottom < top) return null;
+
+        const minGX = Math.ceil(left / gap) * gap;
+        const maxGX = Math.floor(right / gap) * gap;
+        const minGY = Math.ceil(top / gap) * gap;
+        const maxGY = Math.floor(bottom / gap) * gap;
+        const used = [...(existingTiles || [])];
+        const placed = [];
+
+        const canPlace = (x, y) => {
+            if (x < left || y < top || x + size > viewportBounds.right - pad || y + size > viewportBounds.bottom - pad) {
+                return false;
+            }
+            for (const t of used) {
+                if (tilesOverlap(x, y, t.x, t.y, size)) return false;
+            }
+            return true;
+        };
+
+        let cursorY = maxGY;
+        let cursorX = minGX;
+        for (let i = 0; i < n; i++) {
+            let found = null;
+            for (let y = cursorY; y >= minGY && !found; y -= gap) {
+                const startX = y === cursorY ? cursorX : minGX;
+                for (let x = startX; x <= maxGX; x += gap) {
+                    if (canPlace(x, y)) {
+                        found = { x, y };
+                        cursorX = x + gap;
+                        cursorY = y;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                for (let y = minGY; y <= maxGY && !found; y += gap) {
+                    for (let x = minGX; x <= maxGX; x += gap) {
+                        if (canPlace(x, y)) {
+                            found = { x, y };
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!found) return null;
+            placed.push({ letter: letters[i], x: found.x, y: found.y });
+            used.push({
+                id: `__force_${i}`,
+                letter: letters[i],
+                x: found.x,
+                y: found.y,
+                faceUp: true
+            });
+        }
+        return placed;
+    }
+
     /** @see spawnAllocateSlots */
     function spawnDrawnInViewport(existingTiles, letters, bounds) {
         const slots = spawnAllocateSlots(existingTiles, letters, bounds);
@@ -523,6 +605,8 @@
         spawnEffectiveBounds,
         intersectBounds,
         spawnAllocateSlots,
+        spawnForceVisibleSlots,
+        spawnSpotsInViewport,
         tileCellKey,
         MP_BAG,
         MP_HAND_OVERRIDE,

@@ -73,12 +73,18 @@ async function captureMpFailureSnapshot(opts = {}) {
     const {
         page1 = null,
         page2 = null,
+        pages: pagesIn = null,
         mobile = false,
         topology = null,
         scenario = null,
         testName = null,
-        gameId = null
+        gameId = null,
+        playerCount = null
     } = opts;
+
+    const pages = Array.isArray(pagesIn) && pagesIn.length
+        ? pagesIn.filter(Boolean)
+        : [page1, page2].filter(Boolean);
 
     let resolvedScenario = scenario;
     let resolvedTopology = topology;
@@ -91,19 +97,13 @@ async function captureMpFailureSnapshot(opts = {}) {
 
     const platform = mobile || resolvedTopology === 'mobile' ? 'mobile' : 'desktop';
     const viewports = {};
-    if (page1) {
-        const vp = page1.viewportSize();
-        viewports.host = vp || null;
-    }
-    if (page2) {
-        const vp = page2.viewportSize();
-        viewports.guest = vp || null;
-    }
-
-    const [host, guest] = await Promise.all([
-        page1 ? captureMpClientFailureDiag(page1, 'host') : null,
-        page2 ? captureMpClientFailureDiag(page2, 'guest') : null
-    ]);
+    const clients = {};
+    await Promise.all(pages.map(async (page, i) => {
+        const tag = i === 0 ? 'host' : `P${i + 1}`;
+        const vp = page.viewportSize();
+        viewports[tag] = vp || null;
+        clients[tag] = await captureMpClientFailureDiag(page, tag);
+    }));
 
     return {
         platform,
@@ -111,9 +111,11 @@ async function captureMpFailureSnapshot(opts = {}) {
         scenario: resolvedScenario || 'default',
         testName: testName || null,
         gameId: gameId || null,
+        playerCount: playerCount || pages.length || null,
         viewport: viewports,
-        host,
-        guest,
+        host: clients.host || clients.P1 || null,
+        guest: clients.P2 || null,
+        clients,
         capturedAt: new Date().toISOString()
     };
 }

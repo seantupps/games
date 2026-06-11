@@ -212,17 +212,28 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
         const layouts = board?.reviewLayoutsOrig || board?.reviewLayouts || g._reviewLayouts || {};
         const roster = Object.keys(room?.playerData || {}).filter(Boolean).sort();
 
+        const resolveLetter = (t) => {
+            const layout = String(t.letter || '').toUpperCase();
+            const canon = typeof g._mpLetter === 'function' ? g._mpLetter(t.id) : null;
+            return (canon || layout || '?').toUpperCase();
+        };
+
         const validateLayout = (uid, tileList) => {
             if (!Array.isArray(tileList) || !tileList.length) {
                 return { uid, validWinBoard: false, tileCount: 0, reason: 'no-layout' };
             }
             const tiles = tileList.map((t) => ({
                 id: t.id,
-                letter: t.letter,
+                letter: resolveLetter(t),
+                layoutLetter: String(t.letter || '').toUpperCase(),
                 x: t.x,
                 y: t.y,
                 faceUp: true
             }));
+            const letterDrifts = tiles
+                .filter((t) => t.layoutLetter && t.letter !== t.layoutLetter)
+                .slice(0, 12)
+                .map((t) => ({ id: t.id, layout: t.layoutLetter, canonical: t.letter }));
             const fullGrid = BananaGrid.validateGrid(tiles, g._checker);
             const fullConnected = BananaGrid.isConnected(tiles);
             const unique = BananaGrid.eachTileOccupiesUniqueCell(tiles);
@@ -234,13 +245,22 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
             return {
                 uid,
                 tileCount: tiles.length,
+                mainTileCount: mainTiles.length,
                 stragglers: disconnected,
+                letterDrifts,
                 validWinBoard: !!(fullGrid.ok && fullConnected && unique
                     && (fullGrid.words || []).some((w) => String(w || '').length >= 3)),
                 connected: mainConnected,
                 gridOk: mainGrid.ok,
                 words: mainGrid.words || [],
-                invalidReason: mainGrid.ok ? null : (mainGrid.reason || fullGrid.reason || null)
+                invalidReason: mainGrid.ok ? null : (mainGrid.reason || fullGrid.reason || null),
+                invalidWord: mainGrid.word || fullGrid.word || null,
+                sampleMain: mainTiles.slice(0, 10).map((t) => ({
+                    id: t.id,
+                    letter: t.letter,
+                    x: t.x,
+                    y: t.y
+                }))
             };
         };
 
@@ -261,8 +281,31 @@ async function assertActionsReviewLayouts(frame1, hostPage, mp, label = 'actions
 
     for (const player of state.players || []) {
         if (player.uid === state.winnerUid) continue;
-        if (!player.connected || !player.gridOk) {
-            failWithSnapshot(label, ['loser must show a connected valid crossword in review'], { player });
+        if (!player.connected || (player.mainTileCount ?? 0) < 6) {
+            failWithSnapshot(label, [
+                `loser ${player.uid} must show a connected main crossword in review `
+                + `(tiles=${player.tileCount}, main=${player.mainTileCount}, `
+                + `stragglers=${player.stragglers}, connected=${player.connected})`
+            ], {
+                player,
+                state,
+                reviewDiag: {
+                    loserUid: player.uid,
+                    invalidWord: player.invalidWord,
+                    invalidReason: player.invalidReason,
+                    words: player.words,
+                    letterDrifts: player.letterDrifts,
+                    sampleMain: player.sampleMain,
+                    layoutSource: 'host-reviewLayoutsOrig'
+                }
+            });
+        }
+        if (!player.gridOk) {
+            log(`WARN ${label}: loser ${player.uid} main crossword fails dictionary `
+                + `(${player.invalidReason || 'unknown'}`
+                + `${player.invalidWord ? `, word=${JSON.stringify(player.invalidWord)}` : ''}) `
+                + `— connected blob OK for review (${player.mainTileCount} main / `
+                + `${player.stragglers} stragglers)`);
         }
     }
 

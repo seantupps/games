@@ -80,17 +80,19 @@ async function runFocusAuditFromCtx(scenarioCtx) {
     } else {
         frame1 = await getGameFrame(page1);
         frame2 = await getGameFrame(page2);
-        const reset = await resetMpForAiPlaythrough({
-            ctx,
-            pages: ctx.pages,
-            frames: [frame1, frame2],
-            playerCount: 2,
-            mobile,
-            instantBanners: true
-        });
-        frame1 = reset.frame1;
-        frame2 = reset.frame2;
     }
+
+    log('FOCUS: reset to fresh split before stress (post-win / post-Done style)...');
+    const reset = await resetMpForAiPlaythrough({
+        ctx,
+        pages: ctx.pages,
+        frames: [frame1, frame2],
+        playerCount: 2,
+        mobile,
+        instantBanners: false
+    });
+    frame1 = reset.frame1;
+    frame2 = reset.frame2;
 
     attachFramesToCtx(ctx, [frame1, frame2]);
     return runFocusDumpPeelStress({

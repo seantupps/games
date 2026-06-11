@@ -7,6 +7,8 @@ const { createAuditSession } = require('./audit-session');
 const GameRegistry = require('../../../shared/games/registry');
 
 const WAIT_MS = Number(process.env.FIVE_MP_PARTY_MS || STEP_MS);
+/** Cap each in-page Firebase .once() so evaluate cannot hang past step timeout. */
+const RTDB_OP_CAP_MS = Math.max(400, WAIT_MS - 150);
 
 /**
  * @typedef {object} PartyPlayerDef
@@ -52,15 +54,22 @@ async function prepareInviteHost(hostPage, roomId, gameId, gameMode) {
     }, { rId: roomId, gId: gameId, gMode: mode, hubModeVal: hubMode });
     if (!prepared) throw new Error('prepareInviteRoom failed');
 
-    const ok = await hostPage.evaluate(
-        async ({ rId, gId, gMode }) => window.HubApp.ctx.enterPartyRoom(rId, {
-            role: 'P1',
-            game: gId,
-            mode: gMode,
-            skipJoin: true
-        }),
-        { rId: roomId, gId: gameId, gMode: mode }
-    );
+    const ok = await hostPage.evaluate(async ({ rId, gId, gMode, cap }) => {
+        const race = (p) => Promise.race([
+            p,
+            new Promise((_, rej) => setTimeout(() => rej(new Error('rtdb-timeout')), cap))
+        ]);
+        try {
+            return await race(window.HubApp.ctx.enterPartyRoom(rId, {
+                role: 'P1',
+                game: gId,
+                mode: gMode,
+                skipJoin: true
+            }));
+        } catch (_) {
+            return false;
+        }
+    }, { rId: roomId, gId: gameId, gMode: mode, cap: RTDB_OP_CAP_MS });
     if (ok === false) throw new Error('Host failed to enter party room');
 }
 
@@ -79,16 +88,31 @@ async function inviteGuestIntoParty(hostPage, guestPage, host, guest, roomId, ga
         window.NetworkEngine.sendInvite(targetUid, { game: gId, mode: gMode, roomId: rId });
     }, { targetUid: guest.uid, rId: roomId, gId: gameId, gMode: mode });
 
-    const ok = await guestPage.evaluate(async ({ hostUid, rId, gId, gMode, role }) => {
-        const accepted = await window.NetworkEngine.acceptInvite(hostUid, rId);
-        if (!accepted?.ok) return false;
-        return window.HubApp.ctx.enterPartyRoom(rId, {
-            role,
-            game: gId,
-            mode: gMode,
-            skipJoin: true
-        });
-    }, { hostUid: host.uid, rId: roomId, gId: gameId, gMode: mode, role: guest.role });
+    const ok = await guestPage.evaluate(async ({ hostUid, rId, gId, gMode, role, cap }) => {
+        const race = (p) => Promise.race([
+            p,
+            new Promise((_, rej) => setTimeout(() => rej(new Error('rtdb-timeout')), cap))
+        ]);
+        try {
+            const accepted = await race(window.NetworkEngine.acceptInvite(hostUid, rId));
+            if (!accepted?.ok) return false;
+            return await race(window.HubApp.ctx.enterPartyRoom(rId, {
+                role,
+                game: gId,
+                mode: gMode,
+                skipJoin: true
+            }));
+        } catch (_) {
+            return false;
+        }
+    }, {
+        hostUid: host.uid,
+        rId: roomId,
+        gId: gameId,
+        gMode: mode,
+        role: guest.role,
+        cap: RTDB_OP_CAP_MS
+    });
     if (ok === false) {
         throw new Error(`${guest.role} failed to accept invite / enter party room`);
     }
@@ -101,11 +125,20 @@ async function inviteGuestIntoParty(hostPage, guestPage, host, guest, roomId, ga
  */
 async function waitForRoomMembers(hostPage, roomId, count) {
     await hostPage.waitForFunction(
-        async ({ rId, n }) => {
-            const snap = await window.NetworkEngine.db.ref(`games/${rId}`).once('value');
-            return window.NetworkEngine.countRoomMembers(snap.val()) === n;
+        async ({ rId, n, cap }) => {
+            const db = window.NetworkEngine?.db;
+            if (!db) return false;
+            try {
+                const snap = await Promise.race([
+                    db.ref(`games/${rId}`).once('value'),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('rtdb-timeout')), cap))
+                ]);
+                return window.NetworkEngine.countRoomMembers(snap.val()) === n;
+            } catch (_) {
+                return false;
+            }
         },
-        { rId: roomId, n: count },
+        { rId: roomId, n: count, cap: RTDB_OP_CAP_MS },
         { timeout: WAIT_MS }
     );
 }

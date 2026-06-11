@@ -312,7 +312,6 @@
                             appliedRc
                         });
                     }
-                    this._commitMpActionSeqFromBoard(board);
                     return;
                 }
 
@@ -1008,6 +1007,15 @@
                 this._clearLocalLayout();
                 this._lastPeelSeq = 0;
                 this._lastDumpSeq = 0;
+                this._lastGuestDumpLayoutSeq = 0;
+                this._guestDumpSpawnLock = null;
+                this._guestPreDumpSnapshot = null;
+                this._guestOptimisticDumpRemovedId = null;
+                this._guestPendingDumpTile = null;
+                this._guestDumpSeqAtSend = null;
+                this._guestDumpBaselineOwnedCount = null;
+                this._guestDumpBaselineIds = null;
+                this._guestDumpHandFloor = null;
                 this._peelSeq = 0;
                 this._lastPeelDraws = null;
                 this._winnerBannerUid = null;
@@ -1054,6 +1062,7 @@
                 this._mpInventorySeq = null;
                 this._localInventorySeq = 0;
                 this._lastPeelSeq = 0;
+                this._lastDumpSeq = 0;
                 this._peelSeq = 0;
                 this._lastPeelDraws = null;
                 this._peelActorUid = null;

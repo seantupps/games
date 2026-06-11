@@ -12,6 +12,7 @@ const { bootMpPlaySessionThroughDeal, bootMpPlaySessionSplit } = require('../../
 const { audit } = require('../../assertions');
 const { runMpAiActionsOnlyFromCtx } = require('./ai-playthrough');
 const { seedBananaParty } = require('./seed-party');
+const { attachFramesToCtx } = require('../../lib/mp-ai-side-ctx');
 
 async function runActionsScenario(scenarioCtx) {
     const { ctx, mobile, options = {}, skipSeed } = scenarioCtx;
@@ -34,10 +35,28 @@ async function runActionsScenario(scenarioCtx) {
     };
 
     if (ctx.playerCount >= 3) {
-        let { frames } = await bootMpPlaySessionThroughDeal(ctx, { mobile });
+        let { frames, poolAfterDeal: pool } = await bootMpPlaySessionThroughDeal(ctx, { mobile });
         await audit.assertPreSplitDealAudit(ctx, frames);
-    await bootMpPlaySessionSplit(ctx, frames, { mobile });
-    ctx.frames = frames;
+        await bootMpPlaySessionSplit(ctx, frames, { mobile });
+        attachFramesToCtx(ctx, frames);
+
+        const tileIdByUid = await audit.assertAllPlayersDragLocal(ctx, frames, { mobile });
+        if (!mobile) {
+            frames = await audit.assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid);
+            attachFramesToCtx(ctx, frames);
+        }
+        await audit.assertSnapRules(ctx, frames[0]);
+        await audit.assertNoPeelOnRack(ctx, frames[0]);
+        await audit.clearMpLayoutPersistence(ctx, frames);
+
+        if (mobile) {
+            const { enableMobileHub } = require('../../../../platform/mobile/lib/mobile_assertions');
+            const { ensureWinBannerDwellForAudit } = require('../../assertions').layout.hub;
+            await ensureWinBannerDwellForAudit(ctx.pages);
+            await Promise.all(ctx.pages.map((p) => enableMobileHub(p)));
+        }
+
+        playOpts.expectedPool = pool;
     }
 
     return withActionsTimeout(

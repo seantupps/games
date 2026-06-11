@@ -102,11 +102,29 @@
             _handleDump(tile) {
                 if (!this.canMutatePlayingBoard?.()) return false;
                 if (!tile || !this._canDumpFromBunch()) return false;
+                const now = Date.now();
+                const dumpSeqNow = this.roomData?.global?.board?.dumpSeq
+                    || this._lastDumpSeq
+                    || this._dumpSeq
+                    || 0;
+                const last = this._lastDumpGuard;
+                if (last?.tileId === tile.id && now - last.at < 700
+                    && dumpSeqNow <= (last.dumpSeqAt ?? dumpSeqNow)) {
+                    return false;
+                }
                 if (this._isMultiplayerMode()) {
                     const me = this._myUid();
                     if (this.isHost()) {
                         const ok = this._hostApplyDump(me, tile.id);
-                        if (ok) this._showBanner('Dump!', 2200, { actorUid: me });
+                        if (ok) {
+                            this._clearLocalDragAfterDump?.();
+                            this._lastDumpGuard = {
+                                tileId: tile.id,
+                                at: Date.now(),
+                                dumpSeqAt: this._dumpSeq || dumpSeqNow
+                            };
+                            this._showBanner('Dump!', 2200, { actorUid: me });
+                        }
                         return ok;
                     }
                     (this.tiles || []).forEach((t) => {
@@ -120,16 +138,44 @@
                             round: this._mpTraceRound?.()
                         });
                     });
+                    this._guestPendingDumpTile = {
+                        id: tile.id,
+                        x: tile.x,
+                        y: tile.y
+                    };
+                    this._guestDumpSeqAtSend = this.roomData?.global?.board?.dumpSeq
+                        || this._lastDumpSeq
+                        || 0;
+                    this._guestPreDumpSnapshot = (this.tiles || []).map((t) => ({
+                        id: t.id,
+                        x: t.x,
+                        y: t.y
+                    }));
+                    this._guestDumpBaselineOwnedCount = this._guestPreDumpSnapshot.length;
+                    this._guestDumpBaselineIds = new Set(
+                        this._guestPreDumpSnapshot.map((t) => t.id)
+                    );
+                    this._guestDumpHandFloor = null;
+                    this._guestOptimisticDumpRemovedId = tile.id;
+                    this.tiles = (this.tiles || []).filter((t) => t.id !== tile.id);
                     this._sendBananaInteraction({
                         type: 'dump',
-                        tileId: tile.id
+                        tileId: tile.id,
+                        positions: this._serializePositions(this.tiles)
                     });
-                    // Optimistic local feedback; host board sync reinforces banner + inventory.
+                    this._clearLocalDragAfterDump?.();
+                    this._lastDumpGuard = {
+                        tileId: tile.id,
+                        at: Date.now(),
+                        dumpSeqAt: this._guestDumpSeqAtSend ?? dumpSeqNow
+                    };
                     this._showBanner('Dump!', 2200, { actorUid: me });
+                    this.requestRender();
                     return true;
                 }
                 const result = this._applyDumpToTiles(this.tiles, tile.id);
                 if (!result.ok) return false;
+                this._lastDumpGuard = { tileId: tile.id, at: Date.now() };
                 this._soloDistributionInvariantCheck?.('solo-dump');
                 this._showBanner('Dump!');
                 this.requestRender();
@@ -474,6 +520,7 @@
                 const liveTile = () => this.tiles.find((t) => t.id === el.dataset.tileId) || tile;
                 const HOLD_DUMP_MS = 450;
                 let holdDumpTimer = null;
+                let holdDumpConsumed = false;
                 const clearHoldDump = () => {
                     if (holdDumpTimer) {
                         clearTimeout(holdDumpTimer);
@@ -519,6 +566,9 @@
                 const tryDump = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    // Mobile: hold-to-dump only — long-press also fires contextmenu (~500ms).
+                    if (this.isMobileViewport?.()) return;
+                    if (holdDumpConsumed) return;
                     if (this._rmbMarqueeUsed) return;
                     this.beginGame();
                     if (this._handleDump(liveTile())) {
@@ -536,12 +586,14 @@
                         e.stopPropagation();
                         this.beginGame();
                         clearHoldDump();
+                        holdDumpConsumed = false;
                         holdDumpTimer = setTimeout(() => {
                             holdDumpTimer = null;
                             if (this._pointerDragging || el.classList.contains('is-dragging')) return;
                             if (this._rmbMarqueeUsed) return;
                             this.beginGame();
                             if (this._handleDump(liveTile())) {
+                                holdDumpConsumed = true;
                                 if (!this._isMultiplayerMode()) this.persistState();
                                 this.requestRender();
                             }

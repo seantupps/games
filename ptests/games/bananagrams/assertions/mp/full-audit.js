@@ -105,8 +105,24 @@ async function assertPartyBoardOnRtdb(ctx, label) {
  * @param {import('playwright').Frame} frame
  * @param {string} tileId
  */
-async function assertRefreshPreservesLayout(ctx, player, frame, tileId) {
-    await frame.evaluate(() => window.game._persistMpLayout?.());
+async function assertRefreshPreservesLayout(ctx, player, frame, tileAnchor) {
+    const anchor = typeof tileAnchor === 'string'
+        ? { id: tileAnchor, x: null, y: null }
+        : tileAnchor;
+    const tileId = anchor?.id;
+    if (!tileId) {
+        failWithSnapshot(`${player.role} refresh`, ['missing tile anchor for refresh test'], { tileAnchor });
+    }
+    await frame.evaluate(({ id, x, y }) => {
+        const g = window.game;
+        if (!g) return;
+        const t = g.tiles?.find((tile) => tile.id === id);
+        if (t && Number.isFinite(x) && Number.isFinite(y)) {
+            t.x = x;
+            t.y = y;
+        }
+        g._persistMpLayout?.();
+    }, anchor);
     const tileBefore = await player.page.evaluate(({ id }) => {
         const g = document.getElementById('game-frame')?.contentWindow?.game;
         const t = g?.tiles?.find((tile) => tile.id === id);
@@ -146,21 +162,42 @@ async function assertRefreshPreservesLayout(ctx, player, frame, tileId) {
  * Guests first, then host — host reload must not clobber guest hands.
  * @param {import('../lib/mp-ctx').MpCtx} ctx
  * @param {import('playwright').Frame[]} frames
- * @param {Record<string, string>} tileIdByUid
+ * @param {Record<string, { id: string, x: number, y: number }>} tileAnchorByUid
  * @returns {Promise<import('playwright').Frame[]>}
  */
-async function assertAllPlayersRefreshPreservesLayout(ctx, frames, tileIdByUid) {
+async function assertAllPlayersRefreshPreservesLayout(ctx, frames, tileAnchorByUid) {
     log('Refresh: each player restores layout from localStorage...');
+    await Promise.all(frames.map((f) => f.evaluate(() => window.game._persistMpLayout?.())));
+    await lib.flushHostBananaInteractions(ctx.host.page);
     await hostPublishPartyBoard(ctx.host.page);
     await assertPartyBoardOnRtdb(ctx, 'pre-refresh');
 
     const order = [...ctx.remotes, ctx.host];
     const outFrames = [...frames];
     for (const player of order) {
-        const tileId = tileIdByUid[player.uid];
-        if (!tileId) failWithSnapshot('refresh layout', [`Missing tile id for refresh test (${player.role})`], { tileIdByUid });
-        await assertRefreshPreservesLayout(ctx, player, outFrames[player.index], tileId);
+        const tileAnchor = tileAnchorByUid[player.uid];
+        if (!tileAnchor?.id) {
+            failWithSnapshot('refresh layout', [`Missing tile anchor for refresh test (${player.role})`], { tileAnchorByUid });
+        }
+        await assertRefreshPreservesLayout(ctx, player, outFrames[player.index], tileAnchor);
         outFrames[player.index] = await lib.getGameFrame(player.page);
+        if (player.index > 0) {
+            const hostFrame = outFrames[ctx.host.index];
+            const hostAnchor = tileAnchorByUid[ctx.host.uid];
+            if (hostFrame && hostAnchor?.id) {
+                await hostFrame.evaluate(({ id, x, y }) => {
+                    const g = window.game;
+                    if (!g) return;
+                    const t = g.tiles?.find((tile) => tile.id === id);
+                    if (t && Number.isFinite(x) && Number.isFinite(y)) {
+                        t.x = x;
+                        t.y = y;
+                    }
+                    g._persistMpLayout?.();
+                }, hostAnchor);
+                await lib.flushHostBananaInteractions(ctx.host.page);
+            }
+        }
     }
     log('SUCCESS: All players refresh preserved layout.');
     return outFrames;
@@ -197,7 +234,7 @@ async function assertAllPlayersDragLocal(ctx, frames, opts = {}) {
     const hostDrag = await dragTileByIndex(frames[0], 0, 80, 60, { mobile });
     if (!hostDrag.ok) failWithSnapshot('host drag', ['Host drag failed'], { hostDrag });
     await assertNoSnapBack(ctx.host.page, hostDrag.id, hostDrag.x, hostDrag.y, 'Host drag');
-    dragByUid[ctx.host.uid] = hostDrag.id;
+    dragByUid[ctx.host.uid] = { id: hostDrag.id, x: hostDrag.x, y: hostDrag.y };
     log('SUCCESS: Host drag.');
 
     const remoteOffsets = opts.remoteOffsets || ctx.remotes.map(() => ({
@@ -222,7 +259,7 @@ async function assertAllPlayersDragLocal(ctx, frames, opts = {}) {
             failWithSnapshot(`${remote.role} drag`, ['drag failed'], { remoteDrag });
         }
         await assertNoSnapBack(remote.page, remoteDrag.id, remoteDrag.x, remoteDrag.y, `${remote.role} drag`);
-        dragByUid[remote.uid] = remoteDrag.id;
+        dragByUid[remote.uid] = { id: remoteDrag.id, x: remoteDrag.x, y: remoteDrag.y };
         log(`SUCCESS: ${remote.role} drag (local board).`);
     }
 

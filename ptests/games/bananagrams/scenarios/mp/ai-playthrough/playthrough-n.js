@@ -10,6 +10,8 @@ const { readBoardField } = require('../../../assertions/core/capture');
 const {
     assertActionsWinSnap,
     assertActionsReviewLayouts,
+    assertActionsReviewPersists,
+    assertActionsWinBanner,
     readPlayerWinBoardFromFrame
 } = require('../../../assertions/mp/review-actions');
 const { readMpBoardSyncState } = require('../../../assertions/mp/victory');
@@ -28,7 +30,8 @@ const {
     enableFastBanners,
     enableInstantBanners,
     mpPollMs,
-    mpVictoryWaitMs
+    mpVictoryWaitMs,
+    mpReviewWaitMs
 } = require('../../../lib/mp-state');
 const { assertStartingRackConnected } = require('../../../assertions/mp/deal');
 const { assertActionBannerOnBoth } = require('../../../../../shared/assertions/mp-authority');
@@ -50,18 +53,27 @@ const {
     mergeGuestLayoutOnHost,
     pushHostReviewStateToClients,
     capturePreReviewBoardsByPlayer,
+    seedHostReviewLayoutsFromSnapshots,
+    diagnoseReviewLayoutOnFrame,
     assertReviewPreservesPreWinBoards,
     waitForHostReviewReady,
     waitMpClientsInReview,
-    waitMpClientsPostWinReady
+    waitMpClientsPostWinReady,
+    assertGuestReviewVisibleWithoutInteraction
 } = require('../../../assertions/mp/review');
 const { assertTileDistributionInReview } = require('../../../assertions/mp/distribution');
 const { resolvePlaythroughCtx, buildAiSideCtxs } = require('../../../lib/mp-ai-side-ctx');
+const { resolveSessionRounds, resolveSessionPause, pauseTimeoutMs } = require('../../../lib/mp-session-config');
 
 const waitOpts = { timeout: WAIT_MS };
 
 function log(msg) {
     console.log(`[3P-AI] ${msg}`);
+}
+
+/** Headed mobile viewport relayout during play can reload the host iframe — center only on desktop. */
+function recenterHeadedDuringPlay(mobileAll) {
+    return isMpHeaded() && !mobileAll;
 }
 
 /** Dump draws 3 and returns 1 — keep enough bunch tiles for the next party peel. */
@@ -660,14 +672,34 @@ async function assertActionsPoolZeroAll(pages, label = 'actions win') {
     log(`SUCCESS: ${label} — bunch=0 on all ${pages.length} players`);
 }
 
-async function publishGuestEndingLayouts(pages) {
-    await Promise.all(pages.slice(1).map((page) => page.evaluate(() => {
-        const g = document.getElementById('game-frame')?.contentWindow?.game;
-        if (!g || g.isHost?.()) return;
-        if (g._myEndingLayoutPublished) return;
-        g._freezeMyEndingLayout?.();
-        g._publishMyEndingLayout?.();
-    })));
+async function publishGuestEndingLayouts(pages, hostPage = pages?.[0]) {
+    for (const guestPage of pages.slice(1)) {
+        await guestPage.evaluate(() => {
+            const g = document.getElementById('game-frame')?.contentWindow?.game;
+            if (!g || g.isHost?.()) return;
+            // Victory may auto-publish before final tile sync — always re-freeze at settlement.
+            g._myEndingLayoutPublished = false;
+            g._freezeMyEndingLayout?.();
+            g._publishMyEndingLayout?.();
+        });
+        if (hostPage) await flushHostBananaInteractions(hostPage);
+    }
+}
+
+async function logPreWinReviewDiagnostics(frames, preWinByUid, label) {
+    for (let i = 0; i < frames.length; i++) {
+        const uid = await frames[i].evaluate(() => window.game?._myUid?.() || null);
+        const entry = uid ? preWinByUid[uid] : null;
+        if (!entry?.tiles?.length) continue;
+        const diag = await diagnoseReviewLayoutOnFrame(frames[i], entry.uid, entry.tiles);
+        log(`${label} preWin P${i + 1} (${entry.uid}): main=${diag.mainTileCount}/${diag.tileCount} `
+            + `gridOk=${diag.gridOk} stragglers=${diag.stragglerCount}`
+            + `${diag.invalidWord ? ` invalidWord=${JSON.stringify(diag.invalidWord)}` : ''}`
+            + `${diag.letterDrifts?.length ? ` letterDrifts=${diag.letterDrifts.length}` : ''}`);
+        if (diag.letterDrifts?.length) {
+            log(`${label} preWin P${i + 1} letterDrifts sample=${JSON.stringify(diag.letterDrifts.slice(0, 4))}`);
+        }
+    }
 }
 
 async function finishActionsWin3p(ctx) {
@@ -694,9 +726,16 @@ async function finishActionsWin3p(ctx) {
     if (!assertActionsWinInvariants) return;
 
     await awaitMpVictorySettled3p(hostPage, pages, winLabel, { assertActionsWinInvariants: true });
+
+    const reviewSyncMs = Math.max(mpReviewWaitMs(), WAIT_MS);
+    const hostFrame = frames[0];
+    const mp = { page1: hostPage, page2: pages[1] };
+    const playerUids = BANANA_3P_PLAYERS.slice(0, pages.length).map((p) => p.uid);
+
     await flushHostBananaInteractions(hostPage);
-    await publishGuestEndingLayouts(pages);
-    await flushHostBananaInteractions(hostPage);
+    await hostFrame.evaluate(() => {
+        window.game._processBananaInteractions?.(window.game.roomData?.interactions?.banana);
+    }).catch(() => {});
 
     let winnerSnap = step?.winSnap || null;
     if (!winnerSnap?.allPlaced || !winnerSnap?.gridOk || winnerSnap?.poolLen !== 0) {
@@ -723,12 +762,26 @@ async function finishActionsWin3p(ctx) {
     }
     await assertActionsPoolZeroAll(pages, winLabel);
 
-    const hostFrame = frames[0];
-    const mp = { page1: hostPage, page2: pages[1] };
     const preWinByUid = await capturePreReviewBoardsByPlayer(frames);
-    await pushHostReviewStateToClients(hostFrame, pages);
-    await mergeGuestLayoutOnHost(hostFrame, pages);
+    await logPreWinReviewDiagnostics(frames, preWinByUid, winLabel);
+
+    await publishGuestEndingLayouts(pages, hostPage);
+    await flushHostBananaInteractions(hostPage);
+
+    log(`${winLabel}: waiting for natural RTDB review sync on all clients...`);
+    await waitMpClientsInReview(frames, `${winLabel} in-review`, reviewSyncMs, pages, hostFrame);
+    await assertActionsWinBanner(pages, `${winLabel} hub win banner`);
+    await waitMpClientsPostWinReady(
+        frames, playerUids, `${winLabel} boards`, reviewSyncMs, pages, hostFrame
+    );
+    for (let i = 0; i < pages.length; i++) {
+        await assertGuestReviewVisibleWithoutInteraction(
+            pages[i], `${winLabel} P${i + 1} review`, 2, 6
+        );
+    }
+
     await assertActionsReviewLayouts(hostFrame, hostPage, mp, winLabel);
+    await assertActionsReviewPersists(frames, pages, mp, winLabel);
     await assertReviewPreservesPreWinBoards(frames, preWinByUid, `${winLabel} review-boards`);
 
     const dist = await assertTileDistributionInReview(
@@ -771,7 +824,7 @@ async function runMpAiPlaythroughN(opts) {
 
     await injectSnapshot(frames);
     const headedView = { mobile: mobileAll };
-    if (isMpHeaded()) await centerMpViewerOnPages(pages, headedView);
+    if (recenterHeadedDuringPlay(mobileAll)) await centerMpViewerOnPages(pages, headedView);
     if (playToWin && forcedWinSide) {
         log(`Play-to-win: steering for ${desiredWinSide} victory (--win=${desiredWinSide})`);
     } else if (playToWin) {
@@ -843,7 +896,7 @@ async function runMpAiPlaythroughN(opts) {
                     progress = true;
                     idleRounds = 0;
                     if (await finishIfGoalsMet(round)) return stats;
-                    if (isMpHeaded()) await centerMpViewerOnPages(pages, headedView);
+                    if (recenterHeadedDuringPlay(mobileAll)) await centerMpViewerOnPages(pages, headedView);
                     continue;
                 }
             }
@@ -872,7 +925,7 @@ async function runMpAiPlaythroughN(opts) {
                 idleRounds = 0;
                 if (await finishIfGoalsMet(round)) return stats;
             }
-            if (isMpHeaded()) await centerMpViewerOnPages(pages, headedView);
+            if (recenterHeadedDuringPlay(mobileAll)) await centerMpViewerOnPages(pages, headedView);
         }
 
         if (!progress) idleRounds += 1;
@@ -986,7 +1039,7 @@ async function awaitMpActionsReviewOpenN({ pages, frames, mobileAll = false } = 
 
     log('MP 3p actions open: syncing post-game review...');
     await flushHostBananaInteractions(hostPage);
-    await publishGuestEndingLayouts(pages);
+    await publishGuestEndingLayouts(pages, hostPage);
     await hostFrame.evaluate(() => {
         window.game._processBananaInteractions?.(window.game.roomData?.interactions?.banana);
     }).catch(() => {});
@@ -1020,6 +1073,92 @@ async function awaitMpActionsReviewOpenN({ pages, frames, mobileAll = false } = 
     log(`SUCCESS: actions open 3p — tile distribution OK (${dist.bagLabel}, `
         + `${dist.actualTotal} tiles via ${dist.countSource})`);
     log('SUCCESS: MP 3p actions open — stopped in post-game review.');
+}
+
+/** Actions scenario entry when session is already booted via MpCtx (deal + SPLIT). */
+async function runMpAiActionsOnlyNFromCtx(ctx, options = {}) {
+    preloadAiDictionary();
+    ensurePlayerSolvers(ctx.playerCount ?? 3);
+    process.env.BANANA_AI_QUIET = '1';
+
+    const mobileAll = !!(options.mobile ?? ctx.mobile);
+    const headedReview = isMpHeaded();
+    const rounds = resolveSessionRounds(options);
+    const pause = resolveSessionPause(options);
+    if (pause) {
+        const pauseMs = pauseTimeoutMs();
+        await Promise.all(ctx.pages.map((p) => p.setDefaultTimeout(pauseMs)));
+    }
+
+    const pages = ctx.pages;
+    let frames = ctx.frames;
+    if (!frames?.length) {
+        frames = await Promise.all(pages.map((p) => getGameFrame(p)));
+        ctx.frames = frames;
+    }
+
+    log(headedReview
+        ? `MP 3p actions: headed — play to win (${rounds} round${rounds > 1 ? 's' : ''}`
+            + `${pause ? ', pause in review' : ''}), assert post-game review + Done.`
+        : `MP 3p actions: optimized AI playthrough (play to win, ${rounds} round${rounds > 1 ? 's' : ''}`
+            + `${pause ? ', pause in review' : ''})...`);
+
+    await resetMpForAiPlaythroughN({
+        pages,
+        frames,
+        playerCount: ctx.playerCount,
+        expectedPool: options.expectedPool ?? null,
+        instantBanners: true,
+        mobileAll
+    });
+
+    const roundStats = [];
+    for (let round = 1; round <= rounds; round++) {
+        log(`MP actions round ${round}/${rounds}...`);
+        const stats = await runMpAiPlaythroughN({
+            ctx,
+            pages,
+            frames,
+            playerCount: ctx.playerCount,
+            playToWin: true,
+            assertActionsWinInvariants: true,
+            mobileAll,
+            winSide: options.winSide ?? null,
+            instantBanners: true
+        });
+        roundStats.push({ round, ...stats });
+
+        if (round < rounds) {
+            throw new Error('runMpAiActionsOnlyNFromCtx: multi-round 3p actions not wired yet');
+        }
+
+        if (pause) {
+            await awaitMpActionsReviewOpenN({ pages, frames, mobileAll });
+            await relayoutMpHeadedForReview(pages, { mobile: mobileAll });
+            log('[PAUSE] Post-game review ready — press Done on host when finished inspecting.');
+            break;
+        }
+        if (headedReview) {
+            await awaitMpActionsReviewOpenN({ pages, frames, mobileAll });
+            await relayoutMpHeadedForReview(pages, { mobile: mobileAll });
+            const hostFrame = await getGameFrame(pages[0]);
+            const { assertHeadedMpLayout } = require('../../../../../shared/platform/mp-headed-assertions');
+            await assertHeadedMpLayout({
+                pages,
+                mobile: mobileAll,
+                hostPage: pages[0],
+                hostFrame,
+                log
+            });
+        }
+    }
+
+    log(pause
+        ? `SUCCESS: MP 3p actions complete (${rounds} round${rounds > 1 ? 's' : ''}, paused in review).`
+        : headedReview
+            ? `SUCCESS: MP 3p actions complete (${rounds} round${rounds > 1 ? 's' : ''}, post-game review + Done verified).`
+            : `SUCCESS: MP 3p actions playthrough complete (${rounds} round${rounds > 1 ? 's' : ''}).`);
+    return rounds > 1 ? { rounds: roundStats, ...roundStats[roundStats.length - 1] } : roundStats[0];
 }
 
 async function runMpAiActionsOnlyN(browser, options = {}) {
@@ -1088,6 +1227,7 @@ module.exports = {
     runMpAiPlaythroughN,
     resetMpForAiPlaythroughN,
     runMpAiActionsOnlyN,
+    runMpAiActionsOnlyNFromCtx,
     bootMpForAiN,
     awaitMpActionsReviewOpenN,
     // Legacy aliases (remove after callers migrate)

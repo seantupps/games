@@ -134,7 +134,7 @@
                     this._ackBananaInteraction(uid, msg, path);
                     ackedNew = true;
                     if (result === 'handled' && (msg.type === 'peel' || msg.type === 'bananas'
-                        || msg.type === 'victory-layout')) {
+                        || msg.type === 'victory-layout' || msg.type === 'dump')) {
                         boardAlreadySynced = true;
                     }
                 });

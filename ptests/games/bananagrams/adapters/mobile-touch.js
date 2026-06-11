@@ -6,7 +6,8 @@ const { getGameFrame } = require('../../../shared/adapters/desktop-input');
 
 const TOUCH = 'touch';
 const DOUBLE_TAP_GAP_MS = 80;
-const HOLD_DUMP_MS = 480;
+/** Match gameplay.js HOLD_DUMP_MS — minimum fair hold (not shorter than real play). */
+const HOLD_DUMP_MS = 450;
 
 function pointerOpts(type = TOUCH) {
     return { pointerType: type, button: 0 };
@@ -163,6 +164,49 @@ async function touchDragTile(frame, tileIndex = 0, dx = 80, dy = 60) {
             after
         };
     }, { idx: tileIndex, dx, dy });
+}
+
+/**
+ * Hold-dump via pointerdown → wait → pointerup on the tile (game's hold timer path).
+ * Not _handleDump / _sendBananaInteraction — same listeners as mobile hold.
+ */
+async function holdDumpTouchPage(_page, frame, tileIndex = -1, holdMs = HOLD_DUMP_MS) {
+    return frame.evaluate(async ({ idx, holdMs }) => {
+        const g = window.game;
+        g.beginGame?.();
+        const nodes = [...document.querySelectorAll('.tile')];
+        const node = nodes[idx < 0 ? nodes.length + idx : idx];
+        if (!node) return { ok: false, reason: 'no-tile' };
+        const tile = g.tiles.find((t) => t.id === node.dataset.tileId);
+        if (!tile) return { ok: false, reason: 'no-model' };
+        const beforeIds = [...g.tiles.map((t) => t.id)];
+        const heldTileId = tile.id;
+        const r = node.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const mk = (type) => new PointerEvent(type, {
+            clientX: cx,
+            clientY: cy,
+            bubbles: true,
+            pointerId: 1,
+            pointerType: 'touch',
+            button: 0,
+            buttons: type === 'pointerup' ? 0 : 1
+        });
+        node.dispatchEvent(mk('pointerdown'));
+        await new Promise((res) => setTimeout(res, holdMs));
+        node.dispatchEvent(mk('pointerup'));
+        await new Promise((res) => requestAnimationFrame(res));
+        return {
+            ok: true,
+            beforeIds,
+            heldTileId,
+            heldWorldPos: { x: tile.x, y: tile.y },
+            after: g.tiles.length,
+            gesture: 'pointer-hold',
+            tileIndex: idx < 0 ? nodes.length + idx : idx
+        };
+    }, { idx: tileIndex, holdMs });
 }
 
 /** Hold primary button on a tile without dragging — dump (+3). */
@@ -480,6 +524,7 @@ module.exports = {
     touchDragTile,
     touchDragTileToWorld,
     holdDump,
+    holdDumpTouchPage,
     doubleTapDump,
     assertPeelSpawnClearance,
     preparePeelCrosswordTouchPlan,

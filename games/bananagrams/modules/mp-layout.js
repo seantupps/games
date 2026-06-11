@@ -94,6 +94,25 @@
                 } catch (_) { /* ignore */ }
             },
 
+            _purgeLocalLayoutIds(ids) {
+                if (!ids?.length) return;
+                const drop = new Set(ids);
+                const layout = this._loadLocalLayout();
+                let layoutChanged = false;
+                drop.forEach((id) => {
+                    if (layout[id]) {
+                        delete layout[id];
+                        layoutChanged = true;
+                    }
+                });
+                if (layoutChanged) this._saveLocalLayout(layout);
+                const stored = this._loadLocalHandRecord();
+                const hand = (stored.hand || []).filter((h) => !drop.has(h.id));
+                if (hand.length !== (stored.hand || []).length) {
+                    this._saveLocalHand(hand);
+                }
+            },
+
             _layoutFromTiles(tiles) {
                 const layout = {};
                 (tiles || []).forEach((t) => {
@@ -173,9 +192,12 @@
                 return !this._hasSavedLocalLayoutForOwned(ownedList);
             },
 
-            _layoutMapForPlayer(board, uid, owned) {
+            _layoutMapForPlayer(board, uid, owned, options = {}) {
                 const ownedList = owned || [];
                 const remoteList = board?.tilePositionsByPlayer?.[uid];
+                if (options.preferBoardLayout && Array.isArray(remoteList) && remoteList.length) {
+                    return this._pruneLayout(this._positionsMapFromList(remoteList), ownedList);
+                }
                 const devSolvePending = this._bananaDevHook('pendingSolveLayout', board) === true;
                 const remoteSolveLayout = this._bananaDevHook(
                     'preferRemoteSolveLayout',

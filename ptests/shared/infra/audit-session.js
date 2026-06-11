@@ -2,6 +2,7 @@
  * Create Playwright contexts/pages for SP/MP audits by topology.
  */
 const { DESKTOP_VIEWPORT } = require('./viewport-constants');
+const { STEP_MS, NAV_MS } = require('./timeouts');
 
 /**
  * @param {'desktop'|'mobile'|'mixed'} topology
@@ -55,10 +56,9 @@ async function createAuditSession(browser, options = {}) {
         const context = await browser.newContext(contextOpts);
         if (mobile) await applyTouchDeviceMedia(context);
         const page = await context.newPage();
-        const mpMs = Number(process.env.FIVE_MOBILE_MP_PAGE_MS
-            || process.env.FIVE_MP_READY_MS
-            || 15000);
-        page.setDefaultTimeout(mpMs);
+        const pageMs = Number(process.env.FIVE_MOBILE_MP_PAGE_MS || STEP_MS);
+        page.setDefaultTimeout(pageMs);
+        page.setDefaultNavigationTimeout(Number(process.env.FIVE_NAV_TIMEOUT_MS || NAV_MS));
 
         contexts.push(context);
         pages.push(page);

@@ -217,12 +217,23 @@
                 this._dumpActorUid = uid;
             },
 
-            _hostApplyDump(uid, tileId) {
+            _hostApplyDump(uid, tileId, positionSnapshot = null) {
+                const preDumpTiles = uid === this._myUid()
+                    ? (this.tiles || []).map((t) => ({ id: t.id, x: t.x, y: t.y }))
+                    : (Array.isArray(positionSnapshot) ? positionSnapshot : null);
                 const result = this._hostApplyDumpInventoryOnly(uid, tileId);
                 if (!result.ok) return false;
                 this._hostBumpInventorySeq(uid);
                 this._hostBumpDump(uid);
-                this._hostApplyLocalOwnedToTiles?.(uid, result.removedId || tileId);
+                const removedId = result.removedId || tileId;
+                const drawnIds = result.drawnIds || [];
+                const removedHoldPos = preDumpTiles?.find((p) => p.id === removedId) || null;
+                if (Array.isArray(positionSnapshot) && positionSnapshot.length && uid !== this._myUid()) {
+                    this._hostSeedPlayerLayoutFromSnapshot(uid, positionSnapshot, removedId);
+                }
+                this._hostApplyDumpDrawLayouts(uid, drawnIds, removedId, positionSnapshot, removedHoldPos);
+                this._hostApplyLocalOwnedToTiles?.(uid, removedId, drawnIds, preDumpTiles);
+                this._clearLocalDragAfterDump?.();
                 this._hostSyncBoard({ immediate: true });
                 this._mpDistributionInvariantCheck?.('host-dump');
                 this._mpLetterIntegrityCheck?.('host-dump');
@@ -270,7 +281,130 @@
                     ownedSig: this._mpCombinedOwnedSig?.(),
                     combinedSig: `${this._mpLetterSigFromPool?.(this._tilePool) ?? ''}+${this._mpCombinedOwnedSig?.()}`
                 });
-                return { ok: true, removedId: removed.id };
+                return { ok: true, removedId: removed.id, drawnIds };
+            },
+
+            _hostSeedPlayerLayoutFromSnapshot(uid, snapshot, removedId = null) {
+                if (!uid || !Array.isArray(snapshot) || !snapshot.length) return;
+                this._hostEnsureMpStores();
+                if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
+                const layout = { ...(this._mpPlayerLayouts[uid] || {}) };
+                snapshot.forEach((p) => {
+                    if (!p?.id || p.id === removedId) return;
+                    if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+                        layout[p.id] = { x: p.x, y: p.y };
+                    }
+                });
+                if (removedId) delete layout[removedId];
+                this._mpPlayerLayouts[uid] = layout;
+            },
+
+            _hostDumpAnchorFromSnapshot(snapshot, drawnSet, removedId) {
+                if (!Array.isArray(snapshot) || !snapshot.length) return null;
+                const tiles = snapshot
+                    .filter((p) => p?.id && p.id !== removedId && !drawnSet.has(p.id))
+                    .map((p) => ({
+                        id: p.id,
+                        letter: this._mpLetter(p.id),
+                        x: p.x,
+                        y: p.y
+                    }))
+                    .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y));
+                return tiles.length ? tiles : null;
+            },
+
+            /** Plan fresh spawn slots for all dump draws (including same id redrawn from pool). */
+            _hostApplyDumpDrawLayouts(uid, drawnIds, removedId, positionSnapshot = null, removedHoldPos = null) {
+                if (!drawnIds?.length || typeof BananaRules === 'undefined') return;
+                this._hostEnsureMpStores();
+                if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
+                const drawnSet = new Set(drawnIds);
+                const fromSnapshot = uid !== this._myUid()
+                    ? this._hostDumpAnchorFromSnapshot(positionSnapshot, drawnSet, removedId)
+                    : null;
+                const existingTiles = fromSnapshot?.length
+                    ? fromSnapshot
+                    : this._hostDumpSpawnAnchorTiles(uid, drawnSet, removedId);
+                const letters = drawnIds.map((id) => this._mpLetter(id));
+                let spots = uid === this._myUid()
+                    ? this._planDrawnTileSpots(existingTiles, letters)
+                    : this._planDrawnTileSpotsForRemote(existingTiles, letters);
+                if (!spots || spots.length !== drawnIds.length) {
+                    spots = this._planDrawnTileSpots(existingTiles, letters);
+                }
+                if (removedHoldPos && Number.isFinite(removedHoldPos.x) && spots?.length === drawnIds.length) {
+                    const minDist = (BananaRules.TILE_SIZE || 40) + (BananaRules.TILE_GAP || 8);
+                    spots = spots.map((spot, i) => {
+                        if (Math.hypot(spot.x - removedHoldPos.x, spot.y - removedHoldPos.y) < minDist) {
+                            return {
+                                x: removedHoldPos.x + minDist * 2,
+                                y: removedHoldPos.y + (i * (BananaRules.TILE_SIZE || 40))
+                            };
+                        }
+                        return spot;
+                    });
+                }
+                const viewport = this._getVisibleWorldBounds();
+                if (!spots || spots.length !== drawnIds.length
+                    || !BananaRules.spawnSpotsInViewport(spots, viewport)) {
+                    const forced = BananaRules.spawnForceVisibleSlots(existingTiles, letters, viewport);
+                    if (forced?.length === drawnIds.length) {
+                        spots = forced;
+                    }
+                }
+                const layout = { ...(this._mpPlayerLayouts[uid] || {}) };
+                delete layout[removedId];
+                drawnIds.forEach((id) => { delete layout[id]; });
+                drawnIds.forEach((id, i) => {
+                    layout[id] = { x: spots[i].x, y: spots[i].y };
+                });
+                this._mpPlayerLayouts[uid] = layout;
+            },
+
+            /** Remote dump spawns: use guest hand cluster, not host desktop viewport. */
+            _planDrawnTileSpotsForRemote(existingTiles, letters) {
+                if (!letters.length || typeof BananaRules === 'undefined') return null;
+                const cluster = BananaRules.spawnClusterBounds(existingTiles);
+                if (!cluster) return this._planDrawnTileSpots(existingTiles, letters);
+                const visOpts = { visibilityBounds: cluster };
+                let spots = BananaRules.spawnAllocateSlots(existingTiles, letters, cluster, visOpts);
+                if (spots?.length === letters.length) return spots;
+                const gap = BananaRules.TILE_GAP;
+                const wide = {
+                    left: cluster.left - gap * 3,
+                    top: cluster.top - gap * 3,
+                    right: cluster.right + gap * 3,
+                    bottom: cluster.bottom + gap * 3
+                };
+                spots = BananaRules.spawnAllocateSlots(existingTiles, letters, wide, {
+                    visibilityBounds: wide
+                });
+                return spots?.length === letters.length ? spots : null;
+            },
+
+            _hostDumpSpawnAnchorTiles(uid, drawnSet, removedId) {
+                if (uid === this._myUid()) {
+                    return (this.tiles || [])
+                        .filter((t) => t.id !== removedId && !drawnSet.has(t.id))
+                        .map((t) => ({ id: t.id, letter: t.letter, x: t.x, y: t.y }));
+                }
+                const layout = { ...(this._mpPlayerLayouts?.[uid] || {}) };
+                delete layout[removedId];
+                const owned = this._mpOwned?.[uid] || [];
+                const tiles = [];
+                owned.forEach((o) => {
+                    if (drawnSet.has(o.id)) return;
+                    const pos = layout[o.id];
+                    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+                        tiles.push({
+                            id: o.id,
+                            letter: this._mpLetter(o.id),
+                            x: pos.x,
+                            y: pos.y
+                        });
+                    }
+                });
+                return tiles;
             },
 
             /** Host local bunch during play; guests read synced global/board pool. */
@@ -511,7 +645,8 @@
                 if (msg.type === 'dump' && msg.tileId) {
                     this._mpLetterIntegrityCheck?.('host-dump-reconcile');
                     this._mpDistributionInvariantCheck?.('host-dump-reconcile');
-                    if (this._hostApplyDump(uid, msg.tileId)) return 'handled';
+                    const layout = Array.isArray(msg.positions) ? msg.positions : null;
+                    if (this._hostApplyDump(uid, msg.tileId, layout)) return 'handled';
                     console.warn('[Bananagrams] guest dump failed on host for', uid, msg.tileId);
                     return 'retry';
                 }

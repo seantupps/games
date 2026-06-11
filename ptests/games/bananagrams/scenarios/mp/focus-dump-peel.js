@@ -9,14 +9,16 @@ const {
     WAIT_MS,
     enableFastBanners,
     dismissBanners,
-    assertActionBannerOnBoth,
     waitForDiag,
     dumpTile,
     syncGuestInventoryToHost,
     flushHostBananaInteractions,
-    assertAllTilesVisible
+    getGameFrame
 } = lib;
-const { sync, accounting, core } = require('../../assertions');
+const { assertAllTilesVisible } = require('../../assertions/spawn/spawn-visibility');
+const { assertActionBannerOnBoth } = require('../../../../shared/assertions/mp-authority');
+const { sync, accounting, core, spawn } = require('../../assertions');
+const { assertDumpTilesVisible, assertDumpTilesStable } = spawn.dump;
 const { assertAllPlayersSynced } = sync;
 const { assertPeelAccounting } = accounting;
 const { capturePlayerStates } = core.capture;
@@ -215,8 +217,8 @@ async function runFocusDumpPeelStress(opts) {
         mpCtx,
         page1,
         page2,
-        frame1,
-        frame2,
+        frame1: frame1In,
+        frame2: frame2In,
         mp,
         mobile,
         pages,
@@ -224,6 +226,9 @@ async function runFocusDumpPeelStress(opts) {
         focusJitterMs,
         syncMpHeadedView
     } = opts;
+
+    let frame1 = frame1In;
+    let frame2 = frame2In;
 
     const capturePair = (action) => capturePlayerStates(mpCtx, action);
 
@@ -235,6 +240,7 @@ async function runFocusDumpPeelStress(opts) {
 
     log(`FOCUS: dump/peel state convergence stress (rounds=${focusRounds}, jitter<=${focusJitterMs}ms)`);
     log('FOCUS: strict no-move peel checks active (any existing tile movement fails).');
+    log(`FOCUS: dump spawns must land on-screen (${mobile ? 'mobile' : 'desktop'} current viewport).`);
     await syncGuestInventoryToHost(page1, page2, GUEST_UID);
     await flushHostBananaInteractions(page1);
     await Promise.all([enableFastBanners(frame1), enableFastBanners(frame2)]);
@@ -248,6 +254,7 @@ async function runFocusDumpPeelStress(opts) {
 
     const setGuestPeelFixture = (suffix) => setGuestPeelFixtureOnHost({
         frame1,
+        frame2,
         page2,
         mp,
         suffix,
@@ -255,60 +262,76 @@ async function runFocusDumpPeelStress(opts) {
         waitLabel: `focus guest peel fixture ${suffix}`
     });
 
-    for (let i = 1; i <= focusRounds; i++) {
-        log(`FOCUS round ${i}/${focusRounds}: host dump`);
-        const beforeHostDump = await capturePair(`r${i}-before-host-dump`);
-        const hostDumpBeforeSeq = beforeHostDump.host.dumpSeq;
-        const hostDump = await dumpTile(frame1, -1, { mobile, hostPage: page1 });
-        if (!hostDump.ok) throw new Error(`focus host dump trigger failed r${i}: ${JSON.stringify(hostDump)}`);
-        await waitForDiag(page1, `focus host dump seq r${i}`, ({ seq }) => {
-            const g = document.getElementById('game-frame')?.contentWindow?.game;
-            const room = g?.roomData;
-            const board = (typeof RtdbSchema !== 'undefined' && room) ? RtdbSchema.readBoardFromRoom(room) : room?.global?.board;
-            return (board?.dumpSeq || 0) > seq && board?.dumpActorUid === 'u_banana_host';
-        }, { seq: hostDumpBeforeSeq }, WAIT_MS, mp);
-        await waitJitter();
-        const afterHostDump = await capturePair(`r${i}-after-host-dump`);
-        log(`[FOCUSDBG] ${afterHostDump.action} ${JSON.stringify(afterHostDump)}`);
-        assertAllPlayersSynced(afterHostDump, `host dump r${i}`);
-        await assertAllTilesVisible(page2, `focus host dump r${i} guest visibility`, { minTiles: 4 });
-        await assertActionBannerOnBoth(
-            page1,
-            page2,
-            'Dump!',
-            HOST_UID,
-            `focus host dump r${i} banner`
-        );
+    /** @param {'host'|'guest'} actor */
+    async function runFocusDump(actor, i, { postResetFirst = false } = {}) {
+        const guestTurn = actor === 'guest';
+        const actorUid = guestTurn ? GUEST_UID : HOST_UID;
+        const actorLabel = guestTurn ? 'guest' : 'host';
+        const bannerLabel = postResetFirst
+            ? `focus post-reset guest-first dump r${i} banner`
+            : `focus ${actorLabel} dump r${i} banner`;
 
-        log(`FOCUS round ${i}/${focusRounds}: guest dump`);
-        await flushHostBananaInteractions(page1);
-        const beforeGuestDump = await capturePair(`r${i}-before-guest-dump`);
-        const guestDumpBeforeSeq = beforeGuestDump.host.dumpSeq;
-        const guestDumpBeforeHand = new Set(beforeGuestDump.guest.handIds);
-        const guestDump = await dumpTile(frame2, -1, { mobile, hostPage: page1 });
-        if (!guestDump.ok) throw new Error(`focus guest dump trigger failed r${i}: ${JSON.stringify(guestDump)}`);
-        await waitForDiag(page1, `focus guest dump seq r${i}`, ({ seq }) => {
+        log(`FOCUS round ${i}/${focusRounds}: ${actorLabel} dump${postResetFirst ? ' (first after reset)' : ''}`);
+        if (guestTurn) await flushHostBananaInteractions(page1);
+
+        const actorPage = guestTurn ? page2 : page1;
+        let actorFrameLive = guestTurn ? frame2 : frame1;
+        actorFrameLive = await getGameFrame(actorPage);
+        const beforeIds = await actorFrameLive.evaluate(() => [...window.game.tiles.map((t) => t.id)]);
+
+        const before = await capturePair(`r${i}-before-${actorLabel}-dump`);
+        const dumpBeforeSeq = before.host.dumpSeq;
+        const handBefore = new Set(guestTurn ? before.guest.handIds : before.host.handIds);
+
+        const dumpRes = await dumpTile(actorFrameLive, -1, { mobile, hostPage: page1 });
+        if (!dumpRes.ok) {
+            throw new Error(`focus ${actorLabel} dump trigger failed r${i}: ${JSON.stringify(dumpRes)}`);
+        }
+
+        await waitForDiag(page1, `focus ${actorLabel} dump seq r${i}`, ({ seq, uid }) => {
             const g = document.getElementById('game-frame')?.contentWindow?.game;
             const room = g?.roomData;
-            const board = (typeof RtdbSchema !== 'undefined' && room) ? RtdbSchema.readBoardFromRoom(room) : room?.global?.board;
-            return (board?.dumpSeq || 0) > seq && board?.dumpActorUid === 'u_banana_guest';
-        }, { seq: guestDumpBeforeSeq }, WAIT_MS, mp);
-        await waitJitter();
-        const afterGuestDump = await capturePair(`r${i}-after-guest-dump`);
-        const guestDumpAdded = afterGuestDump.guest.handIds.filter((id) => !guestDumpBeforeHand.has(id));
-        if (!guestDumpAdded.length) {
-            throw new Error(`guest dump r${i} added no tiles\n${JSON.stringify({ beforeGuestDump, afterGuestDump }, null, 2)}`);
+            const board = (typeof RtdbSchema !== 'undefined' && room)
+                ? RtdbSchema.readBoardFromRoom(room)
+                : room?.global?.board;
+            return (board?.dumpSeq || 0) > seq && board?.dumpActorUid === uid;
+        }, { seq: dumpBeforeSeq, uid: actorUid }, WAIT_MS, mp);
+
+        await flushHostBananaInteractions(page1);
+        actorFrameLive = await getGameFrame(actorPage);
+
+        const spawnLabel = `focus ${actorLabel} dump r${i} spawns on-screen`;
+        const vis = await assertDumpTilesVisible(actorFrameLive, beforeIds, spawnLabel, {
+            mobile,
+            timeoutMs: WAIT_MS
+        });
+        if (!vis.ok) {
+            throw new Error(`${spawnLabel} failed (${JSON.stringify(vis, null, 2)})`);
         }
-        log(`[FOCUSDBG] ${afterGuestDump.action} ${JSON.stringify(afterGuestDump)}`);
-        assertAllPlayersSynced(afterGuestDump, `guest dump r${i}`);
-        await assertAllTilesVisible(page2, `focus guest dump r${i} guest visibility`, { minTiles: 4 });
-        await assertActionBannerOnBoth(
-            page1,
-            page2,
-            'Dump!',
-            GUEST_UID,
-            `focus guest dump r${i} banner`
-        );
+        const stable = await assertDumpTilesStable(actorFrameLive, beforeIds, spawnLabel, { mobile });
+        if (!stable.ok) {
+            throw new Error(`${spawnLabel} unstable (${JSON.stringify(stable, null, 2)})`);
+        }
+        if (guestTurn) frame2 = actorFrameLive;
+        else frame1 = actorFrameLive;
+
+        await waitJitter();
+        const after = await capturePair(`r${i}-after-${actorLabel}-dump`);
+        const added = (guestTurn ? after.guest.handIds : after.host.handIds)
+            .filter((id) => !handBefore.has(id));
+        if (!added.length) {
+            throw new Error(`${actorLabel} dump r${i} added no tiles\n${JSON.stringify({ before, after }, null, 2)}`);
+        }
+        log(`[FOCUSDBG] ${after.action} ${JSON.stringify(after)}`);
+        assertAllPlayersSynced(after, `${actorLabel} dump r${i}`);
+        await assertAllTilesVisible(page2, `focus ${actorLabel} dump r${i} guest visibility`, { minTiles: 4 });
+        await assertActionBannerOnBoth(page1, page2, 'Dump!', actorUid, bannerLabel);
+    }
+
+    for (let i = 1; i <= focusRounds; i++) {
+        // Guest dumps first after reset, then host; pattern repeats each round (guest → host → guest → host …).
+        await runFocusDump('guest', i, { postResetFirst: i === 1 });
+        await runFocusDump('host', i);
 
         log(`FOCUS round ${i}/${focusRounds}: host peel`);
         const hostPeelSetup = await solveAndApplyAiMove(frame1);

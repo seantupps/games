@@ -1501,6 +1501,11 @@ async function resetMpForAiPlaythroughFromCtx(ctx, opts = {}) {
 }
 
 async function runMpAiActionsOnlyFromCtx(ctx, options = {}) {
+    const n = ctx.playerCount ?? ctx.pages?.length ?? 2;
+    if (n >= 3) {
+        const { runMpAiActionsOnlyNFromCtx } = require('./playthrough-n');
+        return runMpAiActionsOnlyNFromCtx(ctx, options);
+    }
     return runMpAiActionsOnly2p(ctx.pages[0], ctx.pages[1], { ...options, ctx });
 }
 

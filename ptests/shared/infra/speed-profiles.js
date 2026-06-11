@@ -33,7 +33,8 @@ const PROFILES = {
 const SCENARIO_PROFILES = {
     actions: 'ci',
     smoke: 'ci',
-    focus: 'dev'
+    focus: 'dev',
+    'guest-double-dump': 'ci'
 };
 
 function applySpeedProfile(tier, options = {}) {

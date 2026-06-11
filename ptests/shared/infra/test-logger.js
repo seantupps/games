@@ -45,16 +45,24 @@ function formatContext(ctx = {}) {
 
 /**
  * @param {unknown} details
- * @returns {string}
+ * @returns {string|null}
  */
-function stringifyDetails(details) {
-    if (details == null) return '';
+function normalizeErrorDetails(details) {
+    if (details == null) return null;
     if (typeof details === 'string') return details;
     try {
         return JSON.stringify(details, null, 2);
     } catch (_) {
         return String(details);
     }
+}
+
+/**
+ * @param {unknown} details
+ * @returns {string}
+ */
+function stringifyDetails(details) {
+    return normalizeErrorDetails(details) || '';
 }
 
 /**
@@ -65,10 +73,12 @@ function formatAuditError(err) {
     if (!err) return 'Unknown error';
     const parts = [];
     if (err.message) parts.push(err.message);
-    if (err.details) parts.push(err.details);
+    const detailText = normalizeErrorDetails(err.details);
+    if (detailText) parts.push(detailText);
     const cause = err.cause;
-    if (cause?.details && cause.details !== err.details) {
-        parts.push(String(cause.details));
+    const causeDetails = normalizeErrorDetails(cause?.details);
+    if (causeDetails && causeDetails !== detailText) {
+        parts.push(causeDetails);
     }
     const head = parts.join('\n\n');
     if (err.stack && !head.includes(err.stack.split('\n')[1] || '')) {
@@ -170,7 +180,7 @@ const defaultLogger = createTestLogger();
 function captureAuditFailure(err) {
     return {
         error: err?.message || String(err),
-        details: err?.details || null,
+        details: normalizeErrorDetails(err?.details),
         stack: err?.stack || null
     };
 }
@@ -182,6 +192,7 @@ module.exports = {
     formatAuditError,
     formatContext,
     stringifyDetails,
+    normalizeErrorDetails,
     captureAuditFailure,
     isRunnerSilent,
     isMpChatterSuppressed,

@@ -12,11 +12,28 @@ const { readBoardField } = core;
 
 
 /**
+ * Guest dump guards block host-authoritative fixture shrinks (e.g. focus after dump rounds).
+ */
+async function clearGuestDumpInventoryGuards(frame2) {
+    await frame2.evaluate(() => {
+        const g = window.game;
+        g._guestDumpHandFloor = null;
+        g._guestDumpSpawnLock = null;
+        g._lastGuestDumpLayoutSeq = 0;
+        g._guestPreDumpSnapshot = null;
+        g._guestOptimisticDumpRemovedId = null;
+        g._guestPendingDumpTile = null;
+        g._guestDumpSeqAtSend = null;
+    });
+}
+
+/**
  * Host-authoritative CAT↓+AT→ fixture (same as focus guest-peel rounds).
  */
 async function setGuestPeelFixtureOnHost(opts) {
     const {
         frame1,
+        frame2,
         page2,
         mp,
         suffix,
@@ -24,6 +41,10 @@ async function setGuestPeelFixtureOnHost(opts) {
         source = 'guest-peel-fixture',
         waitLabel = `guest peel fixture ${suffix}`
     } = opts;
+
+    if (frame2) {
+        await clearGuestDumpInventoryGuards(frame2);
+    }
 
     await frame1.evaluate(({ uid, s, src }) => {
         const g = window.game;

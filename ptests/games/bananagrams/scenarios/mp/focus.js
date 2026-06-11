@@ -7,7 +7,7 @@ const { runFullScenario } = require('./full-run');
 module.exports = defineMpScenario({
     id: 'focus',
     kind: 'micro-fixture',
-    description: 'Dump/peel state convergence stress with jitter and strict no-move peel checks',
+    description: 'Dump/peel stress — post-reset guest-first dump banners, on-screen dump spawns in current viewport',
     platforms: ['desktop', 'mobile'],
     playerCounts: [2],
     joinMode: 'invite',

@@ -101,11 +101,23 @@ async function runBananagramsMpNAudit(spec = {}, opts = {}) {
             duration: ((Date.now() - t0) / 1000).toFixed(2)
         };
     } catch (err) {
+        const { captureAuditFailureWithMpSnapshot } = require('../../../shared/infra/failure-snapshot');
+        const failure = await captureAuditFailureWithMpSnapshot(err, {
+            pages,
+            page1: pages[0],
+            page2: pages[1],
+            mobile: mobileAll,
+            topology,
+            scenario: scenarioId,
+            testName,
+            gameId: 'bananagrams',
+            playerCount
+        });
         result = {
             name: testName,
             success: false,
             duration: ((Date.now() - t0) / 1000).toFixed(2),
-            error: err.message
+            ...failure
         };
     } finally {
         if (shouldCloseBrowser()) {

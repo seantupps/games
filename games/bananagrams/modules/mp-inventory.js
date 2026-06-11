@@ -65,7 +65,13 @@
                 return hydrated;
             },
 
-            _mergeInventoryWithLayout(owned, layout, runtimeTiles) {
+            _mergeInventoryWithLayout(owned, layout, runtimeTiles, mergeOpts = {}) {
+                if (!this.isHost?.() && this._guestDumpHandFloor != null
+                    && (owned?.length || 0) < this._guestDumpHandFloor) {
+                    const keep = (runtimeTiles?.length ? runtimeTiles : this.tiles) || [];
+                    if (keep.length >= this._guestDumpHandFloor) return keep;
+                }
+                const forceLayoutIds = mergeOpts.forceLayoutIds;
                 const tileLetter = (id) => {
                     if (this._mpPoolUsesTileIds?.()) return this._mpLetter(id) || '';
                     return '';
@@ -108,6 +114,17 @@
                 const placed = [];
                 const needSpawn = [];
                 (owned || []).forEach((o) => {
+                    // Dump draws (incl. same-id pool redraw) must leave the hold spot — never keep drag coords.
+                    if (forceLayoutIds?.has(o.id)) {
+                        if (layoutMap[o.id]
+                            && Number.isFinite(layoutMap[o.id].x)
+                            && Number.isFinite(layoutMap[o.id].y)) {
+                            placed.push(tileFromOwnedAndRuntime(o, runtimeById[o.id], layoutMap[o.id]));
+                        } else {
+                            needSpawn.push(o);
+                        }
+                        return;
+                    }
                     if (dragging && runtimeById[o.id]) {
                         const rt = runtimeById[o.id];
                         if (Number.isFinite(rt.x) && Number.isFinite(rt.y)) {
@@ -404,12 +421,193 @@
                 }, 520);
             },
 
+            _clearLocalDragAfterDump() {
+                this.isDragging = false;
+                this._pointerDragging = false;
+                this._localDragUntil = 0;
+            },
+
             _isDraggingHand() {
                 return this.isDragging || Date.now() < this._localDragUntil;
             },
 
+            /** Dump draw ids: newly owned + same id redrawn from pool after dump. */
+            _dumpDrawForceLayoutIds(preTiles, owned) {
+                const ownedList = owned || [];
+                const prevIds = new Set((preTiles || []).map((t) => t.id));
+                const ownedIdSet = new Set(ownedList.map((o) => o.id));
+                const newDrawIds = ownedList.filter((o) => !prevIds.has(o.id)).map((o) => o.id);
+                const drawIds = new Set(newDrawIds);
+                const pendingId = this._guestPendingDumpTile?.id
+                    || this._guestOptimisticDumpRemovedId;
+                if (pendingId && ownedIdSet.has(pendingId)) drawIds.add(pendingId);
+                return drawIds;
+            },
+
+            /**
+             * Guest: place dump draws in this client's visible viewport (ignore host board coords).
+             * Host inventory is authoritative; display positions for dump draws are guest-local.
+             */
+            _guestPlaceDumpDrawsInViewport(drawIds) {
+                if (this.isHost?.() || !drawIds?.size || typeof BananaRules === 'undefined') {
+                    return false;
+                }
+                const drawTiles = (this.tiles || []).filter((t) => drawIds.has(t.id));
+                if (!drawTiles.length) return false;
+                const anchor = (this.tiles || []).filter(
+                    (t) => !drawIds.has(t.id) && Number.isFinite(t.x) && Number.isFinite(t.y)
+                );
+                const letters = drawTiles.map((t) => t.letter);
+                let spots = typeof this._planDrawnTileSpots === 'function'
+                    ? this._planDrawnTileSpots(anchor, letters)
+                    : null;
+                const hold = this._guestPendingDumpTile
+                    || this._guestPreDumpSnapshot?.find(
+                        (p) => p.id === this._guestOptimisticDumpRemovedId
+                    )
+                    || null;
+                const size = BananaRules.TILE_SIZE || 40;
+                const gap = BananaRules.TILE_GAP || 8;
+                const minDist = size + gap;
+                if (hold && Number.isFinite(hold.x) && spots?.length === drawTiles.length) {
+                    spots = spots.map((spot, i) => {
+                        if (Math.hypot(spot.x - hold.x, spot.y - hold.y) < minDist) {
+                            return {
+                                x: hold.x + minDist * 2,
+                                y: hold.y + i * size
+                            };
+                        }
+                        return spot;
+                    });
+                }
+                const viewport = this._getVisibleWorldBounds();
+                if (!spots || spots.length !== drawTiles.length
+                    || !BananaRules.spawnSpotsInViewport(spots, viewport)) {
+                    const forced = BananaRules.spawnForceVisibleSlots(anchor, letters, viewport);
+                    if (forced?.length === drawTiles.length) {
+                        spots = forced;
+                    }
+                }
+                const byId = {};
+                drawTiles.forEach((t, i) => { byId[t.id] = spots[i]; });
+                this.tiles = (this.tiles || []).map((t) => {
+                    const spot = byId[t.id];
+                    return spot ? { ...t, x: spot.x, y: spot.y } : t;
+                });
+                drawTiles.forEach((t) => this._purgeLocalLayoutIds?.([t.id]));
+                return true;
+            },
+
+            _guestLockDumpSpawnPositions(drawIds, dumpSeq) {
+                if (!drawIds?.size || !dumpSeq) return;
+                const byId = {};
+                (this.tiles || []).forEach((t) => {
+                    if (drawIds.has(t.id) && Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                        byId[t.id] = { x: t.x, y: t.y };
+                    }
+                });
+                this._guestDumpSpawnLock = { seq: dumpSeq, byId };
+            },
+
+            /** Prevent board echo / layout cache from jittering dump draws after first placement. */
+            _guestRestoreDumpSpawnLock() {
+                const lock = this._guestDumpSpawnLock;
+                if (!lock?.byId || !Object.keys(lock.byId).length) return false;
+                let changed = false;
+                this.tiles = (this.tiles || []).map((t) => {
+                    const pos = lock.byId[t.id];
+                    if (!pos) return t;
+                    if (t.x === pos.x && t.y === pos.y) return t;
+                    changed = true;
+                    return { ...t, x: pos.x, y: pos.y };
+                });
+                return changed;
+            },
+
+            /** Drop stale pre/post-dump board echoes while guest dump is in flight or just applied (LAN RTDB lag). */
+            _guestIsStalePreDumpBoard(board, owned, uid) {
+                if (this.isHost?.()) return false;
+                const ownedList = owned || [];
+                const ownedLen = ownedList.length;
+                const dumpSeqNow = board?.dumpSeq || 0;
+                const lastLayout = this._lastGuestDumpLayoutSeq || 0;
+                const ownDump = board?.dumpActorUid === uid;
+
+                const pendingId = this._guestPendingDumpTile?.id;
+                if (pendingId) {
+                    const sentAt = this._guestDumpSeqAtSend ?? 0;
+                    if (dumpSeqNow > sentAt && ownDump) return false;
+                    if (ownedList.some((o) => o.id === pendingId)) return true;
+                }
+
+                const baseline = this._guestDumpBaselineOwnedCount;
+                if (baseline != null && ownDump && dumpSeqNow >= lastLayout) {
+                    const localCount = this.tiles?.length || 0;
+                    const expectedAfter = baseline + 2;
+                    if (ownedLen === baseline && localCount >= expectedAfter) return true;
+
+                    const baselineIds = this._guestDumpBaselineIds;
+                    if (baselineIds?.size && ownedLen === baselineIds.size) {
+                        const ownedSet = new Set(ownedList.map((o) => o.id));
+                        if ([...baselineIds].every((id) => ownedSet.has(id))) return true;
+                    }
+                }
+
+                return false;
+            },
+
+            /** Guest: reject board inventory that would drop locked dump spawns or rewind pre-dump hand. */
+            _guestShouldRejectDumpInventoryApply(board, owned, uid) {
+                if (this.isHost?.()) return false;
+
+                const ownedList = owned || [];
+                const localCount = this.tiles?.length || 0;
+                const dumpSeqNow = board?.dumpSeq || 0;
+                const lastLayout = this._lastGuestDumpLayoutSeq || 0;
+                const ownDump = board?.dumpActorUid === uid;
+
+                if (this._guestIsStalePreDumpBoard(board, ownedList, uid)) return true;
+
+                const handFloor = this._guestDumpHandFloor;
+                if (handFloor != null && ownedList.length < handFloor
+                    && (this.tiles?.length || 0) >= handFloor) {
+                    return true;
+                }
+
+                if (ownDump && lastLayout > 0 && dumpSeqNow >= lastLayout && ownedList.length < localCount) {
+                    return true;
+                }
+
+                const lock = this._guestDumpSpawnLock;
+                if (lock?.seq === dumpSeqNow && lock?.byId) {
+                    const ownedSet = new Set(ownedList.map((o) => o.id));
+                    for (const id of Object.keys(lock.byId)) {
+                        if ((this.tiles || []).some((t) => t.id === id) && !ownedSet.has(id)) return true;
+                    }
+                }
+
+                return false;
+            },
+
+            _guestSyncBoardOwnedFromLocal(uid) {
+                const board = this.roomData?.global?.board;
+                if (!board || !uid) return;
+                const owned = (this.tiles || []).map((t) => ({ id: t.id, faceUp: !!t.faceUp }));
+                if (!board.tilesOwnedByPlayer) board.tilesOwnedByPlayer = {};
+                board.tilesOwnedByPlayer[uid] = owned;
+                if (board.hands) board.hands[uid] = owned;
+            },
+
+            _guestStripLockedDumpDrawsFromLayout(layout, dumpSeq) {
+                const lock = this._guestDumpSpawnLock;
+                if (!layout || lock?.seq !== dumpSeq || !lock?.byId) return layout;
+                const next = { ...layout };
+                Object.keys(lock.byId).forEach((id) => { delete next[id]; });
+                return next;
+            },
+
             /** Host: mirror _mpOwned onto live tiles immediately after peel/dump inventory commit. */
-            _hostApplyLocalOwnedToTiles(uid, removedTileId = null) {
+            _hostApplyLocalOwnedToTiles(uid, removedTileId = null, drawnIds = null, preDumpTiles = null) {
                 if (!this.isHost?.() || uid !== this._myUid()) return;
                 if (!this.canMutatePlayingBoard?.()) return;
                 this._hostEnsureMpStores();
@@ -419,27 +617,41 @@
                 if (!this._mpPlayerLayouts) this._mpPlayerLayouts = {};
                 if (removedTileId && this._mpPlayerLayouts[uid]) {
                     const next = { ...this._mpPlayerLayouts[uid] };
-                    delete next[removedTileId];
+                    const sameIdRedraw = Array.isArray(drawnIds)
+                        && drawnIds.includes(removedTileId);
+                    if (!sameIdRedraw) delete next[removedTileId];
                     this._mpPlayerLayouts[uid] = next;
                 }
-                const runtime = removedTileId
+                const snapshot = preDumpTiles?.length
+                    ? preDumpTiles
+                    : (this.tiles || []).map((t) => ({ id: t.id, x: t.x, y: t.y }));
+                const forceLayoutIds = drawnIds?.length ? new Set(drawnIds) : null;
+                let runtime = removedTileId
                     ? (this.tiles || []).filter((t) => t.id !== removedTileId)
                     : (this.tiles || []);
+                if (forceLayoutIds?.size) {
+                    runtime = runtime.filter((t) => !forceLayoutIds.has(t.id));
+                }
                 const posList = Object.entries(this._mpPlayerLayouts[uid] || {}).map(([id, p]) => ({
                     id,
                     x: p.x,
                     y: p.y
                 }));
                 const board = { tilePositionsByPlayer: { [uid]: posList }, gameStarted: this.gameStarted };
-                const layout = this._layoutMapForPlayer(board, uid, owned);
-                const keepRuntime = this._shouldKeepRuntimeTiles(board, owned);
+                const layout = this._layoutMapForPlayer(board, uid, owned, {
+                    preferBoardLayout: !!(forceLayoutIds?.size)
+                });
+                const keepRuntime = forceLayoutIds?.size
+                    ? runtime.length > 0
+                    : this._shouldKeepRuntimeTiles(board, owned);
                 this.tiles = this._mergeInventoryWithLayout(
                     owned,
                     layout,
-                    keepRuntime ? runtime : null
+                    keepRuntime ? runtime : null,
+                    { forceLayoutIds }
                 );
                 if (this.tiles.length !== owned.length) {
-                    this.tiles = this._mergeInventoryWithLayout(owned, layout, null);
+                    this.tiles = this._mergeInventoryWithLayout(owned, layout, null, { forceLayoutIds });
                 }
                 this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                 this._localInventorySeq = this._mpInventorySeq?.[uid] || 0;
@@ -506,6 +718,13 @@
             _rebuildHandFromBoard(board, options = {}) {
                 const uid = this._myUid();
                 const owned = this._mpOwnedForInventoryApply(board, uid);
+                if (this._guestShouldRejectDumpInventoryApply(board, owned, uid)) {
+                    if (!this.isHost?.()) {
+                        this._guestSyncBoardOwnedFromLocal(uid);
+                        this._guestRestoreDumpSpawnLock();
+                    }
+                    return false;
+                }
                 const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                 if (!options.reset && !owned.length && !this.isHost()) {
                     const cachedRec = this._loadLocalHandRecord?.() || { resetCount: null, hand: [] };
@@ -709,6 +928,15 @@
                 } else {
                     const remote = this._boardInventorySeq(board, uid);
                     const owned = this._mpOwnedForInventoryApply(board, uid);
+                    if (this._guestShouldRejectDumpInventoryApply(board, owned, uid)) {
+                        if (!this.isHost?.()) {
+                            this._guestSyncBoardOwnedFromLocal(uid);
+                            if (this._guestRestoreDumpSpawnLock()) {
+                                layoutChanged = true;
+                            }
+                        }
+                        return false;
+                    }
                     const inPlay = !!(this.gameStarted || board.gameStarted || this.started);
                     if (!options.reset && !options.force && inPlay
                         && !owned.length && (this.tiles?.length > 0)) {
@@ -741,15 +969,72 @@
                     const countMismatch = owned.length !== (this.tiles?.length || 0);
                     if (remote > localSeq || ownedChanged || devSolvePending) {
                         if (devSolvePending) this._clearLocalLayout();
-                        const layout = this._layoutMapForPlayer(board, uid, owned);
+                        const dumpSeqNow = board?.dumpSeq || 0;
+                        const guestOwnDump = board?.dumpActorUid === uid;
+                        const guestDumpAdvanced = !this.isHost?.()
+                            && guestOwnDump
+                            && dumpSeqNow > (this._lastGuestDumpLayoutSeq || 0);
+                        if (guestDumpAdvanced) {
+                            this._guestDumpSpawnLock = null;
+                        }
+                        const snapshot = this._guestPreDumpSnapshot?.length
+                            ? this._guestPreDumpSnapshot
+                            : (this.tiles || []).map((t) => ({
+                                id: t.id,
+                                x: t.x,
+                                y: t.y
+                            }));
+                        const dumpDrawIds = guestDumpAdvanced
+                            ? this._dumpDrawForceLayoutIds(snapshot, owned)
+                            : null;
+                        let layout = this._layoutMapForPlayer(board, uid, owned);
+                        layout = this._guestStripLockedDumpDrawsFromLayout(layout, dumpSeqNow);
+                        if (dumpDrawIds?.size) {
+                            this._purgeLocalLayoutIds?.([...dumpDrawIds]);
+                            dumpDrawIds.forEach((id) => { delete layout[id]; });
+                        }
                         const keepRuntime = this._shouldKeepRuntimeTiles(board, owned);
+                        const inventoryGrew = (owned?.length || 0) > (this.tiles?.length || 0);
                         const forceFullMerge = devSolvePending
-                            || (countMismatch && extraRuntime);
-                        const runtime = forceFullMerge
+                            || (countMismatch && extraRuntime && !inventoryGrew);
+                        let runtime = forceFullMerge
                             ? null
                             : (keepRuntime ? this.tiles : null);
-                        this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
-                        this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
+                        if (guestDumpAdvanced && dumpDrawIds?.size && runtime?.length) {
+                            runtime = runtime.filter((t) => !dumpDrawIds.has(t.id));
+                        }
+                        if (!this.isHost?.() && guestOwnDump
+                            && (this._lastGuestDumpLayoutSeq || 0) > 0
+                            && dumpSeqNow <= (this._lastGuestDumpLayoutSeq || 0)
+                            && owned.length < (this.tiles?.length || 0)) {
+                            this._guestSyncBoardOwnedFromLocal(uid);
+                            if (this._guestRestoreDumpSpawnLock()) layoutChanged = true;
+                        } else {
+                            this.tiles = this._mergeInventoryWithLayout(
+                                owned,
+                                layout,
+                                runtime,
+                                dumpDrawIds?.size ? { forceLayoutIds: dumpDrawIds } : {}
+                            );
+                            this.tiles = this._mpHydrateTiles?.(this.tiles) || this.tiles;
+                        }
+                        if (guestDumpAdvanced && dumpDrawIds?.size) {
+                            this._guestPlaceDumpDrawsInViewport(dumpDrawIds);
+                            this._guestLockDumpSpawnPositions(dumpDrawIds, dumpSeqNow);
+                            this._lastGuestDumpLayoutSeq = dumpSeqNow;
+                            this._guestPreDumpSnapshot = null;
+                            this._guestOptimisticDumpRemovedId = null;
+                            this._guestPendingDumpTile = null;
+                            this._guestDumpSeqAtSend = null;
+                            this._guestDumpHandFloor = owned.length;
+                            this._guestSyncBoardOwnedFromLocal(uid);
+                        }
+                        if (!this.isHost?.() && this._guestRestoreDumpSpawnLock()) {
+                            layoutChanged = true;
+                        }
+                        if (guestDumpAdvanced && dumpDrawIds?.size && typeof this._render === 'function') {
+                            this._render();
+                        }
                         this._localInventorySeq = remote;
                         if (this._isMultiplayerMode?.() && !this.isHost?.()) {
                             this._mpLetterIntegrityCheck?.('guest-sync-apply');

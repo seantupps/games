@@ -11,7 +11,9 @@
  *   ctx-proof — MpCtx assertion smoke (pool, peel, banner) on 2p and 3p
  */
 
-const MP_SCENARIOS = ['full', 'sync', 'focus', 'actions', 'solve', 'review', 'join', 'ctx-proof', 'peel-register-repro'];
+const MP_SCENARIOS = ['full', 'sync', 'focus', 'actions', 'solve', 'review', 'join', 'ctx-proof', 
+'peel-register-repro', 'dump-remove-tile', 'dump-lan-visible', 'guest-double-dump', 'guest-dump-banner-repro'];
+
 /** Bare `--game=bananagrams` — single full audit (focus/solve/actions/review via `--scenario=`). */
 const MP_DEFAULT_SUITE = ['full'];
 const SP_SCENARIOS = ['all', 'hub', 'ui', 'actions', 'placement', 'dump', 'peel', 'solve'];

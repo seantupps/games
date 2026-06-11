@@ -66,11 +66,6 @@ async function holdDump(frame, tileIndex = -1, holdMs = 480, hostPage = null) {
         if (!tile) return { ok: false, reason: 'no-model' };
         const before = g.tiles.length;
         const beforeIds = [...g.tiles.map((t) => t.id)];
-        const guestMp = g._isMultiplayerMode?.() && !g.isHost?.();
-        if (guestMp) {
-            g._sendBananaInteraction({ type: 'dump', tileId: tile.id });
-            return { ok: true, before, beforeIds, after: g.tiles.length, guestMp: true };
-        }
         const r = node.getBoundingClientRect();
         const cx = r.left + r.width / 2;
         const cy = r.top + r.height / 2;

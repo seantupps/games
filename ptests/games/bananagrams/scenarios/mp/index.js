@@ -12,6 +12,10 @@ const join = require('./join');
 const ctxProof = require('./ctx-proof');
 const template = require('./template');
 const peelRegisterRepro = require('./peel-register-repro-3p');
+const dumpRemoveTile = require('./dump-remove-tile');
+const dumpLanVisible = require('./dump-lan-visible');
+const guestDoubleDump = require('./guest-double-dump');
+const guestDumpBannerRepro = require('./guest-dump-banner-repro');
 
 /** @type {Record<string, import('./contract').MpScenarioModule>} */
 const MP_SCENARIOS = {
@@ -24,7 +28,11 @@ const MP_SCENARIOS = {
     join,
     'ctx-proof': ctxProof,
     template,
-    'peel-register-repro': peelRegisterRepro
+    'peel-register-repro': peelRegisterRepro,
+    'dump-remove-tile': dumpRemoveTile,
+    'dump-lan-visible': dumpLanVisible,
+    'guest-double-dump': guestDoubleDump,
+    'guest-dump-banner-repro': guestDumpBannerRepro
 };
 
 const ALIASES = {
