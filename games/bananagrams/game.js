@@ -12,7 +12,8 @@
  * `_shouldProjectPlayingInventory()` allows. Review uses `_applyReviewLayouts()` only.
  */
 class BananagramsGame extends BaseGame {
-    static TILE_HIT_INSET = 0;
+    /** Extra pointer/selection padding (px) on tile edges not touching a neighbor. */
+    static TILE_SELECT_EXPAND = 15;
 
     /** MP lifecycle on global/board.phase ('playing' | 'review' | 'idle'). */
     static MP_PHASE = {

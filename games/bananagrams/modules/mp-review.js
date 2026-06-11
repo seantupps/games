@@ -1134,7 +1134,10 @@
                 const merged = [];
                 const counts = {};
                 Object.entries(layouts || {}).forEach(([ownerUid, list]) => {
-                    const tiles = list || [];
+                    let tiles = (list || []).map((t) => ({ ...t }));
+                    if (typeof BananaGrid !== 'undefined' && BananaGrid.resolveHandPositions) {
+                        tiles = BananaGrid.resolveHandPositions(tiles);
+                    }
                     counts[ownerUid] = tiles.length;
                     tiles.forEach((t) => {
                         merged.push({

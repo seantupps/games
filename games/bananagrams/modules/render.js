@@ -198,9 +198,6 @@
                     if (!existing.has(node.dataset.tileId)) node.remove();
                 });
         
-                const inset = BananagramsGame.TILE_HIT_INSET;
-                const hitSize = 40 + inset * 2;
-
                 const tilesToRender = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                 this.tiles = tilesToRender;
 
@@ -243,14 +240,10 @@
                         el.dataset.bananaDragBound = '1';
                     }
                     if (face) face.textContent = tile.letter;
-                    el.style.width = `${hitSize}px`;
-                    el.style.height = `${hitSize}px`;
                     const showFace = tile.faceUp || this.gameStarted;
                     el.classList.toggle('is-face-down', !showFace);
                     if (!el.classList.contains('is-dragging')) {
-                        const pos = this._tileElPos(tile);
-                        el.style.left = `${pos.left}px`;
-                        el.style.top = `${pos.top}px`;
+                        this._applyTileElLayout(el, tile);
                     }
                     const on = this._selectionHighlight && this._selectedIds.has(tile.id);
                     el.classList.toggle('is-selected', on);

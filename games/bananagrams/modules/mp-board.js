@@ -916,7 +916,11 @@
                     return;
                 }
                 if (Array.isArray(board.tiles)) {
-                    this.tiles = board.tiles.map((t) => ({ ...t }));
+                    let tiles = board.tiles.map((t) => ({ ...t }));
+                    if (typeof BananaGrid !== 'undefined' && BananaGrid.resolveHandPositions) {
+                        tiles = BananaGrid.resolveHandPositions(tiles);
+                    }
+                    this.tiles = tiles;
                     this.started = true;
                 }
                 if (Array.isArray(board.pool)

@@ -18,11 +18,42 @@
         return { x: gx * TILE_SIZE, y: gy * TILE_SIZE };
     }
 
+    /** Which cardinal edges of `tile` touch another tile (same grid step as snap). */
+    function tileConnectedSides(tile, others, gap = TILE_SIZE) {
+        let left = false;
+        let right = false;
+        let top = false;
+        let bottom = false;
+        for (const o of others) {
+            if (!o || o.id === tile.id) continue;
+            const dx = o.x - tile.x;
+            const dy = o.y - tile.y;
+            if (dx === -gap && dy === 0) left = true;
+            else if (dx === gap && dy === 0) right = true;
+            else if (dx === 0 && dy === -gap) top = true;
+            else if (dx === 0 && dy === gap) bottom = true;
+        }
+        return { left, right, top, bottom };
+    }
+
     /** True if two tile top-left positions share the same grid cell. */
     function tilesShareCell(a, b, size = TILE_SIZE) {
         const ca = toCell(a.x, a.y);
         const cb = toCell(b.x, b.y);
         return ca.gx === cb.gx && ca.gy === cb.gy;
+    }
+
+    /** Exact edge slot beside `other` — shares its row or column, no sub-pixel offset. */
+    function alignedSnapPos(other, side, size = TILE_SIZE) {
+        const ox = Math.round(other.x);
+        const oy = Math.round(other.y);
+        switch (side) {
+            case 'right': return { x: ox + size, y: oy };
+            case 'left': return { x: ox - size, y: oy };
+            case 'down': return { x: ox, y: oy + size };
+            case 'up': return { x: ox, y: oy - size };
+            default: return { x: ox, y: oy };
+        }
     }
 
     /** Snap to a free neighboring edge — never stack on the same cell. */
@@ -31,37 +62,149 @@
         const cx = tile.x + size / 2;
         const cy = tile.y + size / 2;
         const candidates = [];
+        const sides = ['right', 'left', 'down', 'up'];
 
         others.forEach((other) => {
             if (other.id === tile.id) return;
-            const edges = [
-                { x: other.x + size, y: other.y },
-                { x: other.x - size, y: other.y },
-                { x: other.x, y: other.y + size },
-                { x: other.x, y: other.y - size }
-            ];
-            edges.forEach((pos) => {
+            sides.forEach((side) => {
+                const pos = alignedSnapPos(other, side, size);
                 const { gx, gy } = toCell(pos.x, pos.y);
                 if (map.has(cellKey(gx, gy))) return;
                 const d = Math.hypot(cx - (pos.x + size / 2), cy - (pos.y + size / 2));
-                candidates.push({ x: pos.x, y: pos.y, dist: d });
+                candidates.push({ ...pos, dist: d, side, otherId: other.id });
             });
         });
 
         candidates.sort((a, b) => a.dist - b.dist);
         const inRange = candidates.filter((c) => c.dist <= SNAP_THRESHOLD);
-        if (inRange.length) {
-            const pick = inRange[0];
-            return { x: Math.round(pick.x), y: Math.round(pick.y), snapped: true };
-        }
+        const pickFrom = (list) => {
+            if (!list.length) return null;
+            const pick = list[0];
+            const anchor = others.find((o) => o.id === pick.otherId);
+            if (!anchor) return { x: pick.x, y: pick.y, snapped: true };
+            const aligned = alignedSnapPos(anchor, pick.side, size);
+            return { x: aligned.x, y: aligned.y, snapped: true };
+        };
+
+        const inRangePick = pickFrom(inRange);
+        if (inRangePick) return inRangePick;
 
         const selfCell = toCell(tile.x, tile.y);
         if (map.has(cellKey(selfCell.gx, selfCell.gy)) && candidates.length) {
-            const pick = candidates[0];
-            return { x: Math.round(pick.x), y: Math.round(pick.y), snapped: true };
+            return pickFrom(candidates);
         }
 
-        return { x: Math.round(tile.x), y: Math.round(tile.y), snapped: false };
+        return {
+            x: Number.isFinite(tile.x) ? Math.round(tile.x) : 0,
+            y: Number.isFinite(tile.y) ? Math.round(tile.y) : 0,
+            snapped: false
+        };
+    }
+
+    function alignTileToGrid(x, y) {
+        const { gx, gy } = toCell(x, y);
+        return fromCell(gx, gy);
+    }
+
+    function tilesOverlapAt(ax, ay, bx, by, size = TILE_SIZE) {
+        return ax < bx + size && ax + size > bx && ay < by + size && ay + size > by;
+    }
+
+    function tileOverlapsAny(x, y, others, size = TILE_SIZE) {
+        return (others || []).some((o) => o && tilesOverlapAt(x, y, o.x, o.y, size));
+    }
+
+    function handHasOverlaps(tiles, size = TILE_SIZE) {
+        const list = tiles || [];
+        for (let i = 0; i < list.length; i++) {
+            for (let j = i + 1; j < list.length; j++) {
+                const a = list[i];
+                const b = list[j];
+                if (!a || !b) continue;
+                if (tilesOverlapAt(a.x, a.y, b.x, b.y, size)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** Smallest axis push so (x,y) no longer overlaps `others`. Prefers aligned edge slots. */
+    function separateFromOverlaps(x, y, others, size = TILE_SIZE) {
+        const hit = (others || []).find((o) => o && tilesOverlapAt(x, y, o.x, o.y, size));
+        if (hit) {
+            const sides = ['right', 'left', 'down', 'up'];
+            const slots = sides
+                .map((side) => ({ ...alignedSnapPos(hit, side, size), side }))
+                .filter((pos) => !tileOverlapsAny(pos.x, pos.y, others, size))
+                .map((pos) => ({
+                    ...pos,
+                    dist: Math.hypot(pos.x - x, pos.y - y)
+                }))
+                .sort((a, b) => a.dist - b.dist);
+            if (slots.length) {
+                return { x: slots[0].x, y: slots[0].y };
+            }
+        }
+
+        let nx = x;
+        let ny = y;
+        let guard = 0;
+        while (guard++ < (others?.length || 0) + 8) {
+            const blocker = (others || []).find((o) => o && tilesOverlapAt(nx, ny, o.x, o.y, size));
+            if (!blocker) break;
+            const pushRight = blocker.x + size - nx;
+            const pushLeft = nx + size - blocker.x;
+            const pushDown = blocker.y + size - ny;
+            const pushUp = ny + size - blocker.y;
+            const moves = [
+                { dx: pushRight, dy: 0 },
+                { dx: -pushLeft, dy: 0 },
+                { dx: 0, dy: pushDown },
+                { dx: 0, dy: -pushUp }
+            ].filter((m) => m.dx || m.dy);
+            moves.sort((a, b) => (Math.abs(a.dx) + Math.abs(a.dy)) - (Math.abs(b.dx) + Math.abs(b.dy)));
+            if (!moves.length) break;
+            nx += moves[0].dx;
+            ny += moves[0].dy;
+        }
+        return { x: Math.round(nx), y: Math.round(ny) };
+    }
+
+    /**
+     * Edge-snap when near another tile; otherwise keep the drop position.
+     * Only moves a tile when it snaps or overlaps another.
+     */
+    function resolveTilePosition(tile, others, size = TILE_SIZE) {
+        const rest = (others || []).filter((o) => o && o.id !== tile.id);
+        const snap = snapTilePosition(tile, rest, size);
+        if (snap.snapped) {
+            return { x: snap.x, y: snap.y, snapped: true };
+        }
+
+        const x = Number.isFinite(tile.x) ? Math.round(tile.x) : 0;
+        const y = Number.isFinite(tile.y) ? Math.round(tile.y) : 0;
+        if (!tileOverlapsAny(x, y, rest, size)) {
+            return { x, y, snapped: false };
+        }
+
+        const probe = { ...tile, x, y };
+        const edgeSnap = snapTilePosition(probe, rest, size);
+        if (edgeSnap.snapped && !tileOverlapsAny(edgeSnap.x, edgeSnap.y, rest, size)) {
+            return { x: edgeSnap.x, y: edgeSnap.y, snapped: true };
+        }
+
+        const separated = separateFromOverlaps(x, y, rest, size);
+        return { x: separated.x, y: separated.y, snapped: false, nudged: true };
+    }
+
+    /** Resolve overlaps without moving tiles that are already clear and unsnapped. */
+    function resolveHandPositions(tiles) {
+        const resolved = [];
+        (tiles || []).forEach((t) => {
+            if (!t) return;
+            const pos = resolveTilePosition(t, resolved);
+            resolved.push({ ...t, x: pos.x, y: pos.y });
+        });
+        return resolved;
     }
 
     /** True if dropping at (x,y) would edge-snap onto another tile. */
@@ -308,6 +451,15 @@
         MIN_WORD_LEN,
         toCell,
         fromCell,
+        tileConnectedSides,
+        alignedSnapPos,
+        alignTileToGrid,
+        tilesOverlapAt,
+        tileOverlapsAny,
+        handHasOverlaps,
+        separateFromOverlaps,
+        resolveTilePosition,
+        resolveHandPositions,
         snapTilePosition,
         wouldSnapAt,
         tilesShareCell,

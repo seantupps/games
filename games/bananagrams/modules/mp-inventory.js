@@ -57,7 +57,11 @@
             },
 
             _finishMergedHand(placed, owned) {
-                const hydrated = this._mpHydrateTiles?.(placed) || placed;
+                let hand = placed;
+                if (BananaGrid?.resolveHandPositions && !this._isDraggingHand?.()) {
+                    hand = BananaGrid.resolveHandPositions(placed);
+                }
+                const hydrated = this._mpHydrateTiles?.(hand) || hand;
                 const want = (owned || []).length;
                 if (want && hydrated.length !== want) {
                     return this._rackTilesFromOwned(owned);

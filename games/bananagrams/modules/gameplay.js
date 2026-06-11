@@ -204,9 +204,7 @@
                         m.worldX = snap.x;
                         m.worldY = snap.y;
                         if (m.el) {
-                            const pos = this._tileElPos(tile);
-                            m.el.style.left = `${pos.left}px`;
-                            m.el.style.top = `${pos.top}px`;
+                            this._applyTileElLayout(m.el, tile);
                         }
                     }
                     others = [...others, tile];
@@ -229,20 +227,7 @@
             /** Snap drag-release positions to grid cells before peel/win validation. */
             _snapHandForValidation(hand) {
                 if (!hand?.length || !BananaGrid) return hand || [];
-                const tiles = hand.map((t) => ({ ...t }));
-                let others = [];
-                tiles.forEach((t) => {
-                    const snap = BananaGrid.snapTilePosition(t, others);
-                    if (snap.snapped) {
-                        t.x = snap.x;
-                        t.y = snap.y;
-                    } else if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
-                        t.x = Math.round(t.x);
-                        t.y = Math.round(t.y);
-                    }
-                    others = [...others, t];
-                });
-                return tiles;
+                return BananaGrid.resolveHandPositions(hand.map((t) => ({ ...t })));
             },
 
             /** Connected valid crossword with every tile on the grid (ignores bunch). */
@@ -465,9 +450,43 @@
                 this._syncSelectionClasses();
             },
 
-            _tileElPos(tile) {
-                const inset = BananagramsGame.TILE_HIT_INSET;
-                return { left: Math.round(tile.x - inset), top: Math.round(tile.y - inset) };
+            _tileHitExpand(tile) {
+                const pad = BananagramsGame.TILE_SELECT_EXPAND;
+                if (!pad) return { left: 0, top: 0, right: 0, bottom: 0 };
+                const others = this.tiles.filter((t) => t.id !== tile.id);
+                const sides = BananaGrid.tileConnectedSides(tile, others);
+                return {
+                    left: sides.left ? 0 : pad,
+                    top: sides.top ? 0 : pad,
+                    right: sides.right ? 0 : pad,
+                    bottom: sides.bottom ? 0 : pad
+                };
+            },
+
+            _tileElLayout(tile) {
+                const hit = this._tileHitExpand(tile);
+                return {
+                    left: Math.round(tile.x - hit.left),
+                    top: Math.round(tile.y - hit.top),
+                    width: 40 + hit.left + hit.right,
+                    height: 40 + hit.top + hit.bottom,
+                    faceLeft: hit.left,
+                    faceTop: hit.top
+                };
+            },
+
+            _applyTileElLayout(el, tile) {
+                if (!el || !tile) return;
+                const layout = this._tileElLayout(tile);
+                el.style.width = `${layout.width}px`;
+                el.style.height = `${layout.height}px`;
+                el.style.left = `${layout.left}px`;
+                el.style.top = `${layout.top}px`;
+                const face = el.querySelector('.tile-face');
+                if (face) {
+                    face.style.left = `${layout.faceLeft}px`;
+                    face.style.top = `${layout.faceTop}px`;
+                }
             },
 
             _applyTileWorld(m, worldX, worldY) {
@@ -477,10 +496,12 @@
                 tile.y = worldY;
                 m.worldX = worldX;
                 m.worldY = worldY;
-                const pos = this._tileElPos(tile);
                 m.el.style.transform = '';
-                m.el.style.left = `${Math.round(pos.left)}px`;
-                m.el.style.top = `${Math.round(pos.top)}px`;
+                const face = m.el.querySelector('.tile-face');
+                const faceLeft = face ? parseFloat(face.style.left) || 0 : 0;
+                const faceTop = face ? parseFloat(face.style.top) || 0 : 0;
+                m.el.style.left = `${Math.round(worldX - faceLeft)}px`;
+                m.el.style.top = `${Math.round(worldY - faceTop)}px`;
             },
 
             _getDragGroup(primaryEl) {
@@ -498,19 +519,24 @@
             },
 
             _commitTilePositions(members) {
-                (members || []).forEach((m) => {
+                if (!BananaGrid || !members?.length) return;
+                const memberIds = new Set(
+                    members.map((m) => (m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId))?.id)
+                        .filter(Boolean)
+                );
+                let placed = this.tiles.filter((t) => !memberIds.has(t.id));
+                members.forEach((m) => {
                     const tile = m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId);
-                    if (!tile || !m.el) return;
-                    const others = this.tiles.filter((t) => t.id !== tile.id);
-                    const snap = BananaGrid.snapTilePosition(tile, others);
-                    if (snap.snapped) {
-                        tile.x = snap.x;
-                        tile.y = snap.y;
-                    } else {
-                        tile.x = Math.round(tile.x);
-                        tile.y = Math.round(tile.y);
-                    }
+                    if (!tile) return;
+                    const resolved = BananaGrid.resolveTilePosition(tile, placed);
+                    tile.x = resolved.x;
+                    tile.y = resolved.y;
+                    placed = [...placed, tile];
+                    if (m.el) this._applyTileElLayout(m.el, tile);
                 });
+                if (BananaGrid.handHasOverlaps(this.tiles)) {
+                    this.tiles = BananaGrid.resolveHandPositions(this.tiles);
+                }
                 this._ensurePlayStartedFromBoardActivity?.();
             },
 
