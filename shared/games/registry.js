@@ -222,7 +222,42 @@
             mobileAuditConfig: 'ptests/games/bananagrams/adapters/mobile-sp',
             mpAuditConfig: 'ptests/games/bananagrams/runners/mp',
             mobileMpAuditConfig: 'ptests/games/bananagrams/adapters/mobile-mp'
-        }
+        },
+        {
+            id: 'rummikub',
+            label: 'Rummikub',
+            logicKey: 'rummikub',
+            modes: ['puzzle'],
+            defaultMode: 'puzzle',
+            capabilities: {
+                ...DEFAULT_CAPABILITIES,
+                boardKind: 'generic',
+                mobileLayoutPolicy: 'pan-zoom-board',
+                viewportPanEnabled: true,
+                supportsSettingsEdgeSwipe: false,
+                supportsVictoryAutoReset: false,
+                supportsDragging: true,
+                unboundedDrag: true,
+                supportsTurnIndicator: false,
+                supportsGameTimer: true,
+                supportsScoreboard: false,
+                supportsWinBanner: true,
+                supportsPostGameReview: true,
+                winBannerAutoFadeMs: 4000,
+                supportsModes: false,
+                supportsZoom: true,
+                hasBoardState: true,
+                syncStyle: 'event-log',
+                auditReadyCallable: true,
+                supportsBoardStateInspect: true,
+                /** Mobile: empty-board drag selects tiles instead of panning. */
+                mobileBackgroundMarquee: true
+            },
+            globalResetKeys: ['board'],
+            clearGameDataOnReset: true,
+            auditConfig: 'ptests/games/rummikub/desktop-sp',
+            mobileAuditConfig: 'ptests/games/rummikub/mobile/sp'
+        },
         // NEW_GAME_REGISTRY_INSERT
     ];
 

@@ -174,69 +174,76 @@
                 this._scheduleFade(div);
             },
 
+            _hubGameMode() {
+                const gameId = global.FiveHubCtx?.currentGame || 'piles';
+                return global.GameRegistry?.hubModeFor
+                    ? global.GameRegistry.hubModeFor(
+                        gameId,
+                        !!(global.FiveHubCtx?.roomId && global.FiveHubCtx.roomId !== 'lobby')
+                    )
+                    : (global.FiveHubCtx?.gameMode || 'classic');
+            },
+
+            _requestBoardStateInspect() {
+                const gameId = global.FiveHubCtx?.currentGame || 'piles';
+                const mode = this._hubGameMode();
+                if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
+                    this.append({
+                        sender: 'System',
+                        content: 'Board state inspect is not available for this game.'
+                    });
+                    return true;
+                }
+                const frame = document.getElementById('game-frame');
+                if (!frame?.contentWindow) {
+                    this.append({ sender: 'System', content: 'No game loaded.' });
+                    return true;
+                }
+                const H = global.HubProtocol?.MSG || {};
+                frame.contentWindow.postMessage({
+                    type: H.BOARD_STATE_INSPECT || H.BANANA_BOARD_STATE || 'board-state-inspect'
+                }, '*');
+                return true;
+            },
+
+            _requestBoardSolve(stragglerCount) {
+                const gameId = global.FiveHubCtx?.currentGame || 'piles';
+                const mode = this._hubGameMode();
+                if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
+                    this.append({
+                        sender: 'System',
+                        content: 'Board solve is not available for this game.'
+                    });
+                    return true;
+                }
+                const frame = document.getElementById('game-frame');
+                if (!frame?.contentWindow) {
+                    this.append({ sender: 'System', content: 'No game loaded.' });
+                    return true;
+                }
+                const H = global.HubProtocol?.MSG || {};
+                frame.contentWindow.postMessage({
+                    type: H.BOARD_SOLVE || 'board-solve',
+                    stragglerCount
+                }, '*');
+                return true;
+            },
+
             handleCommand(text) {
                 const trimmed = text.trim();
+                if (/^\/state(\s|$)/i.test(trimmed) || /^\/b\s+state$/i.test(trimmed)) {
+                    return this._requestBoardStateInspect();
+                }
+                const solveMatch = /^\/solve\s+(\d+)$/i.exec(trimmed)
+                    || /^\/b\s+solve\s+(\d+)$/i.exec(trimmed);
+                if (solveMatch) {
+                    return this._requestBoardSolve(parseInt(solveMatch[1], 10));
+                }
                 if (/^\/b(\s|$)/i.test(trimmed)) {
-                    const arg = trimmed.substring(2).trim();
-                    const argLower = arg.toLowerCase();
-                    const solveMatch = /^solve\s+(\d+)$/i.exec(arg);
-                    if (solveMatch) {
-                        const gameId = global.FiveHubCtx?.currentGame || 'piles';
-                        const mode = global.GameRegistry?.hubModeFor
-                            ? global.GameRegistry.hubModeFor(
-                                gameId,
-                                !!(global.FiveHubCtx?.roomId && global.FiveHubCtx.roomId !== 'lobby')
-                            )
-                            : (global.FiveHubCtx?.gameMode || 'classic');
-                        if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
-                            this.append({
-                                sender: 'System',
-                                content: 'Board solve is not available for this game.'
-                            });
-                            return true;
-                        }
-                        const frame = document.getElementById('game-frame');
-                        if (!frame?.contentWindow) {
-                            this.append({ sender: 'System', content: 'No game loaded.' });
-                            return true;
-                        }
-                        const H = global.HubProtocol?.MSG || {};
-                        frame.contentWindow.postMessage({
-                            type: H.BOARD_SOLVE || 'board-solve',
-                            stragglerCount: parseInt(solveMatch[1], 10)
-                        }, '*');
-                        return true;
-                    }
-                    if (argLower !== 'state') {
-                        this.append({
-                            sender: 'System',
-                            content: 'Usage: /b state | /b solve N (dev: N = total bunch remaining; 1 straggler per player when N > 0)'
-                        });
-                        return true;
-                    }
-                    const gameId = global.FiveHubCtx?.currentGame || 'piles';
-                    const mode = global.GameRegistry?.hubModeFor
-                        ? global.GameRegistry.hubModeFor(
-                            gameId,
-                            !!(global.FiveHubCtx?.roomId && global.FiveHubCtx.roomId !== 'lobby')
-                        )
-                        : (global.FiveHubCtx?.gameMode || 'classic');
-                    if (!global.GameRegistry?.hasCapability(gameId, 'supportsBoardStateInspect', mode)) {
-                        this.append({
-                            sender: 'System',
-                            content: 'Board state inspect is not available for this game.'
-                        });
-                        return true;
-                    }
-                    const frame = document.getElementById('game-frame');
-                    if (!frame?.contentWindow) {
-                        this.append({ sender: 'System', content: 'No game loaded.' });
-                        return true;
-                    }
-                    const H = global.HubProtocol?.MSG || {};
-                    frame.contentWindow.postMessage({
-                        type: H.BOARD_STATE_INSPECT || H.BANANA_BOARD_STATE || 'board-state-inspect'
-                    }, '*');
+                    this.append({
+                        sender: 'System',
+                        content: 'Usage: /solve N (dev: stragglers left on rack / bunch remaining — game-specific)'
+                    });
                     return true;
                 }
                 if (/^\/w(\s|$)/i.test(text)) {
@@ -289,8 +296,8 @@
                         '/p <name> — invite a player to your party',
                         '/p leave — leave the party and return to the lobby',
                         '/w word1 -word2 ... — add/remove dictionary words',
-                        '/b state — invalid words on your board, or peel/win-ready',
-                        '/b solve N — dev only: N = total bunch remaining; 1 straggler per player (not gameplay)',
+                        '/state — board progress (unmatched tiles, invalid words, win-ready, etc.)',
+                        '/solve N — dev only: solve current tiles (N stragglers — rack or bunch, game-specific)',
                         '/clear — clear local data and reload',
                         '/win — dev win (same review + hub banner path as real MP win)',
                         '/win banner <name> — hub win banner only (dev)',

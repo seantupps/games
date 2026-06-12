@@ -18,6 +18,18 @@ export declare function partitionBoardTiles(pool: Tile[], rng: Rng, deadlineMs: 
 };
 /** True when every board tile is in a valid meld on the laid-out grid. */
 export declare function partitionIsSolved(result: PartitionResult): boolean;
+export interface VerifyPartitionResult {
+    solved: boolean;
+    result: PartitionResult;
+    elapsedMs: number;
+    timedOut: boolean;
+    /** How the verifier reached its answer. */
+    method: 'empty' | 'partition-seeds' | 'backtrack' | 'exhausted';
+    seedAttempts: number;
+    partitionAttempts: number;
+}
+/** Rules-based win check: can every tile be placed in valid meld(s)? */
+export declare function verifyBoardPartition(pool: Tile[], deadlineMs: number): VerifyPartitionResult;
 export declare function meldsToGrid(melds: Meld[]): Grid;
 /** Fragment/orphan stats after layout. */
 export declare function layoutStats(melds: Meld[], remaining: Tile[]): {

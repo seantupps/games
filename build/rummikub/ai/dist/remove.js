@@ -1,8 +1,31 @@
 import { sortRack } from './tiles.js';
-/** Ends of a run get this weight; center approaches END + MIDDLE_BONUS. */
+import { isValidMeld } from './validate.js';
+const FALLBACK_WEIGHT = 1;
+/** Ends of a run — prefer middle tiles when trimming a still-valid run. */
 const RUN_END_WEIGHT = 1;
 const RUN_MIDDLE_BONUS = 2;
-/** Higher weight toward the center of a run (ends stay selectable). */
+function meldKey(meld) {
+    return meld.tiles
+        .map((t) => t.id)
+        .sort()
+        .join('|');
+}
+function boardTileIds(grid) {
+    return new Set([...grid.cells.values()].map((c) => c.tile.id));
+}
+function findCellKey(grid, tileId) {
+    for (const [key, cell] of grid.cells) {
+        if (cell.tile.id === tileId)
+            return key;
+    }
+    return null;
+}
+function removalBreaksMeld(meld, tileId) {
+    const remaining = meld.tiles.filter((t) => t.id !== tileId);
+    if (remaining.length < 3)
+        return true;
+    return !isValidMeld({ kind: meld.kind, tiles: remaining });
+}
 function runTileRemovalWeight(index, len) {
     if (len <= 2)
         return RUN_END_WEIGHT;
@@ -12,26 +35,127 @@ function runTileRemovalWeight(index, len) {
     const middleScore = 1 - dist / maxDist;
     return RUN_END_WEIGHT + middleScore * RUN_MIDDLE_BONUS;
 }
-function tileRemovalWeights(melds) {
-    const weights = new Map();
-    for (const meld of melds) {
-        if (meld.kind !== 'run')
-            continue;
-        const len = meld.tiles.length;
-        meld.tiles.forEach((t, i) => {
-            weights.set(t.id, runTileRemovalWeight(i, len));
-        });
+/**
+ * Higher weight = remove sooner. Prioritize breaking intact melds; groups of 4 and
+ * long runs that need multiple hits still rank above orphan tiles.
+ */
+function meldTileRemovalWeight(meld, tileId) {
+    if (removalBreaksMeld(meld, tileId)) {
+        let weight = 1000 + meld.tiles.length;
+        if (meld.kind === 'run') {
+            const idx = meld.tiles.findIndex((t) => t.id === tileId);
+            weight += runTileRemovalWeight(idx, meld.tiles.length);
+        }
+        return weight;
     }
-    return weights;
+    if (meld.kind === 'group') {
+        return 800 + meld.tiles.length * 10;
+    }
+    const idx = meld.tiles.findIndex((t) => t.id === tileId);
+    const len = meld.tiles.length;
+    const trimWeight = 600 + len * 5;
+    return trimWeight + runTileRemovalWeight(idx, len);
 }
-function buildCandidates(grid, melds) {
-    const weights = tileRemovalWeights(melds);
+/** Valid horizontal/vertical segments currently on the board. */
+function findBoardMelds(grid) {
+    const melds = [];
+    const seenH = new Set();
+    const seenV = new Set();
+    for (const key of grid.cells.keys()) {
+        const [x, y] = key.split(',').map(Number);
+        const hStart = `h,${y},${x}`;
+        if (!seenH.has(hStart) && !grid.get(x - 1, y)) {
+            const tiles = [];
+            let cx = x;
+            while (true) {
+                const cell = grid.get(cx, y);
+                if (!cell)
+                    break;
+                tiles.push(cell.tile);
+                seenH.add(`h,${y},${cx}`);
+                cx++;
+            }
+            if (tiles.length >= 3) {
+                const run = { kind: 'run', tiles };
+                const grp = { kind: 'group', tiles };
+                if (isValidMeld(run))
+                    melds.push(run);
+                else if (isValidMeld(grp))
+                    melds.push(grp);
+            }
+        }
+        const vStart = `v,${x},${y}`;
+        if (!seenV.has(vStart) && !grid.get(x, y - 1)) {
+            const tiles = [];
+            let cy = y;
+            while (true) {
+                const cell = grid.get(x, cy);
+                if (!cell)
+                    break;
+                tiles.push(cell.tile);
+                seenV.add(`v,${x},${cy}`);
+                cy++;
+            }
+            if (tiles.length >= 3) {
+                const run = { kind: 'run', tiles };
+                const grp = { kind: 'group', tiles };
+                if (isValidMeld(run))
+                    melds.push(run);
+                else if (isValidMeld(grp))
+                    melds.push(grp);
+            }
+        }
+    }
+    return melds;
+}
+/** One best tile per meld — prefer a single breaking hit over trimming. */
+function bestRemovalForMeld(meld, grid) {
+    const keyForMeld = meldKey(meld);
+    let best = null;
+    let onlyBreaking = false;
+    for (const t of meld.tiles) {
+        const key = findCellKey(grid, t.id);
+        if (!key)
+            continue;
+        const breaks = removalBreaksMeld(meld, t.id);
+        if (onlyBreaking && !breaks)
+            continue;
+        if (breaks && !onlyBreaking) {
+            best = null;
+            onlyBreaking = true;
+        }
+        const weight = meldTileRemovalWeight(meld, t.id);
+        if (!best || weight > best.weight) {
+            best = { key, weight, meldKey: keyForMeld };
+        }
+    }
+    return best;
+}
+function intactMelds(melds, grid, touched) {
+    const onBoard = boardTileIds(grid);
+    return melds.filter((m) => !touched.has(meldKey(m)) && m.tiles.every((t) => onBoard.has(t.id)));
+}
+/** Prefer one hit per meld; rescan the board for leftover valid segments. */
+function buildCandidates(grid, originalMelds, touchedMelds) {
     const out = [];
-    for (const [key, cell] of grid.cells) {
-        out.push({
-            key,
-            weight: weights.get(cell.tile.id) ?? RUN_END_WEIGHT
-        });
+    for (const meld of intactMelds(originalMelds, grid, touchedMelds)) {
+        const best = bestRemovalForMeld(meld, grid);
+        if (best)
+            out.push(best);
+    }
+    if (!out.length) {
+        for (const meld of findBoardMelds(grid)) {
+            if (touchedMelds.has(meldKey(meld)))
+                continue;
+            const best = bestRemovalForMeld(meld, grid);
+            if (best)
+                out.push(best);
+        }
+    }
+    if (!out.length) {
+        for (const key of grid.cells.keys()) {
+            out.push({ key, weight: FALLBACK_WEIGHT, meldKey: null });
+        }
     }
     return out;
 }
@@ -56,15 +180,17 @@ export function removePercentFromBoard(grid, rack, melds, percent, rng) {
         return { grid: g, rack: r, removed: 0 };
     }
     const count = Math.max(1, Math.round((keys.length * percent) / 100));
-    const candidates = buildCandidates(g, melds);
+    const touchedMelds = new Set();
     let removed = 0;
-    while (removed < count && candidates.length > 0) {
+    while (removed < count && g.cells.size > 0) {
+        const candidates = buildCandidates(g, melds, touchedMelds);
         const idx = weightedPickIndex(candidates, rng);
-        const { key } = candidates[idx];
-        const cell = g.cells.get(key);
-        g.cells.delete(key);
+        const pick = candidates[idx];
+        const cell = g.cells.get(pick.key);
+        g.cells.delete(pick.key);
         r.push(cell.tile);
-        candidates.splice(idx, 1);
+        if (pick.meldKey)
+            touchedMelds.add(pick.meldKey);
         removed++;
     }
     return { grid: g, rack: sortRack(r), removed };

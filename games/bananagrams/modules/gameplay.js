@@ -182,15 +182,38 @@
                 return true;
             },
 
+            _rebindDragMembers(members) {
+                if (!members?.length) return;
+                this._syncLiveDragTilesFromDom?.();
+                members.forEach((m) => {
+                    const id = m.el?.dataset?.tileId;
+                    if (!id) return;
+                    const tile = this.tiles.find((t) => t.id === id);
+                    if (tile) m.tile = tile;
+                });
+            },
+
+            _liveTileForDrag(m) {
+                const id = m.el?.dataset?.tileId;
+                if (id) {
+                    const tile = this.tiles.find((t) => t.id === id);
+                    if (tile) {
+                        m.tile = tile;
+                        return tile;
+                    }
+                }
+                return m.tile || null;
+            },
+
             _snapMembers(members) {
                 if (!BananaGrid) return;
+                this._rebindDragMembers(members);
                 const memberIds = new Set(
-                    members.map((m) => (m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId))?.id)
-                        .filter(Boolean)
+                    members.map((m) => this._liveTileForDrag(m)?.id).filter(Boolean)
                 );
                 let others = this.tiles.filter((t) => !memberIds.has(t.id));
                 members.forEach((m) => {
-                    const tile = m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId);
+                    const tile = this._liveTileForDrag(m);
                     if (!tile) return;
                     const snap = BananaGrid.snapTilePosition(tile, others);
                     const moved = Number.isFinite(m.startWorldX) && Number.isFinite(m.startWorldY)
@@ -451,7 +474,9 @@
             },
 
             _tileHitExpand(tile) {
-                const pad = BananagramsGame.TILE_SELECT_EXPAND;
+                const pad = this.isMobileViewport?.()
+                    ? BananagramsGame.TILE_SELECT_EXPAND
+                    : 0;
                 if (!pad) return { left: 0, top: 0, right: 0, bottom: 0 };
                 const others = this.tiles.filter((t) => t.id !== tile.id);
                 const sides = BananaGrid.tileConnectedSides(tile, others);
@@ -490,7 +515,7 @@
             },
 
             _applyTileWorld(m, worldX, worldY) {
-                const tile = m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId);
+                const tile = this._liveTileForDrag(m);
                 if (!tile || !m.el) return;
                 tile.x = worldX;
                 tile.y = worldY;
@@ -520,13 +545,13 @@
 
             _commitTilePositions(members) {
                 if (!BananaGrid || !members?.length) return;
+                this._rebindDragMembers(members);
                 const memberIds = new Set(
-                    members.map((m) => (m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId))?.id)
-                        .filter(Boolean)
+                    members.map((m) => this._liveTileForDrag(m)?.id).filter(Boolean)
                 );
                 let placed = this.tiles.filter((t) => !memberIds.has(t.id));
                 members.forEach((m) => {
-                    const tile = m.tile || this.tiles.find((t) => t.id === m.el?.dataset?.tileId);
+                    const tile = this._liveTileForDrag(m);
                     if (!tile) return;
                     const resolved = BananaGrid.resolveTilePosition(tile, placed);
                     tile.x = resolved.x;
@@ -570,6 +595,9 @@
                                 this._persistMpLayout();
                             }
                             this._schedulePeelAfterDragRelease();
+                            if (this._isMultiplayerMode()) {
+                                this._endLocalDragSession?.();
+                            }
                             if (!this._isMultiplayerMode()) this.persistState();
                         }
                         this.requestRender();

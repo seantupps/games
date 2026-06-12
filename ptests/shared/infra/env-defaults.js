@@ -196,6 +196,20 @@ function playwrightSlowMo() {
     }
 }
 
+/**
+ * Pause between test actions when --slow[=MS] is set.
+ * Playwright launch slowMo only affects driver input; evaluate-based steps need this.
+ * @param {import('playwright').Page} [page]
+ * @returns {Promise<number>} ms waited (0 if skipped)
+ */
+async function delayBetweenActions(page) {
+    const ms = playwrightSlowMo();
+    if (ms > 0 && page) {
+        await page.waitForTimeout(ms);
+    }
+    return ms;
+}
+
 /** @type {Set<import('playwright').Browser>} */
 const keepOpenBrowsers = new Set();
 
@@ -298,6 +312,7 @@ module.exports = {
     isKeepOpenRequested,
     playwrightHeadless,
     playwrightSlowMo,
+    delayBetweenActions,
     shouldCloseBrowser,
     registerKeepOpenBrowser,
     forceCloseAllBrowsers,

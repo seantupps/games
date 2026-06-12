@@ -1,0 +1,121 @@
+:root {
+    --rummi-tile-w: 40px;
+    --rummi-tile-h: 52px;
+    --tile-color-B: #1a1a1a;
+    --tile-color-R: #dc2626;
+    --tile-color-U: #2563eb;
+    --tile-color-O: #ea580c;
+}
+
+html.five-mobile {
+    --rummi-tile-w: 40px;
+    --rummi-tile-h: 52px;
+}
+
+#game-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+
+#board-canvas {
+    position: absolute;
+    inset: 0;
+    touch-action: none;
+    background: transparent;
+}
+
+.board-pan-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 4800px;
+    height: 4800px;
+    cursor: default;
+    touch-action: none;
+    background: transparent;
+}
+
+.board-pan-layer.is-panning {
+    cursor: grabbing;
+}
+
+.rummikub-hud {
+    position: absolute;
+    top: calc(var(--hub-score-top, 28px) + 6px);
+    left: var(--hub-score-left, 28px);
+    z-index: 21;
+    pointer-events: none;
+    user-select: none;
+}
+
+#rummikub-timer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--theme-color, #3b82f6);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+.tile {
+    position: absolute;
+    width: var(--rummi-tile-w);
+    height: var(--rummi-tile-h);
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+    z-index: 2;
+}
+
+.tile:has(.tile-face) {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.tile-face {
+    position: absolute;
+    width: var(--rummi-tile-w);
+    height: var(--rummi-tile-h);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--theme-color, #3b82f6);
+    border: 2px solid color-mix(in srgb, var(--theme-color, #3b82f6) 70%, #000);
+    border-radius: 6px;
+    pointer-events: none;
+}
+
+.tile-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.tile-face[data-color="B"] .tile-value { color: var(--tile-color-B); }
+.tile-face[data-color="R"] .tile-value { color: var(--tile-color-R); }
+.tile-face[data-color="U"] .tile-value { color: var(--tile-color-U); }
+.tile-face[data-color="O"] .tile-value { color: var(--tile-color-O); }
+
+.tile.is-dragging {
+    cursor: grabbing;
+    z-index: 10;
+    will-change: transform;
+}
+
+.tile.is-selected {
+    outline: none;
+}
+
+.tile.is-selected .tile-face {
+    outline: 2px solid rgba(255, 255, 255, 0.95);
+    outline-offset: 2px;
+}

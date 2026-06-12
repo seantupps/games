@@ -161,6 +161,7 @@
                 if (!isDragging && (Math.abs(me.clientX - startX) > threshold || Math.abs(me.clientY - startY) > threshold)) {
                     isDragging = true;
                     setDragging(true, members.map((m) => m.el));
+                    if (typeof options.onDragBegin === 'function') options.onDragBegin(members, el);
                     if (typeof context._cancelHoldDump === 'function') context._cancelHoldDump();
                 }
                 if (!isDragging) return;
@@ -218,9 +219,10 @@
                     }
                 }
 
-                if (onDragEnd) onDragEnd(isDragging, el, ue, members);
+                const didDrag = isDragging;
                 isDragging = false;
                 setDragging(false, members.map((m) => m.el));
+                if (onDragEnd) onDragEnd(didDrag, el, ue, members);
                 members.forEach((m) => { m.el.style.transition = ''; });
                 members = [];
             };

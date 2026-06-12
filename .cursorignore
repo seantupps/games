@@ -58,3 +58,6 @@ games/bananagrams/dict/
 # Legacy / scratch
 shared/platform/.engine-pre-split.js
 .engine-head.js
+
+
+/dist

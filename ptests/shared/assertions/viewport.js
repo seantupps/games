@@ -131,7 +131,7 @@ async function runViewportCapabilityChecks(page, gameId, ctx = {}) {
     const panZoom = caps.mobileLayoutPolicy === 'pan-zoom-board'
         || caps.viewportPanEnabled === true;
 
-    if (panZoom) {
+    if (panZoom && !(ctx.isMobile && caps.mobileBackgroundMarquee)) {
         await runScenario('Background pan', async () => {
             await assertBackgroundPanMovesBoard(page);
         });

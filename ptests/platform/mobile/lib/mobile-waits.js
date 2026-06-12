@@ -169,6 +169,12 @@ async function waitForGameBoardFits(page, margin = 8, ms = DEFAULT_MS) {
                     return false;
                 }
             }
+            for (const t of doc.querySelectorAll('.tile')) {
+                const r = t.getBoundingClientRect();
+                if (r.right < -margin || r.left > vw + margin || r.bottom < -margin || r.top > vh + margin) {
+                    return false;
+                }
+            }
             return true;
         }, margin, { timeout: ms }),
         ms + 800,

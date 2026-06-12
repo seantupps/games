@@ -194,7 +194,11 @@ function parseRunSpec(argv = process.argv.slice(2)) {
             continue;
         }
         if (arg.startsWith('--slow=')) {
-            slowMo = Number(arg.slice('--slow='.length));
+            const n = Number(arg.slice('--slow='.length));
+            if (!Number.isFinite(n) || n < 0) {
+                throw new Error(`Invalid --slow=${arg.slice('--slow='.length)}. Use a non-negative number of ms.`);
+            }
+            slowMo = n;
             continue;
         }
         if (arg.startsWith('--win=')) {
@@ -376,7 +380,7 @@ Options:
   --open            Headed run; leave browser tabs open after tests (implies --headed)
   --keep-open       Same as --open (alias)
   --test            Manual test — boot party/solo only; skip scenarios, hub, and audits (implies --headed --open)
-  --slow[=MS]       Slow down browser actions (default 50ms)
+  --slow[=MS]       Delay MS between test actions + Playwright slowMo (default 50)
   --win=host|guest  MP AI play-to-win: force winner (default: random)
   --rounds=N        Play N full games in the same session (default: 1; also --rounds N)
                     Bananagrams MP: N>1 implies --scenario=actions (AI playthrough only)

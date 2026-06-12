@@ -178,7 +178,7 @@ body:has(.scoreboard.show) .banana-hud {
     transform: translate(-50%, -50%) scale(1);
 }
 
-/* Default 40×40 face; outer .tile hit box grows on open edges (TILE_SELECT_EXPAND in game.js). */
+/* Default 40×40 face; mobile hit box grows on open edges (TILE_SELECT_EXPAND in game.js). */
 .tile {
     position: absolute;
     width: 40px;

@@ -208,6 +208,9 @@
                 if (actionSeqAdvanced || devSolvePool || guestPoolSynced) {
                     const poolEl = document.getElementById('banana-pool-count');
                     if (poolEl) poolEl.textContent = String(this._tilePool.length);
+                    if (this._isDraggingHand?.()) {
+                        this._syncLiveDragTilesFromDom?.();
+                    }
                     this.requestRender?.();
                 }
             },

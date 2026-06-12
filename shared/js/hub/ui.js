@@ -451,7 +451,8 @@
             if (
                 e.target.closest(
                     '#settings-sidebar, #settings-trigger, #chat-container, #mobile-bar, '
-                    + '#mobile-fullscreen-btn, #mobile-settings-btn, #mobile-chat-btn, #mobile-settings-edge'
+                    + '#mobile-fullscreen-btn, #mobile-settings-btn, #mobile-chat-btn, #mobile-settings-edge, '
+                    + '#five-color-picker, .five-color-picker'
                 )
             ) {
                 return;

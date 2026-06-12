@@ -70,6 +70,9 @@
             },
 
             _mergeInventoryWithLayout(owned, layout, runtimeTiles, mergeOpts = {}) {
+                if (this._isDraggingHand?.()) {
+                    this._syncLiveDragTilesFromDom?.();
+                }
                 if (!this.isHost?.() && this._guestDumpHandFloor != null
                     && (owned?.length || 0) < this._guestDumpHandFloor) {
                     const keep = (runtimeTiles?.length ? runtimeTiles : this.tiles) || [];
@@ -99,6 +102,7 @@
                 const layoutMap = layout || {};
                 const runtimeById = {};
                 const dragging = this._isDraggingHand();
+                const draggingIds = this._getDraggingTileIds?.() || new Set();
                 const handById = {};
                 (this._loadLocalHand?.() || []).forEach((h) => {
                     handById[h.id] = h;
@@ -106,14 +110,28 @@
                 (runtimeTiles || []).forEach((t) => {
                     runtimeById[t.id] = t;
                 });
+                if (this._isDraggingHand?.() && !runtimeTiles?.length && this.tiles?.length) {
+                    this.tiles.forEach((t) => {
+                        runtimeById[t.id] = t;
+                    });
+                }
 
-                const tileFromOwnedAndRuntime = (o, rt, pos) => ({
-                    id: o.id,
-                    letter: tileLetter(o.id),
-                    faceUp: !!(o.faceUp || rt?.faceUp),
-                    x: pos.x,
-                    y: pos.y
-                });
+                const tileFromOwnedAndRuntime = (o, rt, pos) => {
+                    if (rt) {
+                        rt.letter = tileLetter(o.id);
+                        rt.faceUp = !!(o.faceUp || rt.faceUp);
+                        rt.x = pos.x;
+                        rt.y = pos.y;
+                        return rt;
+                    }
+                    return {
+                        id: o.id,
+                        letter: tileLetter(o.id),
+                        faceUp: !!o.faceUp,
+                        x: pos.x,
+                        y: pos.y
+                    };
+                };
         
                 const placed = [];
                 const needSpawn = [];
@@ -129,7 +147,7 @@
                         }
                         return;
                     }
-                    if (dragging && runtimeById[o.id]) {
+                    if ((dragging || draggingIds.has(o.id)) && runtimeById[o.id]) {
                         const rt = runtimeById[o.id];
                         if (Number.isFinite(rt.x) && Number.isFinite(rt.y)) {
                             placed.push(tileFromOwnedAndRuntime(o, rt, rt));
@@ -415,24 +433,60 @@
             },
 
             _markLocalDrag() {
-                this._localDragUntil = Date.now() + 500;
+                if (this._deferredFlushTimer) {
+                    clearTimeout(this._deferredFlushTimer);
+                    this._deferredFlushTimer = 0;
+                }
+            },
+
+            _endLocalDragSession() {
                 if (this._deferredFlushTimer) {
                     clearTimeout(this._deferredFlushTimer);
                 }
                 this._deferredFlushTimer = setTimeout(() => {
                     this._deferredFlushTimer = 0;
-                    this._flushDeferredBoardApply();
-                }, 520);
+                    this._flushDeferredBoardApply?.();
+                }, 0);
+            },
+
+            _getDraggingTileIds() {
+                const surface = document.querySelector('.board-pan-layer');
+                if (!surface) return new Set();
+                return new Set(
+                    [...surface.querySelectorAll('.tile.is-dragging')]
+                        .map((el) => el.dataset.tileId)
+                        .filter(Boolean)
+                );
+            },
+
+            /** Copy world coords from live drag DOM into `this.tiles` before inventory merge. */
+            _syncLiveDragTilesFromDom() {
+                const surface = document.querySelector('.board-pan-layer');
+                if (!surface || !this.tiles?.length) return;
+                const dragging = surface.querySelectorAll('.tile.is-dragging');
+                if (!dragging.length) return;
+                dragging.forEach((el) => {
+                    const id = el.dataset.tileId;
+                    const tile = this.tiles.find((t) => t.id === id);
+                    if (!tile) return;
+                    const face = el.querySelector('.tile-face');
+                    const faceLeft = face ? parseFloat(face.style.left) || 0 : 0;
+                    const faceTop = face ? parseFloat(face.style.top) || 0 : 0;
+                    const left = parseFloat(el.style.left);
+                    const top = parseFloat(el.style.top);
+                    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+                    tile.x = Math.round(left + faceLeft);
+                    tile.y = Math.round(top + faceTop);
+                });
             },
 
             _clearLocalDragAfterDump() {
                 this.isDragging = false;
                 this._pointerDragging = false;
-                this._localDragUntil = 0;
             },
 
             _isDraggingHand() {
-                return this.isDragging || Date.now() < this._localDragUntil;
+                return !!(this._pointerDragging || this.isDragging);
             },
 
             /** Dump draw ids: newly owned + same id redrawn from pool after dump. */
@@ -615,6 +669,9 @@
                 if (!this.isHost?.() || uid !== this._myUid()) return;
                 if (!this.canMutatePlayingBoard?.()) return;
                 this._hostEnsureMpStores();
+                if (this._isDraggingHand?.()) {
+                    this._syncLiveDragTilesFromDom?.();
+                }
                 const owned = this._mpNormalizeBoardOwned?.(this._mpOwned?.[uid])
                     || (this._mpOwned?.[uid] || []);
                 if (!owned.length) return;
@@ -647,7 +704,7 @@
                 });
                 const keepRuntime = forceLayoutIds?.size
                     ? runtime.length > 0
-                    : this._shouldKeepRuntimeTiles(board, owned);
+                    : (this._isDraggingHand?.() || this._shouldKeepRuntimeTiles(board, owned));
                 this.tiles = this._mergeInventoryWithLayout(
                     owned,
                     layout,
@@ -750,7 +807,7 @@
                 const layout = this._layoutMapForPlayer(board, uid, owned);
                 const runtime = devSolvePending
                     ? null
-                    : ((options.keepRuntime || this._shouldKeepRuntimeTiles(board, owned))
+                    : ((options.keepRuntime || this._isDraggingHand?.() || this._shouldKeepRuntimeTiles(board, owned))
                         ? this.tiles
                         : null);
                 this.tiles = this._mergeInventoryWithLayout(owned, layout, runtime);
@@ -997,10 +1054,12 @@
                             this._purgeLocalLayoutIds?.([...dumpDrawIds]);
                             dumpDrawIds.forEach((id) => { delete layout[id]; });
                         }
-                        const keepRuntime = this._shouldKeepRuntimeTiles(board, owned);
+                        const keepRuntime = this._isDraggingHand?.()
+                            || this._shouldKeepRuntimeTiles(board, owned);
                         const inventoryGrew = (owned?.length || 0) > (this.tiles?.length || 0);
-                        const forceFullMerge = devSolvePending
-                            || (countMismatch && extraRuntime && !inventoryGrew);
+                        const forceFullMerge = !this._isDraggingHand?.()
+                            && (devSolvePending
+                                || (countMismatch && extraRuntime && !inventoryGrew));
                         let runtime = forceFullMerge
                             ? null
                             : (keepRuntime ? this.tiles : null);

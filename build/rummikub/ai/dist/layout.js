@@ -1,9 +1,13 @@
-/** Lay melds horizontally, one per row (Bananagrams-style). */
+/**
+
+ * Minimal solver grid — one meld per row.
+
+ * Player-visible spacing is applied in games/rummikub/grid.js from rules.js.
+
+ */
 export function layoutMelds(grid, melds) {
-    let rowY = 0;
-    for (const meld of melds) {
-        grid.placeMeldHorizontal(meld, 2, rowY);
-        rowY += 1;
-    }
+    melds.forEach((meld, i) => {
+        grid.placeMeldHorizontal(meld, 0, i);
+    });
 }
 //# sourceMappingURL=layout.js.map

@@ -1,5 +1,5 @@
 /**
- * Hub chat /b solve N — dev-only full-bag solve.
+ * Hub chat /solve N — dev-only full-bag solve.
  * N = total shared bunch remaining; 1 on-board straggler per player when N > 0.
  */
 const { STEP_MS } = require('../../../../shared/infra/timeouts');
@@ -43,7 +43,7 @@ function solveExpectations(n, playerCount, totalTiles) {
 }
 
 /**
- * Valid /b solve N values per player count (bag must partition evenly).
+ * Valid /solve N values per player count (bag must partition evenly).
  * 2p: 100-tile Scrabble bag. 3p: 144-tile TILE_BAG (n ≡ 0 mod 3 when n > 0).
  * @param {number} playerCount
  * @returns {{ preSplit: number, cases: number[], postWin: number[] }}
@@ -566,11 +566,11 @@ async function waitForSolveReceipt(page, expectOk = true) {
  * @param {import('../../../shared/infra/test-logger').TestLogger} [log]
  */
 async function runSolveAndAssert(page, n, exp, log = logger) {
-    const stepLog = log.child({ step: `/b solve ${n}` });
-    stepLog.step(`/b solve ${n}`);
+    const stepLog = log.child({ step: `/solve ${n}` });
+    stepLog.step(`/solve ${n}`);
 
     await flushHostBananaInteractions(page);
-    await runChatCommand(page, `/b solve ${n}`);
+    await runChatCommand(page, `/solve ${n}`);
     let receipt;
     try {
         receipt = await waitForSolveReceipt(page, true);
@@ -580,14 +580,14 @@ async function runSolveAndAssert(page, n, exp, log = logger) {
         const failReceipt = await page.evaluate(() => (
             document.getElementById('game-frame')?.contentWindow?.__lastBoardSolveReceipt ?? null
         ));
-        stepLog.fail(`Authority receipt missing or not ok for /b solve ${n}`, {
+        stepLog.fail(`Authority receipt missing or not ok for /solve ${n}`, {
             error: err.message,
             receipt: failReceipt,
             state
         });
     }
     if (receipt.phase !== 'playing') {
-        stepLog.fail(`/b solve ${n}: expected phase=playing after commit`, { receipt });
+        stepLog.fail(`/solve ${n}: expected phase=playing after commit`, { receipt });
     }
 
     const frame = await getGameFrame(page);
@@ -603,10 +603,10 @@ async function runSolveAndAssert(page, n, exp, log = logger) {
     }
 
     const state = await assertPlayerSolveState(page, frame, 'command-page', exp, stepLog);
-    await assertSolveTileDistribution(frame, exp.totalTiles, stepLog, `/b solve ${n} distribution`);
-    await assertTimerRunningAfterBoardActivity(page, `/b solve ${n} timer`, stepLog);
+    await assertSolveTileDistribution(frame, exp.totalTiles, stepLog, `/solve ${n} distribution`);
+    await assertTimerRunningAfterBoardActivity(page, `/solve ${n} timer`, stepLog);
     stepLog.success(
-        `/b solve ${n}`,
+        `/solve ${n}`,
         `${state.onBoard} on board (${state.crosswordTiles} crossword + ${state.disconnected} straggler), `
         + `pool=${state.poolLen}, ${state.words} words`
     );
@@ -704,16 +704,16 @@ async function assertMpSolveSynced(hostPage, guestPage, label, exp) {
  * @param {import('../../../shared/infra/test-logger').TestLogger} log
  */
 async function runSolveExpectBlocked(page, n, log = logger) {
-    const stepLog = log.child({ step: `/b solve ${n} blocked` });
-    await runChatCommand(page, `/b solve ${n}`);
+    const stepLog = log.child({ step: `/solve ${n} blocked` });
+    await runChatCommand(page, `/solve ${n}`);
     const receipt = await waitForSolveReceipt(page, false);
     if (!String(receipt.message || '').includes(POST_WIN_SOLVE_BLOCK)) {
-        stepLog.fail(`/b solve ${n}: expected block message`, { receipt });
+        stepLog.fail(`/solve ${n}: expected block message`, { receipt });
     }
     if (receipt.phase === 'playing') {
-        stepLog.fail(`/b solve ${n}: blocked solve should not report phase=playing`, { receipt });
+        stepLog.fail(`/solve ${n}: blocked solve should not report phase=playing`, { receipt });
     }
-    stepLog.success(`/b solve ${n}`, `rejected (${receipt.phase})`);
+    stepLog.success(`/solve ${n}`, `rejected (${receipt.phase})`);
 }
 
 /**
@@ -721,14 +721,14 @@ async function runSolveExpectBlocked(page, n, log = logger) {
  * @param {import('../../lib/mp-ctx').MpCtx} ctx
  */
 async function runPostWinConsecutiveSolveTestsCtx(ctx) {
-    const mpLog = logger.child({ step: 'post-win /b solve' });
+    const mpLog = logger.child({ step: 'post-win /solve' });
     const hostPage = ctx.host.page;
     const hostFrame = await getGameFrame(hostPage);
     const frames = await Promise.all(ctx.pages.map((p) => getGameFrame(p)));
     const playerCount = ctx.playerCount;
     const totalTiles = ctx.bag?.total ?? BUNCH;
 
-    mpLog.step('Dev win → /b solve blocked in review');
+    mpLog.step('Dev win → /solve blocked in review');
     await flushHostBananaInteractions(hostPage);
     const won = await hostFrame.evaluate(() => game._hostDevWinForPlayer(game._myUid()));
     if (!won) mpLog.fail('Host dev win failed');
@@ -739,7 +739,7 @@ async function runPostWinConsecutiveSolveTestsCtx(ctx) {
     await runSolveExpectBlocked(hostPage, postWin[0], mpLog);
     await runSolveExpectBlocked(hostPage, postWin[1], mpLog);
 
-    mpLog.step(`Host Done → consecutive /b solve ${postWin[0]} then ${postWin[1]} (no reset between)`);
+    mpLog.step(`Host Done → consecutive /solve ${postWin[0]} then ${postWin[1]} (no reset between)`);
     await clickDone(hostFrame);
     await Promise.all(frames.map((f, i) =>
         waitMpResetAfterDone(f, `post-win ${ctx.players[i].role}`, RESET_WAIT_MS)
@@ -785,13 +785,13 @@ async function runSpBoardSolveScenarios(page) {
     });
 
     const exp0 = solveExpectations(0, 1, totalTiles);
-    spLog.step('SP /b solve from pre-SPLIT rack starts timer');
+    spLog.step('SP /solve from pre-SPLIT rack starts timer');
     await assertTimerNotStarted(page, 'pre-SPLIT solo', spLog);
     await runSolveAndAssert(page, 0, exp0, spLog);
     await assertTimerRunningAfterBoardActivity(page, 'pre-SPLIT solo timer', spLog);
 
     await resetAndSplitSp(page);
-    spLog.step('SP /b solve 0 after SPLIT');
+    spLog.step('SP /solve 0 after SPLIT');
     await runSolveAndAssert(page, 0, exp0, spLog);
 
     await resetAndSplitSp(page);
@@ -812,15 +812,15 @@ async function runMpBoardSolveScenariosFromCtx(ctx) {
     for (const p of ctx.pages) p.setDefaultTimeout(TIMEOUT_MS);
 
     for (const remote of ctx.remotes) {
-        mpLog.step(`MP ${remote.role} cannot run /b solve`);
+        mpLog.step(`MP ${remote.role} cannot run /solve`);
         let lines = await getSystemLineCount(remote.page);
-        await runChatCommand(remote.page, '/b solve 0');
+        await runChatCommand(remote.page, '/solve 0');
         await waitForSystemLineContaining(remote.page, 'Only the host', lines);
-        mpLog.success(`MP ${remote.role} rejected /b solve`);
+        mpLog.success(`MP ${remote.role} rejected /solve`);
     }
 
     mpLog.step(
-        `MP /b solve ${preSplit} from pre-SPLIT rack — bunch=${preSplit}, `
+        `MP /solve ${preSplit} from pre-SPLIT rack — bunch=${preSplit}, `
         + 'stragglers + timer on all clients'
     );
     await resetFaceDownWithoutSplitMpCtx(ctx);
@@ -829,7 +829,7 @@ async function runMpBoardSolveScenariosFromCtx(ctx) {
     }
     const expPre = solveExpectations(preSplit, playerCount, totalTiles);
     await runSolveAndAssert(hostPage, preSplit, expPre, mpLog);
-    await assertMpSolveSyncedCtx(ctx, `MP /b solve ${preSplit} pre-SPLIT sync`, expPre);
+    await assertMpSolveSyncedCtx(ctx, `MP /solve ${preSplit} pre-SPLIT sync`, expPre);
 
     await resetAndSplitMpCtx(ctx);
 
@@ -838,11 +838,11 @@ async function runMpBoardSolveScenariosFromCtx(ctx) {
         const exp = solveExpectations(n, playerCount, totalTiles);
         const stragglerNote = n > 0 ? `, 1 straggler each` : '';
         mpLog.step(
-            `MP host /b solve ${n} — bunch=${n} total${stragglerNote} `
+            `MP host /solve ${n} — bunch=${n} total${stragglerNote} `
             + `(${exp.crosswordPerPlayer} crossword each)`
         );
         await runSolveAndAssert(hostPage, n, exp, mpLog);
-        await assertMpSolveSyncedCtx(ctx, `MP /b solve ${n} sync`, exp);
+        await assertMpSolveSyncedCtx(ctx, `MP /solve ${n} sync`, exp);
         if (i < cases.length - 1) {
             await resetAndSplitMpCtx(ctx);
         }

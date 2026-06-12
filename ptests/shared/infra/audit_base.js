@@ -6,6 +6,7 @@ const { STEP_MS } = require('./timeouts');
 const {
     playwrightHeadless,
     playwrightSlowMo,
+    delayBetweenActions,
     shouldCloseBrowser,
     registerKeepOpenBrowser
 } = require('./env-defaults');
@@ -167,7 +168,7 @@ async function runGameAudit(gameId, options = {}) {
             } else {
                 if (moveCount % 5 === 0) logger.mpProgress(`Move ${moveCount}`);
                 if (afterMove) await afterMove(page, moveData);
-                // No timeout needed - we can fast-track completely!
+                await delayBetweenActions(page);
             }
         }
 

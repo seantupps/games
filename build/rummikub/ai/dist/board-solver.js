@@ -1,5 +1,6 @@
 import { COLORS } from './types.js';
 import { isValidMeld } from './validate.js';
+import { makeRng } from './rng.js';
 import { Grid } from './grid.js';
 import { layoutMelds } from './layout.js';
 import { buildOriginalLongRuns, meldPickWeight, partitionPreservationScore, weightedPickMelds } from './partition-bias.js';
@@ -253,6 +254,115 @@ export function partitionBoardTiles(pool, rng, deadlineMs, opts = {}) {
 /** True when every board tile is in a valid meld on the laid-out grid. */
 export function partitionIsSolved(result) {
     return result.remaining.length === 0 && result.melds.length > 0;
+}
+function sortCandidatesDeterministic(candidates) {
+    return [...candidates].sort((a, b) => {
+        const d = b.tiles.length - a.tiles.length;
+        if (d !== 0)
+            return d;
+        return meldKey(a).localeCompare(meldKey(b));
+    });
+}
+/**
+ * Deterministic backtrack — finds any full partition if one exists (win verification).
+ * Does not use RNG or originalMelds bias.
+ */
+function searchFullPartition(remaining, melds, deadlineMs, poolSize, failed) {
+    if (remaining.length === 0) {
+        return { melds: [...melds], remaining: [], placed: poolSize };
+    }
+    if (Date.now() >= deadlineMs)
+        return null;
+    if (remaining.length < MIN_RUN)
+        return null;
+    const key = poolKey(remaining);
+    if (failed.has(key))
+        return null;
+    const candidates = sortCandidatesDeterministic(enumerateMelds(remaining, 80));
+    if (!candidates.length) {
+        failed.add(key);
+        return null;
+    }
+    for (const meld of candidates) {
+        const hit = searchFullPartition(removeTiles(remaining, meld), [...melds, meld], deadlineMs, poolSize, failed);
+        if (hit)
+            return hit;
+    }
+    failed.add(key);
+    return null;
+}
+const VERIFY_SEEDS = [0, 1, 7, 13, 42, 99, 12345, 99991];
+/** Rules-based win check: can every tile be placed in valid meld(s)? */
+export function verifyBoardPartition(pool, deadlineMs) {
+    const t0 = Date.now();
+    const emptyResult = {
+        solved: false,
+        result: { melds: [], remaining: [], placed: 0 },
+        elapsedMs: 0,
+        timedOut: false,
+        method: 'empty',
+        seedAttempts: 0,
+        partitionAttempts: 0
+    };
+    if (!pool.length)
+        return emptyResult;
+    let seedAttempts = 0;
+    let partitionAttempts = 0;
+    let best = { melds: [], remaining: [...pool], placed: 0 };
+    for (const seed of VERIFY_SEEDS) {
+        if (Date.now() >= deadlineMs)
+            break;
+        seedAttempts++;
+        const rng = makeRng(seed);
+        const slice = Math.max(280, Math.floor((deadlineMs - Date.now()) / (VERIFY_SEEDS.length - seedAttempts + 2)));
+        const { result, attempts } = partitionBoardTiles(pool, rng, Date.now() + slice, {});
+        partitionAttempts += attempts;
+        if (partitionIsSolved(result)) {
+            return {
+                solved: true,
+                result,
+                elapsedMs: Date.now() - t0,
+                timedOut: false,
+                method: 'partition-seeds',
+                seedAttempts,
+                partitionAttempts
+            };
+        }
+        if (result.placed > best.placed
+            || (result.placed === best.placed && result.remaining.length < best.remaining.length)) {
+            best = result;
+        }
+    }
+    if (Date.now() < deadlineMs) {
+        const tail = best.remaining.length > 0 && best.remaining.length <= pool.length
+            ? [...best.remaining]
+            : [...pool];
+        const melds = best.remaining.length > 0 && best.remaining.length < pool.length ? [...best.melds] : [];
+        const hit = searchFullPartition(tail, melds, deadlineMs, pool.length, new Set());
+        if (hit && partitionIsSolved(hit)) {
+            return {
+                solved: true,
+                result: hit,
+                elapsedMs: Date.now() - t0,
+                timedOut: false,
+                method: 'backtrack',
+                seedAttempts,
+                partitionAttempts
+            };
+        }
+        if (hit && hit.placed > best.placed)
+            best = hit;
+    }
+    const timedOut = Date.now() >= deadlineMs;
+    return {
+        solved: partitionIsSolved(best),
+        result: best,
+        elapsedMs: Date.now() - t0,
+        timedOut,
+        method: 'exhausted',
+        seedAttempts,
+        partitionAttempts
+    };
 }
 export function meldsToGrid(melds) {
     const g = new Grid();

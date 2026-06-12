@@ -220,20 +220,80 @@
             syncFocalFromPan(game);
         };
 
+        const mobileBgDown = (e) => game.isMobileViewport?.()
+            && (game._mobileMarqueeHoldMs || 0) > 0
+            && !e.target.closest('.tile');
+
+        const cancelPan = () => {
+            if (panRaf) cancelAnimationFrame(panRaf);
+            panRaf = 0;
+            if (start?.pointerId != null) {
+                try { el.releasePointerCapture(start.pointerId); } catch (_) { /* ignore */ }
+            }
+            start = null;
+            last = null;
+            game._deferredPanDown = null;
+            game._viewportPanning = false;
+            game._mobileMarqueeHoldPending = false;
+            game._mobileMarqueeHoldArmed = false;
+        };
+        game._cancelViewportPan = cancelPan;
+
         const onDown = (e) => {
             if (e.button !== undefined && e.button !== 0) return;
             if (e.target.closest('.tile')) return;
             if (game._pinchActive) return;
-            start = { x: e.clientX, y: e.clientY };
+            if (typeof game.shouldBlockViewportPan === 'function' && game.shouldBlockViewportPan()) return;
+            if (game._mobileMarqueeActive) return;
+            if (mobileBgDown(e)) {
+                game._deferredPanDown = {
+                    x: e.clientX,
+                    y: e.clientY,
+                    pointerId: e.pointerId
+                };
+                return;
+            }
+            start = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
             last = { x: e.clientX, y: e.clientY };
             game._viewportPanning = false;
-            try {
-                if (e.pointerId != null) el.setPointerCapture(e.pointerId);
-            } catch (_) { /* ignore */ }
         };
 
         const onMove = (e) => {
+            if (!start && game._deferredPanDown) {
+                if (game._mobileMarqueeActive) {
+                    onUp();
+                    return;
+                }
+                if (game._mobileMarqueeHoldPending) {
+                    const holdAt = game._mobileMarqueeHoldAt || 0;
+                    const holdMs = game._mobileMarqueeHoldMs || 120;
+                    if (game._mobileMarqueeHoldArmed || Date.now() - holdAt >= holdMs) {
+                        onUp();
+                        return;
+                    }
+                }
+                start = { ...game._deferredPanDown };
+                last = { x: start.x, y: start.y };
+                game._deferredPanDown = null;
+            }
             if (!start || !last) return;
+            if (typeof game.shouldBlockViewportPan === 'function' && game.shouldBlockViewportPan()) {
+                onUp();
+                return;
+            }
+            if (game._mobileMarqueeActive) {
+                onUp();
+                return;
+            }
+            if (game._mobileMarqueeHoldPending) {
+                const holdAt = game._mobileMarqueeHoldAt || 0;
+                const holdMs = game._mobileMarqueeHoldMs || 40;
+                const elapsed = Date.now() - holdAt;
+                if (game._mobileMarqueeHoldArmed || elapsed >= holdMs || game._mobileMarqueeActive) {
+                    onUp();
+                    return;
+                }
+            }
             if (game._pinchActive) {
                 onUp();
                 return;
@@ -241,7 +301,12 @@
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
             if (!game._viewportPanning && Math.hypot(dx, dy) < THRESHOLD) return;
-            game._viewportPanning = true;
+            if (!game._viewportPanning) {
+                game._viewportPanning = true;
+                try {
+                    if (e.pointerId != null) el.setPointerCapture(e.pointerId);
+                } catch (_) { /* ignore */ }
+            }
             const mdx = e.clientX - last.x;
             const mdy = e.clientY - last.y;
             last.x = e.clientX;
@@ -256,12 +321,17 @@
         const onUp = () => {
             if (panRaf) cancelAnimationFrame(panRaf);
             panRaf = 0;
+            if (start?.pointerId != null) {
+                try { el.releasePointerCapture(start.pointerId); } catch (_) { /* ignore */ }
+            }
             start = null;
             last = null;
+            game._deferredPanDown = null;
             game._viewportPanning = false;
+            game._mobileMarqueeHoldPending = false;
+            game._mobileMarqueeHoldArmed = false;
             syncFocalFromPan(game);
         };
-
         el.addEventListener('pointerdown', onDown);
         el.addEventListener('pointermove', onMove);
         el.addEventListener('pointerup', onUp);

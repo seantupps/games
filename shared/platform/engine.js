@@ -1027,12 +1027,18 @@ class BaseGame {
             if (!this.isMobileViewport()) return;
             if (e.touches.length === 2) {
                 this._pinchActive = true;
+                this._mobileMarqueeActive = false;
+                this._mobileMarqueeHoldPending = false;
+                if (typeof this._cancelViewportPan === 'function') this._cancelViewportPan();
                 pinch = { d0: dist(e.touches[0], e.touches[1]), zoom0: this.zoom };
+                return;
             }
+            if (typeof this.shouldBlockViewportPan === 'function' && this.shouldBlockViewportPan()) return;
         }, { passive: true });
 
         target.addEventListener('touchmove', (e) => {
             if (!this.isMobileViewport()) return;
+            if (typeof this.shouldBlockViewportPan === 'function' && this.shouldBlockViewportPan()) return;
             if (!pinch || e.touches.length !== 2) return;
             this._pinchActive = true;
             e.preventDefault();
@@ -1178,40 +1184,50 @@ class BaseGame {
         if (!type) return;
         this.editingType = type;
         const picker = document.getElementById('pile-color-picker');
-        if (picker && this.colorVariableMap) {
-            const varName = this.colorVariableMap[type];
-            const currentColor = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+        if (!picker || !this.colorVariableMap) return;
 
-            picker.style.position = 'fixed';
-            picker.style.left = '50%';
-            picker.style.top = '80%';
-            picker.style.transform = 'translate(-50%, -50%)';
-            if (this.isMobileViewport()) {
-                picker.style.setProperty('opacity', '1', 'important');
-                picker.style.setProperty('pointer-events', 'auto', 'important');
-                picker.style.width = '56px';
-                picker.style.height = '56px';
-                picker.style.zIndex = '100000';
-            } else {
-                picker.style.opacity = '0';
-                picker.style.pointerEvents = 'auto';
+        const varName = this.colorVariableMap[type];
+        const currentColor = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+        const startHex = currentColor.startsWith('#') ? currentColor : '#ffffff';
+
+        const applyColor = (color) => {
+            picker.value = color;
+            if (varName) {
+                document.documentElement.style.setProperty(varName, color);
+                this.saveColors(type, color);
             }
+        };
 
-            if (currentColor.startsWith('#')) picker.value = currentColor;
-            if (typeof picker.showPicker === 'function') {
-                try {
-                    const shown = picker.showPicker();
-                    if (shown && typeof shown.catch === 'function') {
-                        shown.catch(() => picker.click());
-                    } else {
-                        picker.click();
-                    }
-                } catch (_) {
+        if (typeof ColorPicker !== 'undefined' && ColorPicker.shouldUseCustom(() => this.isMobileViewport())) {
+            ColorPicker.open({
+                color: startHex,
+                onInput: applyColor,
+                onClose: () => { this.editingType = null; }
+            });
+            return;
+        }
+
+        picker.style.position = 'fixed';
+        picker.style.left = '50%';
+        picker.style.top = '80%';
+        picker.style.transform = 'translate(-50%, -50%)';
+        picker.style.opacity = '0';
+        picker.style.pointerEvents = 'auto';
+
+        if (startHex.startsWith('#')) picker.value = startHex;
+        if (typeof picker.showPicker === 'function') {
+            try {
+                const shown = picker.showPicker();
+                if (shown && typeof shown.catch === 'function') {
+                    shown.catch(() => picker.click());
+                } else {
                     picker.click();
                 }
-            } else {
+            } catch (_) {
                 picker.click();
             }
+        } else {
+            picker.click();
         }
     }
 

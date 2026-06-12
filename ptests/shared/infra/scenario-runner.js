@@ -2,15 +2,18 @@
  * Named scenario steps for composable game audits.
  */
 const { logStep } = require('../adapters/desktop-input');
+const { delayBetweenActions } = require('../infra/env-defaults');
 
 /**
  * @param {string} name
  * @param {() => Promise<void>} fn
+ * @param {{ page?: import('playwright').Page }} [opts]
  */
-async function runScenario(name, fn) {
+async function runScenario(name, fn, opts = {}) {
     logStep(name);
     try {
         await fn();
+        await delayBetweenActions(opts.page);
         logStep(`SUCCESS: ${name}`);
     } catch (err) {
         const wrapped = new Error(`Scenario "${name}" failed: ${err.message}`);

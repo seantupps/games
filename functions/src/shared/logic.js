@@ -245,6 +245,7 @@ const Logic = {
     line: LineLogic,
     bananagrams: BananagramsLogic,
     template: TemplateLogic,
+    rummikub: TemplateLogic,
     // NEW_GAME_LOGIC_INSERT
     computeState(gameType, events = [], initialConfig = {}) {
         const logic = this[gameType];

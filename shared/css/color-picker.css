@@ -1,0 +1,103 @@
+.five-color-picker {
+    position: fixed;
+    inset: 0;
+    z-index: 120000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+.five-color-picker[hidden] {
+    display: none !important;
+}
+
+.five-color-picker__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.five-color-picker__panel {
+    position: relative;
+    width: min(300px, calc(100vw - 32px));
+    padding: 12px;
+    border-radius: 12px;
+    background: #2b2b2b;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    touch-action: none;
+}
+
+.five-color-picker__sv {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.five-color-picker__controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.five-color-picker__preview {
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.five-color-picker__hue {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    touch-action: none;
+}
+
+.five-color-picker__rgb {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.five-color-picker__rgb label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.65);
+    text-align: center;
+}
+
+.five-color-picker__rgb input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    background: #1a1a1a;
+    color: #fff;
+    font-size: 14px;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+
+.five-color-picker__rgb input::-webkit-outer-spin-button,
+.five-color-picker__rgb input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+html.five-mobile #theme-color-input {
+    -webkit-tap-highlight-color: transparent;
+}

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Rummikub</title>
+    <link rel="stylesheet" href="../../shared/css/core.css">
+    <link rel="stylesheet" href="../../shared/css/mobile.css">
+    <link rel="stylesheet" href="../../shared/css/dev-overlay.css">
+    <link rel="stylesheet" href="../../shared/css/pan-zoom-board.css">
+    <link rel="stylesheet" href="../../shared/css/selection.css">
+    <link rel="stylesheet" href="../../shared/css/solo-post-game.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="board-canvas">
+            <div class="board-pan-layer" data-testid="board-surface"></div>
+        </div>
+    </div>
+    <script src="../../shared/mobile/viewport-mode.js"></script>
+    <script src="../../shared/games/registry.js"></script>
+    <script src="../../shared/js/hub/protocol.js"></script>
+    <script src="../../shared/js/hub/win-banner-payload.js"></script>
+    <script src="../../shared/platform/game-adapter.js"></script>
+    <script src="../../shared/platform/mobile-layout.js"></script>
+    <script src="../../shared/platform/dev-overlay.js"></script>
+    <script src="../../shared/platform/zoom.js"></script>
+    <script src="../../shared/platform/viewport.js"></script>
+    <script src="../../shared/platform/tile-layout.js"></script>
+    <script src="../../shared/platform/pan-zoom-session.js"></script>
+    <script src="../../shared/platform/drag.js"></script>
+    <script src="../../shared/platform/selection.js"></script>
+    <script src="../../shared/platform/game-sync.js"></script>
+    <script src="../../shared/games/sync-contracts.js"></script>
+    <script src="../../shared/games/player-model.js"></script>
+    <script src="../../shared/platform/engine-network/room.js"></script>
+    <script src="../../shared/platform/engine-network/events.js"></script>
+    <script src="../../shared/platform/engine-network/drag.js"></script>
+    <script src="../../shared/platform/engine-network/preview.js"></script>
+    <script src="../../shared/platform/engine-network/misc.js"></script>
+    <script src="../../shared/platform/engine-network/index.js"></script>
+    <script src="../../shared/platform/engine.js"></script>
+    <script src="../../shared/platform/engine-room-sync.js"></script>
+    <script src="../../shared/platform/engine-mobile-layout.js"></script>
+    <script src="../../shared/platform/logic.js"></script>
+    <script src="../../shared/platform/solo-post-game.js"></script>
+    <script src="rummikub-core.js"></script>
+    <script src="rules.js"></script>
+    <script src="grid.js"></script>
+    <script src="rummikub.js"></script>
+    <script src="modules/session.js"></script>
+    <script src="modules/victory.js"></script>
+    <script src="modules/win-log.js"></script>
+    <script src="modules/win-diag.js"></script>
+    <script src="modules/gameplay.js"></script>
+    <script src="modules/render.js"></script>
+    <script src="dev/board-solve.js"></script>
+    <script src="game-boot.js"></script>
+</body>
+</html>

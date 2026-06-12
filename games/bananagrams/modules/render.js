@@ -198,6 +198,9 @@
                     if (!existing.has(node.dataset.tileId)) node.remove();
                 });
         
+                if (this._isDraggingHand?.()) {
+                    this._syncLiveDragTilesFromDom?.();
+                }
                 const tilesToRender = this._mpHydrateTiles?.(this.tiles) || this.tiles;
                 this.tiles = tilesToRender;
 

@@ -1296,6 +1296,7 @@ async function assertGameBoardFitsViewport(page, opts = {}) {
         const doc = document.getElementById('game-frame')?.contentWindow?.document;
         if (!doc) return false;
         if (doc.getElementById('line-canvas')) return doc.querySelectorAll('.node').length > 0;
+        if (doc.querySelector('.board-pan-layer')) return doc.querySelectorAll('.tile').length > 0;
         return doc.querySelectorAll('.piece').length > 0;
     }, { timeout: ms });
 
@@ -1354,6 +1355,13 @@ async function assertGameBoardFitsViewport(page, opts = {}) {
                     badPieces.push(p.id);
                 }
             });
+            const badTiles = [];
+            doc.querySelectorAll('.tile').forEach((t) => {
+                const r = t.getBoundingClientRect();
+                if (r.right < -margin || r.left > vw + margin || r.bottom < -margin || r.top > vh + margin) {
+                    badTiles.push(t.dataset.tileId);
+                }
+            });
             return {
                 ok: false,
                 vw,
@@ -1361,6 +1369,7 @@ async function assertGameBoardFitsViewport(page, opts = {}) {
                 container: { w: cr.width, h: cr.height, left: cr.left, top: cr.top, right: cr.right, bottom: cr.bottom },
                 badNodes,
                 badPieces,
+                badTiles,
                 zoom: win.game?.zoom,
                 localSize: win.game?.localSize
             };

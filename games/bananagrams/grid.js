@@ -426,7 +426,7 @@
         return validateGrid(mainTiles, checker);
     }
 
-    /** Word list + validity for dev /b state (does not mutate the board). */
+    /** Word list + validity for hub /state inspect (does not mutate the board). */
     function inspectBoardWords(tiles, checker) {
         const words = collectWords(tiles || []);
         const valid = [];

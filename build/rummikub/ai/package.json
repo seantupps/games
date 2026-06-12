@@ -5,10 +5,12 @@
   "scripts": {
     "play": "tsx src/play.ts",
     "build": "tsc",
+    "bundle": "node ../../tools/rummikub-bundle.js",
     "start": "node dist/play.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

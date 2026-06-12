@@ -111,6 +111,15 @@
 
         ctx.setUserColor(userColor);
 
+        const themeColorInput = document.getElementById('theme-color-input');
+        if (themeColorInput && global.ColorPicker) {
+            global.ColorPicker.enhanceInput(themeColorInput, {
+                when: () => global.FiveViewport?.isMobile?.(),
+                onInput: (hex) => ctx.setUserColor(hex),
+                onChange: (hex) => ctx.setUserColor(hex)
+            });
+        }
+
         global.HubRoom.attach(ctx, hubGames);
         global.HubChat.attach(ctx);
         global.HubInvites.attach(ctx, hubGames);
