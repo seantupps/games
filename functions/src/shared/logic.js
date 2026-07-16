@@ -240,12 +240,78 @@ const TemplateLogic = {
     }
 };
 
+const QuoridorLogic = {
+    initialState() {
+        return {
+            initialized: true,
+            turn: "P1",
+            isOver: false,
+            winner: null,
+            scores: { P1: 0, P2: 0 },
+            engine: null,
+        };
+    },
+    isValidMove(state, payload) {
+        if (!state || state.isOver || !payload) return false;
+        return true;
+    },
+    applyMove(state, payload) {
+        const next = { ...state };
+        if (payload && payload.engine) {
+            next.engine = payload.engine;
+            next.turn = payload.turn || next.turn;
+            next.isOver = !!payload.isOver;
+            next.winner = payload.winner ?? null;
+            if (payload.scores) next.scores = payload.scores;
+        }
+        return next;
+    },
+    applyInitialBoard(state, board) {
+        if (!board) return state;
+        return { ...state, ...board };
+    },
+};
+
+const GopsLogic = {
+    initialState() {
+        return {
+            initialized: true,
+            turn: "P1",
+            isOver: false,
+            winner: null,
+            scores: { P1: 0, P2: 0 },
+            engine: null,
+        };
+    },
+    isValidMove(state, payload) {
+        if (!state || state.isOver || !payload) return false;
+        return true;
+    },
+    applyMove(state, payload) {
+        const next = { ...state };
+        if (payload && payload.engine) {
+            next.engine = payload.engine;
+            next.turn = payload.turn || next.turn;
+            next.isOver = !!payload.isOver;
+            next.winner = payload.winner ?? null;
+            if (payload.scores) next.scores = payload.scores;
+        }
+        return next;
+    },
+    applyInitialBoard(state, board) {
+        if (!board) return state;
+        return { ...state, ...board };
+    },
+};
+
 const Logic = {
     piles: PilesLogic,
     line: LineLogic,
     bananagrams: BananagramsLogic,
     template: TemplateLogic,
     rummikub: TemplateLogic,
+    quoridor: QuoridorLogic,
+    gops: GopsLogic,
     // NEW_GAME_LOGIC_INSERT
     computeState(gameType, events = [], initialConfig = {}) {
         const logic = this[gameType];

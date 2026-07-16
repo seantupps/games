@@ -42,6 +42,22 @@
             winner: 'host-metadata',
             review: 'global/board.phase',
             notes: 'Do not apply event-log isOver/applyState in MP. Interactions under interactions/banana.'
+        },
+        quoridor: {
+            style: 'event-log',
+            read: 'event-log',
+            write: 'event-log',
+            winner: 'event-log',
+            review: 'none',
+            notes: 'SP vs AI for now; MP event-log reserved for later (line/piles pattern).'
+        },
+        gops: {
+            style: 'event-log',
+            read: 'event-log',
+            write: 'event-log',
+            winner: 'event-log',
+            review: 'none',
+            notes: 'SP vs AI for now; MP event-log reserved for later.'
         }
         // NEW_GAME_CONTRACT_INSERT
     };

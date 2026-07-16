@@ -3,6 +3,9 @@ import struct
 import sys
 import os
 
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+TABLE_PATH = os.path.join(ROOT, 'games', 'line', 'ai', 'line_ai_table.bin.gz')
+
 # Grid Constants
 GRID_SIZE = 4
 NODES = GRID_SIZE * GRID_SIZE
@@ -108,7 +111,7 @@ def find_strategy(data, count, mask_hi, mask_lo, used_mask, eps):
     return responses
 
 def main():
-    path = "games/line/ai/line_ai_table.bin.gz"
+    path = TABLE_PATH
     if not os.path.exists(path): return print(f"Error: {path} not found.")
     with gzip.open(path, "rb") as f:
         data = f.read(); count = struct.unpack("<I", data[:4])[0]

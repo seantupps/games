@@ -71,6 +71,7 @@ const {
     solveAndApplyAiMove
 } = require('../../../lib/ai-playthrough-apply');
 const { awaitMpVictorySettled, readMpBoardSyncState } = require('../../../assertions/mp/victory');
+const syncWinBanner = require('../../../assertions/mp/sync-win-banner');
 const { resolveSessionRounds, resolveSessionPause, pauseTimeoutMs } = require('../../../lib/mp-session-config');
 const {
     resolvePlayToWin,

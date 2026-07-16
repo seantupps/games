@@ -1,0 +1,15 @@
+{
+  "gops": {
+    "entry": "tools/gops.js",
+    "description": "Play GOPS — gops <N> [--seed S]"
+  },
+  "quoridor": {
+    "entry": "tools/quoridor.js",
+    "description": "Play Quoridor — quoridor [--seed S | --2p | --ai greedy|random]"
+  },
+  "games": {
+    "entry": "tools/games.js",
+    "description": "Hub stack — games | games mobile | games --stop | games --status"
+  }
+}
+

@@ -1,0 +1,183 @@
+/* Quoridor — dark board; cells = page bg; dimmed ghost highlights */
+
+:root {
+    --theme-color: #3b82f6;
+    --opponent-color: #ef4444;
+}
+
+body {
+    background-color: var(--bg-color, #0a0a0a);
+    margin: 0;
+    overflow: hidden;
+    user-select: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+#game-container {
+    width: 800px;
+    height: 800px;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+    border: none;
+    flex-shrink: 0;
+}
+
+#quoridor-board {
+    position: relative;
+    width: 92%;
+    height: 92%;
+    /* Uniform dark grey gutters (cells sit on top; no colored overlays at rest) */
+    background: #252525;
+    border: 1px solid #252525;
+    border-radius: 8px;
+    box-sizing: border-box;
+    overflow: hidden;
+    --gap: 2.4%;
+    --cell: calc((100% - 8 * var(--gap)) / 9);
+}
+
+.q-cell {
+    position: absolute;
+    width: var(--cell);
+    height: var(--cell);
+    /* Same as page background — no rounded corners (avoids line artifacts) */
+    background: var(--bg-color, #0a0a0a);
+    border-radius: 0;
+    box-sizing: border-box;
+    cursor: default;
+}
+
+.q-cell.legal {
+    cursor: pointer;
+}
+
+.q-pawn {
+    position: absolute;
+    inset: 18%;
+    border-radius: 50%;
+    pointer-events: none;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+}
+
+.q-pawn.p1 {
+    background: var(--theme-color);
+    opacity: 1;
+}
+
+.q-pawn.p2 {
+    background: var(--opponent-color);
+    opacity: 1;
+}
+
+/* Ghost moves — only visible while hovering a legal destination */
+.q-pawn.ghost {
+    background: var(--theme-color);
+    opacity: 0;
+    box-shadow: none;
+    transition: opacity 0.12s ease;
+}
+
+.q-cell.legal:hover .q-pawn.ghost {
+    opacity: 0.45;
+}
+
+.q-hfence,
+.q-vfence {
+    position: absolute;
+    border-radius: 2px;
+    cursor: default;
+    z-index: 2;
+    background: transparent;
+}
+
+.q-hfence {
+    height: var(--gap);
+    width: calc(var(--cell) * 2 + var(--gap));
+}
+
+.q-vfence {
+    width: var(--gap);
+    height: calc(var(--cell) * 2 + var(--gap));
+}
+
+/* Legal walls: keep gaps grey at rest (all slots would flood the grid otherwise).
+   Dimmed theme tint only on hover. */
+.q-hfence.legal,
+.q-vfence.legal {
+    background: transparent;
+    cursor: pointer;
+}
+
+.q-hfence.legal:hover,
+.q-vfence.legal:hover {
+    background: color-mix(in srgb, var(--theme-color) 45%, transparent);
+}
+
+.q-hfence.placed,
+.q-vfence.placed {
+    cursor: default;
+    pointer-events: none;
+}
+
+.q-hfence.placed.p1,
+.q-vfence.placed.p1 {
+    background: var(--theme-color);
+}
+
+.q-hfence.placed.p2,
+.q-vfence.placed.p2 {
+    background: var(--opponent-color);
+}
+
+.q-hud {
+    position: absolute;
+    left: 50%;
+    bottom: 1.5%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.75);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.q-hud .wall-p1 {
+    color: var(--theme-color);
+}
+
+.q-hud .wall-p2 {
+    color: var(--opponent-color);
+}
+
+.q-thinking {
+    position: absolute;
+    top: 2%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.45);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.q-thinking.show {
+    opacity: 1;
+}
+
+body.quoridor-busy .q-cell.legal,
+body.quoridor-busy .q-hfence.legal,
+body.quoridor-busy .q-vfence.legal {
+    pointer-events: none;
+    opacity: 0.55;
+}

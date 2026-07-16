@@ -115,9 +115,9 @@ function stackHelp() {
     }
     return [
         'Local test stack not detected.',
-        `  Terminal 1: python -m http.server ${STATIC_PORT} --bind ${STATIC_HOST}`,
-        `           or: npm run serve  (http://${STATIC_HOST}:${STATIC_PORT}/)`,
-        '  Terminal 2: npm run emulators  (RTDB :9000)',
+        '  Prefer: games   (or games mobile) after npm run link',
+        `  Or: npm run serve  (http://${STATIC_HOST}:${STATIC_PORT}/)`,
+        '       npm run emulators  (RTDB :9000)',
         'Then run Playwright tests again.',
         'Or set FIVE_AUTO_START_STACK=1 to auto-spawn missing services.'
     ].join('\n');

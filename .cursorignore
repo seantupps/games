@@ -33,7 +33,6 @@ ngrok.yml
 
 # Docs & personal notes (not shipped app code)
 notes/
-docs/
 instructions.md
 
 # Git internals

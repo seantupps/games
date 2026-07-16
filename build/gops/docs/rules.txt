@@ -1,0 +1,104 @@
+GOPS — Game of Pure Strategy (original / two-player)
+====================================================
+
+Also known as Goofspiel. Players start with identical hands, so the deal
+introduces no luck; only the shuffled prize order is random.
+
+Sources: Pagat (pagat.com/misc/gops.html); Luce & Raiffa, Games and Decisions
+(1957).
+
+
+Directory layout
+----------------
+  docs/rules.txt          this file
+  docs/state_counts.txt   state-space / table-size notes
+  play/play_ai.py         human vs Nash AI (gops CLI)
+  play/game.js            terminal human vs random AI
+  nash/                   exact Nash solver core (W–L, rollover)
+    solve_nash.py
+    matrix_game.py        Numba zero-sum matrix games
+    solve_value.pyx       Cython DP hot path
+    build_endgame.py      endgame table build/load
+  scripts/                production benches / verify / profiles
+    verify_exact.py
+    profile_turn.py
+    profile_build.py
+    bench_turn_table.py
+  research/open_approx/   parked open-policy / leaf experiments (not prod)
+    open_policy.py, leaf_*.py, scripts/, artifacts/
+  ref/count_states.py     reproduce published + our reachable counts
+
+Root game.js / solve_nash.py / matrix_game.py are shims for old paths.
+
+
+Players and cards
+-----------------
+Two players. Three suits from a standard deck:
+
+  • Prize suit (traditionally diamonds) — shuffled face down
+  • Each player gets one full suit as a bidding hand
+  • The fourth suit is unused
+
+Rank (Ace low): A, 2, 3, 4, 5, 6, 7, 8, 9, 10, J, Q, K
+
+Prize point values:
+  A = 1,  2–10 = face value,  J = 11,  Q = 12,  K = 13
+
+
+Setup
+-----
+1. Sort the deck into suits.
+2. Shuffle one suit and place it face down as the prize pile.
+3. Give each player one complete suit (13 cards). Hands are secret.
+
+
+Play
+----
+1. Turn the top prize card face up.
+2. Each player secretly chooses one card from their hand to bid.
+3. Both bids are revealed at once.
+4. Higher bid wins the prize card(s) currently on offer.
+5. Bid cards are discarded (spent).
+6. Repeat until all 13 prize cards have been contested.
+
+Ties (original rule — rollover):
+  If bids are equal, discard the bid cards but leave the prize on offer.
+  Flip the next prize card; the next bid is for both prizes together
+  (and so on if more ties). If the final bids of the game are tied, any
+  remaining unclaimed prizes are won by neither player.
+
+
+Scoring
+-------
+When both hands are empty, each player sums the point values of the prize
+cards they won. Higher total wins. (Total points in the prize suit = 91.)
+
+
+Commands
+--------
+Terminal play (AI currently bids at random):
+  npm run link                 # once: install gops next to node.exe
+  gops <N> [--seed S]          # e.g. gops 5
+  npm run gops -- <N>          # without linking
+  node tools/gops.js <N>
+
+Exact Nash (W–L, rollover):
+  python build/gops/nash/solve_nash.py --N 5
+  python build/gops/nash/solve_nash.py --N 6 --vs-random 200
+  python build/gops/solve_nash.py --N 5
+  python build/gops/scripts/verify_exact.py          # exact match vs brute
+  python build/gops/scripts/verify_exact.py --K 3 --bellman 400
+  python build/gops/scripts/profile_turn.py --K 7   # turn cost + DP counters
+  python build/gops/scripts/profile_turn.py --K 7 --table --nets
+
+Parked open-approx research (not production):
+  python build/gops/research/open_approx/scripts/eval_open_pareto.py --K 7
+
+State-count reference:
+  python build/gops/ref/count_states.py --N 8 --ours-to 6
+
+Add more CLIs in tools/cli-links.json, then npm run link.
+
+Objective: maximize P(win)-P(loss) (+1 / 0 / -1).
+Reachable-state DP in Python; Numba only for matrix-game LPs (disk-cached).
+Full N=13 + compressed table comes later (see docs/state_counts.txt).

@@ -53,6 +53,7 @@
         // tests / dev
         TEST_FORCE_MOVE: 'test-force-move',
         DEV_WIN: 'dev-win',
+        UNDO: 'undo',
         DICT_ADJUST: 'dict-adjust',
         DICT_ADJUST_RESULT: 'dict-adjust-result',
         BOARD_STATE_INSPECT: 'board-state-inspect',

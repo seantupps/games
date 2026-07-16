@@ -142,7 +142,7 @@ async function assertDebugReportReceived(page, { label = 'phone-path', minAgeMs 
         }
     }
     if (!latest) {
-        throw new Error(`${label}: no report on PC — open http://127.0.0.1:8002/ (restart phone:dev for debug proxy)`);
+        throw new Error(`${label}: no report on PC — open http://127.0.0.1:8002/ (restart with games mobile)`);
     }
     if (minAgeMs > 0) {
         const age = Date.now() - new Date(latest.receivedAt || latest.ts).getTime();

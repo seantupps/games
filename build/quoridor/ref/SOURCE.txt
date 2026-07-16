@@ -1,0 +1,9 @@
+Upstream Quoridor AI (Monte Carlo tree search)
+==============================================
+
+Repository: https://github.com/gorisanson/quoridor-ai
+License:    MIT (see quoridor-ai/LICENSE)
+Play online: https://gorisanson.github.io/quoridor-ai/
+
+Vendored snapshot under quoridor-ai/ for local rules / move-generation
+reference. Game model lives in quoridor-ai/src/js/game.js.

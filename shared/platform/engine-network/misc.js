@@ -63,6 +63,15 @@
             }
             return true;
         }
+        const undoType = typeof HubProtocol !== 'undefined'
+            ? (HubProtocol.MSG?.UNDO || 'undo')
+            : 'undo';
+        if (type === undoType || type === 'undo') {
+            if (typeof game.undoLastTurn === 'function') {
+                game.undoLastTurn();
+            }
+            return true;
+        }
         if (type === 'keydown') {
             game._handleKeyDown(e.data);
             return true;

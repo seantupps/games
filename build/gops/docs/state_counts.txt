@@ -1,0 +1,208 @@
+GOPS / Goofspiel — state counts & lookup-table sizes
+====================================================
+
+Sources
+-------
+- ollijarviniemi/goofspiel-nash (README + nash_win_n5/metadata.json)
+  https://github.com/ollijarviniemi/goofspiel-nash
+- Rhoads & Bartholdi 2012, "Computer Solution to the Game of Pure Strategy"
+- Bowling et al. approx policy/Q sizes (different state definition)
+
+
+Published table (goofspiel-nash, discard-on-tie, W–L)
+-----------------------------------------------------
+They only publish full optimized tables for a few N:
+
+  N | Original states | Optimized states | File size
+  --|-----------------|------------------|---------
+  5 |          49,001 |            4,226 | 36 KB
+  8 |      38,639,417 |        1,246,443 | 3.6 MB
+ 13 | 2,016,384,471,817 |   11,885,260,388 | 35 GB
+
+N=13 solve cost (their notes): ~48–96 CPU-hours, ~10 GB working RAM.
+
+"Original" = bottom-up over all consistent
+  (hand1, hand2, remaining_prizes, score_diff)
+with |hand1|=|hand2|=|prizes|=k for each round k — not only opening-reachable.
+
+"Optimized" adds: relative-rank renormalization, symmetry, tighter sd
+bounds / early forced wins. That is what fits in 36 KB / 3.6 MB / 35 GB.
+
+
+Lookups
+Turn: k^2(k-1)
+
+
+
+
+Naive size formula (cold infosets only)
+---------------------------------------
+At remaining size k, without score_diff:
+  #states(k) = C(N,k)^3
+
+Sum over k is ~ 8^N / N^(3/2). Score_diff multiplies by a polynomial
+(~O(N^2)). Peak term is around k = N/2.
+
+"rough x sd (f32)" = sum_C^3 * (S/2+1) * 4 bytes (crude).
+"their opt states" = goofspiel-nash optimized W-L count (discard-on-tie).
+"their table" = published sizes for N=5/8/13; others scaled by the N=13
+bytes/state (~3.17 B/state, float16 pack + overhead).
+
+  N | sum_k C(N,k)^3 | rough x sd (f32) | their opt states | their table
+  --|----------------|------------------|------------------|------------
+  5 |          2,252 |           ~70 KB |            4,226 |     36 KB *
+  6 |         15,184 |          ~0.7 MB |           28,564 |   ~88 KB
+  7 |        104,960 |            ~6 MB |          185,459 |  ~573 KB
+  8 |        739,162 |           ~54 MB |        1,246,443 |    3.6 MB *
+  9 |      5,280,932 |          ~0.5 GB |        7,722,244 |   ~23 MB
+ 10 |     38,165,260 |            ~4 GB |       49,565,631 |  ~149 MB
+ 11 |    278,415,920 |           ~35 GB |      307,825,475 |  ~928 MB
+ 12 |  2,046,924,400 |          ~305 GB |    1,945,404,096 |   ~5.7 GB
+ 13 | 15,148,345,760 |          ~2.6 TB |   11,885,260,388 |     35 GB *
+
+  * published by goofspiel-nash; other "their table" cells are scaled estimates.
+
+Their published "original" for N=13 (~2 trillion) is the same ballpark
+with a more careful score_diff count than the rough column above.
+
+Note: our game uses rollover ties, so our tables will be larger than
+"their opt" at the same N. After rank-normalize + dominance, our opening
+memos were ~3.5k (N=5) and ~29k (N=6) — same order as their opt column.
+
+
+
+3 (raw memo 275,856, seeded~=233,660)
+
+
+
+  k | face-up+mirror | + playout-net dominance | notes
+  2 |          6,146 |                   3,731 |
+  3 |        297,087 |                 229,929 |
+  4 |      7,582,876 |               6,264,999 | ~27× k=3 seeded
+
+  k=4 39.4s
+
+
+
+N=13 optimized lookup sizes by remaining k
+------------------------------------------
+Ours first (what build_endgame.py stores), then their discard-on-tie
+formula for reference. k=1 is closed form and never stored.
+
+A) Ours — face-up only (|pending|==1), |sd|<=rem, equal-hand sd-mirror,
+   then dominance:
+     (1) card-dom: d cards > opp max guarantee d largest prizes
+     (2) pure-playout nets: M=max(p2-p1) over all bids + prize orders;
+         sd>M => forced win (sound, no LP). Stacks recompute on demand.
+
+  k | face-up+mirror | + playout-net dominance | notes
+  --|----------------|-------------------------|------
+  2 |          6,146 |                   3,731 | was 10,920 all-pending
+  3 |        297,087 |                 229,929 | -67,158 vs mirror-only
+  4 |            —   |                     —   |
+
+  Regression: opening N=1..5 still 0; newly-forced samples match solve.
+
+
+B) Theirs — goofspiel-nash optimized estimate (discard-on-tie W-L)
+   opt(k) ~= n_canonical_configs(k) * C(13,k) * avg_score_range
+   ~table uses published density ~3.17 B/state (35 GB / 11,885,260,388).
+
+  k |         opt(k) |      cum (1..k) | ~layer | ~endgame table (1..k)
+  --|----------------|-----------------|--------|----------------------
+  1 |              0 |               0 |     0 B |                   0 B
+  2 |         15,834 |          15,834 |  49 KB |                 49 KB
+  3 |        393,536 |         409,370 | 1.2 MB |               1.2 MB
+  4 |      6,561,555 |       6,970,925 |  20 MB |                21 MB
+  5 |     76,939,434 |      83,910,359 | 232 MB |               253 MB
+  6 |    655,640,700 |     739,551,059 | 1.9 GB |               2.2 GB
+  7 |  3,297,019,440 |   4,036,570,499 | 9.7 GB |                12 GB
+  8 |  5,359,078,296 |   9,395,648,795 |  16 GB |                28 GB
+  9 |  2,254,607,355 |  11,650,256,150 | 6.6 GB |                34 GB
+ 10 |    229,984,898 |  11,880,241,048 | 694 MB |                35 GB
+ 11 |      5,003,544 |  11,885,244,592 |  15 MB |                35 GB
+ 12 |         15,405 |  11,885,259,997 |  48 KB |                35 GB
+ 13 |              1 |  11,885,259,998 |    3 B |                35 GB
+
+  Their stored total (k>=2): 11,885,259,998 / ~35 GB
+  (published full table 11,885,260,388 including 390 k=1 entries).
+
+  Unoptimized "original" formula (much larger; not what you ship):
+    original(k) = C(13,k)^3 * (2*(91 - k(k+1)/2) + 1)
+    totals ~2.02 trillion — see goofspiel-nash README.
+
+
+
+Our solver vs theirs — N = 1..6
+-------------------------------
+Ours = opening-reachable memo size after solve_nash.py (rollover ties),
+with rank-normalize + dominance (current solver).
+
+Discard-reachable = same exploration as ours, but ties discard the prize
+and return to cold (closer to goofspiel-nash rules; still no relative-rank
+compression, still only opening-reachable).
+
+  N | ours (rollover+) | discard-reachable | their original | their optimized
+  --|------------------|-------------------|----------------|----------------
+  1 |                1 |                 1 |              1 |              1
+  2 |                7 |                13 |             41 |             13
+  3 |              123 |               162 |            487 |             91
+  4 |            1,576 |             1,830 |          5,033 |            699
+  5 |            3,491 |            22,357 |         49,001 |          4,226
+  6 |           28,648 |           259,206 |        462,165 |         28,564
+
+(ours N=5/6 are post rank-normalize+dominance; N=1..4 unchanged order.
+ discard-reachable column is still pre-normalize exploration counts.)
+
+
+Why the counts differ
+---------------------
+1. Tie rule (biggest rule difference)
+   - Ours: rollover — equal bids leave prizes pending; next bid is for the
+     stack. Extra dimension: pending bitmask (multi-prize hot states).
+   - Theirs: discard — tied prize goes to neither; no pending stack.
+   So the games are not the same. Reachable sets differ (see table:
+   sometimes ours is smaller, sometimes larger).
+
+2. What is being counted
+   - Ours / discard-reachable above: only states touched from the opening
+     deal (lazy DP memo).
+   - Their "original": every consistent (h1,h2,prizes,sd) for every k,
+     whether or not it appears from the shuffled opening. That is why
+     N=5 original (49,001) > discard-reachable (22,357).
+
+3. Relative-rank compression
+   Absolute ranks that never appear in either hand can be renumbered.
+   They cite 10x+; our solver now does this too (N=5 memo ~3.5k vs
+   their optimized 4.2k — same order; remaining gap is mostly rollover
+   vs discard and reachable-only vs full enumeration).
+
+4. Symmetry / sd pruning
+   Both use hand swap symmetry (value flips sign) and |sd| > remaining
+   ⇒ terminal. Their optimized pass is more aggressive (forced wins on
+   largest remaining prizes, tighter sd bounds).
+
+5. Cold vs hot representation
+   They index primarily by "start of round k" sets of size k.
+   We also memoize cold (unrevealed prize set) and hot (face-up pending)
+   separately, so one physical position can contribute more than one
+   packed key.
+
+
+Implications for N=13
+---------------------
+- Full optimized discard-tie W–L table (published): ~12B states, ~35 GB.
+- Unoptimized / naive: terabytes.
+- Our rollover tables differ from their discard-tie optimized counts;
+  rank-normalize is already in our solver.
+- A 10–20 MB N=13 target only works with heavy compression, quantization,
+  or not storing a dense full-N table (e.g. on-demand subgame solve,
+  points-objective without sd, or shipping only small-N tables).
+
+
+Bowling et al. (approx; different state/action packing)
+-------------------------------------------------------
+  N=4:  ~692 states, policy ~59 KB
+  N=8:  ~3e6 states, policy ~47 MB
+  N=13: ~1e11 states, policy ~2.5 TB
+(Useful as another published scale check; not directly comparable.)

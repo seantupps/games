@@ -258,6 +258,55 @@
             auditConfig: 'ptests/games/rummikub/desktop-sp',
             mobileAuditConfig: 'ptests/games/rummikub/mobile/sp'
         },
+        {
+            id: 'quoridor',
+            label: 'Quoridor',
+            logicKey: 'quoridor',
+            // SP vs AI for now (lobby solo). Hidden in party — MP later like line/piles.
+            maxPartyPlayers: 2,
+            mpPlayerCounts: [2],
+            hideWhenPartyAtLeast: 2,
+            modes: ['classic'],
+            defaultMode: 'classic',
+            capabilities: {
+                ...DEFAULT_CAPABILITIES,
+                boardKind: 'generic',
+                mobileLayoutPolicy: 'fit-square',
+                auditReadyCallable: true,
+                supportsDragging: false,
+                supportsSettingsEdgeSwipe: false,
+                supportsVictoryAutoReset: true,
+                syncStyle: 'event-log'
+            },
+            globalResetKeys: ['board'],
+            clearGameDataOnReset: true,
+            auditConfig: 'ptests/games/quoridor/desktop-sp'
+        },
+        {
+            id: 'gops',
+            label: 'GOPS',
+            logicKey: 'gops',
+            // SP vs AI for now (lobby solo). Hidden in party — MP later.
+            maxPartyPlayers: 2,
+            mpPlayerCounts: [2],
+            hideWhenPartyAtLeast: 2,
+            modes: ['classic'],
+            defaultMode: 'classic',
+            capabilities: {
+                ...DEFAULT_CAPABILITIES,
+                boardKind: 'generic',
+                mobileLayoutPolicy: 'fit-square',
+                auditReadyCallable: true,
+                supportsDragging: true,
+                supportsSettingsEdgeSwipe: false,
+                supportsVictoryAutoReset: true,
+                supportsScoreboard: false,
+                syncStyle: 'event-log'
+            },
+            globalResetKeys: ['board'],
+            clearGameDataOnReset: true,
+            auditConfig: 'ptests/games/gops/desktop-sp'
+        },
         // NEW_GAME_REGISTRY_INSERT
     ];
 

@@ -130,7 +130,7 @@ if (require.main === module) {
     main().catch((err) => {
         console.error('\n\x1b[31mFAIL\x1b[0m', err.message);
         if (err.stack) console.error(err.stack);
-        console.error('\nTips: npm run stack && npm run phone:dev (debug proxy on :8002)');
+        console.error('\nTips: games mobile (debug proxy on :8002); or games --status');
         console.error('PC logs: http://127.0.0.1:8002/\n');
         process.exit(1);
     });

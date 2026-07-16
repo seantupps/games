@@ -298,6 +298,7 @@
                         '/w word1 -word2 ... — add/remove dictionary words',
                         '/state — board progress (unmatched tiles, invalid words, win-ready, etc.)',
                         '/solve N — dev only: solve current tiles (N stragglers — rack or bunch, game-specific)',
+                        '/undo — SP: undo last player move + AI reply (Quoridor)',
                         '/clear — clear local data and reload',
                         '/win — dev win (same review + hub banner path as real MP win)',
                         '/win banner <name> — hub win banner only (dev)',
@@ -334,6 +335,20 @@
                     } else {
                         this.append({ sender: 'System', content: 'No game loaded.' });
                     }
+                    return true;
+                }
+                if (/^\/undo$/i.test(trimmed) || /^\/u$/i.test(trimmed)) {
+                    const frame = document.getElementById('game-frame');
+                    if (!frame?.contentWindow) {
+                        this.append({ sender: 'System', content: 'No game loaded.' });
+                        return true;
+                    }
+                    const H = global.HubProtocol?.MSG || {};
+                    frame.contentWindow.postMessage({ type: H.UNDO || 'undo' }, '*');
+                    this.append({
+                        sender: 'System',
+                        content: 'Undo: last player move + AI reply (if supported).'
+                    });
                     return true;
                 }
                 if (text.toLowerCase().startsWith('/win banner ')) {

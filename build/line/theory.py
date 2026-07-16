@@ -235,7 +235,9 @@ if __name__ == "__main__":
     t_sort = time.time() - t1
     
     t2 = time.time()
-    raw_path = "tests/line/line_ai_table.bin"
+    out_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'games', 'line', 'ai')
+    os.makedirs(out_dir, exist_ok=True)
+    raw_path = os.path.join(out_dir, 'line_ai_table.bin')
     output = bytearray()
     output.extend(struct.pack("<I", len(w_hi)))
     for i in range(len(w_hi)):

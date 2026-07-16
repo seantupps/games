@@ -1,0 +1,93 @@
+Quoridor (two-player)
+=====================
+
+Abstract strategy game on a 9×9 grid of squares. Each player has one pawn and
+ten walls. First to reach the opposite side wins.
+
+Sources: Gigamic Quoridor rules; reference implementation
+https://github.com/gorisanson/quoridor-ai (vendored under ref/quoridor-ai/).
+
+
+Directory layout
+----------------
+  docs/rules.txt          this file
+  play/play.py            terminal human play (9×9 board UI)
+  play/game.js            shim → play.py
+  game/                   Python engine + AI
+    path.py               Numba BFS shortest-path
+    greedy.py             1-ply path-diff P2
+    __init__.py           QuoridorGame state / rules
+  ref/quoridor-ai/        MCTS Quoridor AI (gorisanson) — rules reference
+  ref/SOURCE.txt          upstream URL / license note
+  scripts/                (reserved) benches / evals
+
+Build & play
+------------
+  Hub game (SP human vs AI, like line/piles):
+    npm run serve
+    open hub → Quoridor
+
+  SP audit:
+    npm run sp:quoridor
+
+  Terminal CLI (Python / Numba):
+    python build/quoridor/play/play.py
+    quoridor [--seed S | --2p | --ai greedy|random]
+
+
+
+Board and coordinates
+---------------------
+Squares: files a–i (left→right), ranks 1–9 (bottom→top).
+
+  • Light (cyan O) starts at e1, goal = rank 9, moves first
+  • Dark  (yellow O) starts at e9, goal = rank 1
+
+Wall notation uses the center tick the wall sits on (matches board labels):
+
+  H c5   horizontal wall on the rank-5 line, covering files c–d
+         (between ranks 6 and 5)
+
+  V e5   vertical wall on the rank-5 tick between e|f
+         (covers ranks 6 and 5 — bar centered on the "5" label)
+
+
+Setup
+-----
+1. Place light pawn at e1, dark pawn at e9.
+2. Each player gets 10 walls.
+3. Light moves first.
+
+
+Play
+----
+On your turn, do exactly one of:
+
+  A. Move your pawn one step orthogonally (N/S/E/W) into an empty, adjacent
+     square not blocked by a wall.
+
+  B. Jump the opponent’s pawn if they sit on an orthogonally adjacent square
+     and the way forward is open: land in the square directly beyond them.
+     If that square is blocked (wall or board edge), you may jump diagonally
+     to either side of them instead (only when the straight jump is blocked).
+
+  C. Place a wall (if you have any left). A wall covers two consecutive
+     fence segments. Walls may not overlap or cross an existing wall, and
+     after placement both pawns must still have some path to their goal
+     line.
+
+
+Winning
+-------
+Reach any square on your goal rank. Light wins on rank 9; dark wins on rank 1.
+
+
+Move notation (terminal)
+------------------------
+  e2       move pawn to e2
+  wasd     move N/W/S/E (straight jump if that direction is a legal jump)
+  H c5     horizontal wall centered on c / rank-5 ticks
+  V e5     vertical wall centered on e|f / rank-5 tick
+  u        undo last turn (P1 + P2) in vs-AI mode
+  help     show commands
+  quit     exit

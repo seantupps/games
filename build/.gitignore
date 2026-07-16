@@ -1,0 +1,17 @@
+# Cython build products (edit .pyx / setup_cython.py only)
+gops/nash/solve_value.c
+gops/nash/solve_value*.pyd
+gops/nash/solve_value.html
+gops/nash/build/
+
+# Generated endgame tables (rebuild via build_endgame.py)
+gops/tables/*.pkl
+gops/tables/*.pkl.gz
+
+# Research experiment outputs (weights, Pareto CSVs)
+gops/research/open_approx/artifacts/
+
+# Local ttyd helper (binary + secrets; keep watchdog.ps1)
+tools/ttyd/ttyd.exe
+tools/ttyd/credentials.txt
+tools/ttyd/*.err

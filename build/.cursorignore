@@ -1,0 +1,68 @@
+﻿# Dependencies & vendored third-party
+node_modules/
+functions/node_modules/
+vendor/
+
+# Local-only reference clones
+references/
+
+# Build / generated output
+functions/lib/
+__pycache__/
+
+# Cython build products (edit .pyx / setup_cython.py only)
+gops/nash/solve_value.c
+gops/nash/solve_value*.pyd
+gops/nash/solve_value.html
+gops/nash/build/
+
+# Firebase emulator & CLI artifacts
+.firebase/
+.emulator-data/
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log
+
+# Logs & debug dumps
+*.log
+debug-reports/
+.five/
+
+# Local dev secrets & tunnel config
+.ngrok-token
+ngrok.local.yml
+ngrok.yml
+
+# IDE / AI tooling (not app source)
+.vscode/
+.gemini/
+
+# Docs & personal notes (not shipped app code)
+notes/
+instructions.md
+
+# Git internals
+.git/
+
+# Lock files (large, low signal for agent edits)
+package-lock.json
+functions/package-lock.json
+
+# CI config (rarely edited during feature work)
+.github/
+
+# Binary / bulk assets the agent should not read or search
+games/bananagrams/dict/
+*.bin
+*.bin.gz
+*.gz
+
+# Chrome devtools well-known (not app logic)
+.well-known/
+
+# Legacy / scratch
+shared/platform/.engine-pre-split.js
+.engine-head.js
+
+
+/dist
