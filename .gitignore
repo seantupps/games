@@ -40,5 +40,7 @@ functions/lib/
 /notes
 /docs
 shared/platform/.engine-pre-split.js
-/dist# Uncompressed AI table intermediates (ship .bin.gz only)
+/dist
+
+# Uncompressed AI table intermediates (ship .bin.gz only)
 *.bin
